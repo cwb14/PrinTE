@@ -6,228 +6,219 @@ import re
 from Bio import SeqIO
 from pathlib import Path
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="""
+        Prepare TE library table with simulation settings for TEgenomeSimulator.
 
-# parse argument
-parser = argparse.ArgumentParser()
-parser.add_argument("-p","--prefix", type=str,
-                    help="project prefix of the simulation")
-parser.add_argument("-r","--repeat", type=str,
-                    help="path to the repeat fasta file")
-parser.add_argument("-m", "--maxcp", type=int,
-                    help="maximum copy number to be simulated for a TE family")
-parser.add_argument("-n", "--mincp", type=int,
-                    help="minimum copy number to be simulated for a TE family")
-parser.add_argument('-s', '--seed', type=int, 
-                    default=1, help="Random seed (default is 1).")
-parser.add_argument("-o", "--outdir", type=str,
-                    help="output firectory")
+        This script generates a table with simulated parameters for transposable element (TE) families based on a provided repeat FASTA file. 
+        The simulation parameters such as copy number, sequence identity, standard deviation, indel proportion, fragmented loci proportion, 
+        and nested insertion proportion can be customized via command-line arguments. If a TE superfamily is not recognized, it is 
+        assigned to 'Unknown' with default settings, and a warning is issued.
 
-args = parser.parse_args()
-prefix = args.prefix
-te_fa = args.repeat
-max_cp = args.maxcp
-min_cp = args.mincp
-seed = args.seed
-out_dir = args.outdir
+        Example usage:
+            python prep_sim_TE_lib.py -p Project1 -r repeats.fasta -m 10 -n 2 -o output_dir
+        """
+    )
 
-print("\n")
-print("#########################################################")
-print("### Prepare TE library table with simulation settings ###")
-print("#########################################################")
-print(f"Using repeat fasta file {args.repeat}")
-print(f"Output directory set as {args.outdir}")
+    # Required arguments.
+    parser.add_argument("-p", "--prefix", type=str, required=True,
+                        help="Project prefix for the simulation.")
+    parser.add_argument("-r", "--repeat", type=str, required=True,
+                        help="Path to the repeat FASTA file.")
+    parser.add_argument("-m", "--maxcp", type=int, required=True,
+                        help="Maximum copy number to be simulated for a TE family.")
+    parser.add_argument("-n", "--mincp", type=int, required=True,
+                        help="Minimum copy number to be simulated for a TE family.")
+    parser.add_argument("-o", "--outdir", type=str, required=True,
+                        help="Output directory.")
 
-#Set seed
-if seed:
-    random.seed(seed)
+    # Optional arguments for ranges.
+    parser.add_argument("--idn_range", type=int, nargs=2, metavar=('MIN_IDN', 'MAX_IDN'), default=[80, 95],
+                        help="Averaged sequence identity range for TE families (default: 80 95).")
+    parser.add_argument("--sd_range", type=int, nargs=2, metavar=('MIN_SD', 'MAX_SD'), default=[1, 20],
+                        help="Standard deviation range of averaged sequence identity (default: 1 20).")
+    parser.add_argument("--indel_range", type=int, nargs=2, metavar=('MIN_INDEL', 'MAX_INDEL'), default=[5, 20],
+                        help="Proportion range of INDEL to total SNP for each TE family (default: 5 20).")
+    parser.add_argument("--frag_range", type=int, nargs=2, metavar=('MIN_FRAG', 'MAX_FRAG'), default=[50, 98],
+                        help="Proportion range of fragmented TE loci for each TE family (default: 50 98).")
+    parser.add_argument("--nest_range", type=int, nargs=2, metavar=('MIN_NEST', 'MAX_NEST'), default=[0, 30],
+                        help="Proportion range of nested TE insertions for Copia or Gypsy families (default: 0 30).")
 
-# Load files
-te_lib = SeqIO.to_dict(SeqIO.parse(te_fa ,"fasta"))
+    # Random seed.
+    parser.add_argument('-s', '--seed', type=int, 
+                        default=1, help="Random seed (default: 1).")
 
-# TE family
-te_family = []
-for te_id in te_lib:
-    te_family.append(te_id)
+    return parser.parse_args()
 
-# TE superfamily
-te_superfamily = []
-for te_id in te_family:
-    superfamily = re.sub(".*#", "", te_id)
-    te_superfamily.append(superfamily)
-    
-# TE subclass
-ltr_retro = ['LTR/Copia', 'LTR/Gypsy', 'LTR/Ty3', 'LTR/Solo', 'LTR/unknown']
-line = ['LINE/unknown', 'LINE/L1']
-sine = ['SINE/unknown', 'SINE/tRNA']
-tir = ['DNA/hAT', 'DNAnona/hAT', 'DNAauto/hAT', 'DNA/CACTA', 'DNAnona/CACTA', 'DNAauto/CACTA', 'DNA/Harbinger', 'DNA/MuDR', 'DNAnona/MULE', 'DNAauto/MULE', 'DNA/Mariner']
-helitron = ['DNA/Helitron', 'DNAnona/Helitron', 'DNAauto/Helitron']
-mite = ['MITE/Stow', 'MITE/Tourist']
+def main():
+    args = parse_arguments()
+    prefix = args.prefix
+    te_fa = args.repeat
+    max_cp = args.maxcp
+    min_cp = args.mincp
+    seed = args.seed
+    out_dir = args.outdir
 
-te_subclass = []
-for sup_fam in te_superfamily:
-    if sup_fam in ltr_retro:
-        subclass = 'LTR_retrotransposon'
-    if sup_fam in line:
-        subclass = 'LINE_retrotransposon'
-    if sup_fam in sine:
-        subclass = 'SINE_retrotransposon'
-    if sup_fam in tir:
-        subclass = 'TIR_transposon'
-    if sup_fam in helitron:
-        subclass = 'Helitron'
-    if sup_fam in mite:
-        subclass = 'MITE'
-    te_subclass.append(subclass)
-     
-# count
-print("\n")
-print("## Random chosing copy numbe for each TE family ##")
-copy_number = []
-minimum = min_cp
-maximum = max_cp
-n = len(te_family)
-for i in range(n):
-    random_num = random.choice(range(minimum, maximum + 1))
-    copy_number.append(random_num)
-print(f"Maximum copy number set by user: {args.maxcp}")
-print(f"Minimum copy number set by user: {args.maxcp}")
+    idn_min, idn_max = args.idn_range
+    sd_min, sd_max = args.sd_range
+    indel_min, indel_max = args.indel_range
+    frag_min, frag_max = args.frag_range
+    nest_min, nest_max = args.nest_range
 
-# identity
-print("\n")
-print("## Random chosing the averaged sequence identity for each TE family ##")
-identity = []
-minimum = 80
-maximum = 95
-n = len(te_family)
-for i in range(n):
-    random_num = random.choice(range(minimum, maximum + 1))
-    identity.append(random_num)
-print(f"Maximum averaged sequence identity set by default: {maximum}")
-print(f"Minimum averaged sequence identity set by default: {minimum}")
+    print("\n")
+    print("#########################################################")
+    print("### Prepare TE library table with simulation settings ###")
+    print("#########################################################")
+    print(f"Using repeat FASTA file: {args.repeat}")
+    print(f"Output directory set as: {args.outdir}")
+    print(f"Project prefix: {args.prefix}")
+    print(f"Random seed: {args.seed}")
+    print("\n")
 
-# standard deviation of identity
-print("\n")
-print("## Random chosing the standard deviation of averaged sequence identity for each TE family ##")
-sd = []
-minimum = 1
-maximum = 20
-n = len(te_family)
-for i in range(n):
-    random_num = random.choice(range(minimum, maximum + 1))
-    sd.append(random_num)
-print(f"Maximum standard deviation of averaged sequence identity set by default: {maximum}")
-print(f"Minimum standard deviation of averaged sequence identity set by default: {minimum}")
-    
-# indel (as a proportion to total SNP = substitution + indel)
-print("\n")
-print("## Random chosing the proportion of INDEL to total SNP (dependant on sequence identity) for each TE family ##")
-indel = []
-minimum = 5
-maximum = 20
-n = len(te_family)
-for i in range(n):
-    random_num = random.choice(range(minimum, maximum + 1))
-    indel.append(random_num)
-print(f"Maximum INDEL proportion set by default: {maximum}")
-print(f"Minimum INDEL proportion set by default: {minimum}")
-    
-# tsd (use prior knowledge)
-print("\n")
-print("## Setting the length of std based on prior knowledge ##")
-ltr_retro = ['LTR/Copia', 'LTR/Gypsy', 'LTR/Ty3', 'LTR/Solo', 'LTR/unknown'] 
-line = ['LINE/unknown', 'LINE/L1']
-sine = ['SINE/unknown', 'SINE/tRNA']
-DTA = ['DNA/hAT', 'DNAnona/hAT', 'DNAauto/hAT']
-DTC = ['DNA/CACTA', 'DNAnona/CACTA', 'DNAauto/CACTA']
-DTH = ['DNA/Harbinger']
-DTM = ['DNA/MuDR', 'DNAnona/MULE', 'DNAauto/MULE']
-DTT = ['DNA/Mariner']
-helitron = ['DNA/Helitron', 'DNAnona/Helitron', 'DNAauto/Helitron']
-mite = ['MITE/Stow', 'MITE/Tourist']
+    # Set seed.
+    if seed is not None:
+        random.seed(seed)
 
-tsd = []
-for sup_fam in te_superfamily:
-    if sup_fam in ltr_retro:
-        tsd_range = '5,5'
-    if sup_fam in line:
-        tsd_range = '5,20'
-    if sup_fam in sine:
-        tsd_range = '5,20'
-    if sup_fam in DTA:
-        tsd_range = '5,8'
-    if sup_fam in DTC:
-        tsd_range = '2,4'
-    if sup_fam in DTH:
-        tsd_range = '3,3'
-    if sup_fam in DTM:
-        tsd_range = '8,9'
-    if sup_fam in DTT:
-        tsd_range = '2,2'
-    if sup_fam in helitron:
-        tsd_range = '0,0'
-    if sup_fam in mite:
-        tsd_range = '2,10'
-    tsd.append(str(tsd_range))
+    # Load TE library.
+    try:
+        te_lib = SeqIO.to_dict(SeqIO.parse(te_fa, "fasta"))
+    except FileNotFoundError:
+        print(f"Error: Repeat FASTA file '{te_fa}' not found.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error reading repeat FASTA file: {e}")
+        sys.exit(1)
 
-print("Length range of TSD for LTR retrotransposon set to: 5 - 5")
-print("Length range of TSD for LINE set to: 5 - 20")
-print("Length range of TSD for SINE set to: 5 - 20")
-print("Length range of TSD for DTA set to: 5 - 8")
-print("Length range of TSD for DTC set to: 2 - 4")
-print("Length range of TSD for DTH set to: 3 - 3")
-print("Length range of TSD for DTM set to: 8 - 9")
-print("Length range of TSD for DTT set to: 2 - 2")
-print("Length range of TSD for Helitron set to: 0")
-print("Length range of TSD for MITE set to: 2 - 10")
+    # TE families.
+    te_family = list(te_lib.keys())
 
-# length
-print("\n")
-print("## Extracting the length of each TE family ##")
-length = []
-for te_id in te_lib:
-    te_len = len(te_lib[te_id].seq)
-    length.append(te_len)
+    # TE superfamilies.
+    te_superfamily = []
+    for te_id in te_family:
+        superfamily = re.sub(".*#", "", te_id)
+        te_superfamily.append(superfamily)
 
-# fragmented TE loci (as a proportion to total TE loci of the family)
-print("\n")
-print("## Setting the proportion of fragmented TE loci of each TE family ##")
-fragment = []
-minimum = 50
-maximum = 98
-n = len(te_family)
-for i in range(n):
-    random_num = random.choice(range(minimum, maximum + 1))
-    fragment.append(random_num)
-print(f"Maximum proportion of fragmented TE loci of each TE family set by default: {maximum}")
-print(f"Minimum proportion of fragmented TE loci of each TE family set by default: {minimum}")
+    # Define TE subclasses.
+    subclass_dict = {
+        'LTR_retrotransposon': ['LTR/Copia', 'LTR/Gypsy', 'LTR/Ty3', 'LTR/Solo', 'LTR/unknown'],
+        'LINE_retrotransposon': ['LINE/unknown', 'LINE/L1'],
+        'SINE_retrotransposon': ['SINE/unknown', 'SINE/tRNA'],
+        'TIR_transposon': ['DNA/hAT', 'DNAnona/hAT', 'DNAauto/hAT', 
+                           'DNA/CACTA', 'DNAnona/CACTA', 'DNAauto/CACTA', 
+                           'DNA/Harbinger', 'DNA/MuDR', 'DNAnona/MULE', 
+                           'DNAauto/MULE', 'DNA/Mariner'],
+        'Helitron': ['DNA/Helitron', 'DNAnona/Helitron', 'DNAauto/Helitron'],
+        'MITE': ['MITE/Stow', 'MITE/Tourist']
+    }
 
-# nest TE loci (as a proportion to total TE loci of the family; only apply for Copia and Gypsy)
-print("\n")
-print("## Setting the proportion of nested TE insertion of each Copia or Gypsy family ##")
-nested = []
-minimum = 0
-maximum = 30
-n = len(te_family)
-for i in range(n):
-    random_num = random.choice(range(minimum, maximum + 1))
-    nested.append(random_num)
-print(f"Maximum proportion of nested TE insertion of each Copia or Gypsy family set by default: {maximum}")
-print(f"Minimum proportion of nested TE insertion of each Copia or Gypsy family set by default: {minimum}")
+    te_subclass = []
+    unknown_sup_fams = set()
 
-# create the table
-print("\n")
-print("## Printing the TE library table ##")
+    for te_id, sup_fam in zip(te_family, te_superfamily):
+        subclass_assigned = False
+        for subclass, sup_fams in subclass_dict.items():
+            if sup_fam in sup_fams:
+                te_subclass.append(subclass)
+                subclass_assigned = True
+                break
+        if not subclass_assigned:
+            te_subclass.append('Unknown')
+            unknown_sup_fams.add(te_id)
+            print(f"Warning: TE superfamily '{sup_fam}' in TE family '{te_id}' is unrecognized. Assigned to 'Unknown' with TSD range 5-20.")
 
-final_out = str(out_dir) + "/TEgenomeSimulator_" + str(prefix) + "_result"
-#Path(out_dir, "TEgenomeSimulator_" + prefix + "_result").mkdir(parents=True, exist_ok=True)
-#os.chdir(Path(out_dir, "TEgenomeSimulator_" + file_prefix + "_result"))
+    # Copy number.
+    print("## Randomly choosing copy number for each TE family ##")
+    copy_number = [random.randint(min_cp, max_cp) for _ in te_family]
+    print(f"Copy number range: {min_cp} - {max_cp}")
 
-table_out = open(Path(final_out, "TElib_sim_list.table"), "w")
-table_out.write("\t".join(["#TE_family", "subclass", "superfamily", "count", "idn", "sd", "indels", "tsd", "length", "frag", "nest" + "\n"]))
-n = len(te_family)
-for i in range(n - 1):
-    table_out.write("\t".join([str(te_family[i]), str(te_superfamily[i]), str(te_subclass[i]), str(copy_number[i]), str(identity[i]), str(sd[i]), str(indel[i]), str(tsd[i]), str(length[i]), str(fragment[i]), str(nested[i]) + "\n"]))
-table_out.close()    
+    # Identity.
+    print("\n## Randomly choosing the averaged sequence identity for each TE family ##")
+    identity = [random.randint(idn_min, idn_max) for _ in te_family]
+    print(f"Averaged sequence identity range: {idn_min} - {idn_max}")
 
-print(f"Generated the TE library table for simulation. File saved as {out_dir}/TElib_sim_list.table")
-print("\n")
+    # Standard deviation of identity.
+    print("\n## Randomly choosing the standard deviation of averaged sequence identity for each TE family ##")
+    sd = [random.randint(sd_min, sd_max) for _ in te_family]
+    print(f"Standard deviation range: {sd_min} - {sd_max}")
+
+    # Indel proportion.
+    print("\n## Randomly choosing the proportion of INDEL to total SNP for each TE family ##")
+    indel = [random.randint(indel_min, indel_max) for _ in te_family]
+    print(f"INDEL proportion range: {indel_min} - {indel_max}")
+
+    # TSD.
+    print("\n## Setting the length of TSD based on TE superfamily ##")
+    tsd = []
+    for te_id, sup_fam in zip(te_family, te_superfamily):
+        if sup_fam in subclass_dict['LTR_retrotransposon']:
+            tsd_range = '5,5'
+        elif sup_fam in subclass_dict['LINE_retrotransposon']:
+            tsd_range = '5,20'
+        elif sup_fam in subclass_dict['SINE_retrotransposon']:
+            tsd_range = '5,20'
+        elif sup_fam in subclass_dict['TIR_transposon']:
+            if sup_fam in ['DNA/hAT', 'DNAnona/hAT', 'DNAauto/hAT']:
+                tsd_range = '5,8'
+            elif sup_fam in ['DNA/CACTA', 'DNAnona/CACTA', 'DNAauto/CACTA']:
+                tsd_range = '2,4'
+            elif sup_fam in ['DNA/Harbinger']:
+                tsd_range = '3,3'
+            elif sup_fam in ['DNA/MuDR', 'DNAnona/MULE', 'DNAauto/MULE']:
+                tsd_range = '8,9'
+            elif sup_fam in ['DNA/Mariner']:
+                tsd_range = '2,2'
+            else:
+                tsd_range = '5,20'  # Default for any unforeseen cases within TIR_transposon.
+        elif sup_fam in subclass_dict['Helitron']:
+            tsd_range = '0,0'
+        elif sup_fam in subclass_dict['MITE']:
+            tsd_range = '2,10'
+        else:
+            tsd_range = '5,20'  # For Unknown.
+        tsd.append(tsd_range)
+    print("TSD length ranges have been set based on TE superfamilies.")
+
+    # Length of each TE family.
+    print("\n## Extracting the length of each TE family ##")
+    length = [len(te_lib[te_id].seq) for te_id in te_family]
+
+    # Fragmented TE loci proportion.
+    print("\n## Setting the proportion of fragmented TE loci for each TE family ##")
+    fragment = [random.randint(frag_min, frag_max) for _ in te_family]
+    print(f"Fragmented TE loci proportion range: {frag_min} - {frag_max}")
+
+    # Nested TE insertions proportion.
+    print("\n## Setting the proportion of nested TE insertions for each Copia or Gypsy family ##")
+    nested = [random.randint(nest_min, nest_max) for _ in te_family]
+    print(f"Nested TE insertions proportion range: {nest_min} - {nest_max}")
+
+    # Create output directory.
+    final_out = Path(out_dir) / f"TEgenomeSimulator_{prefix}_result"
+    final_out.mkdir(parents=True, exist_ok=True)
+
+    # Write the table.
+    table_path = final_out / "TElib_sim_list.table"
+    with table_path.open("w") as table_out:
+        header = ["#TE_family", "superfamily", "subclass", "count", "idn", "sd", "indels", "tsd", "length", "frag", "nest"]
+        table_out.write("\t".join(header) + "\n")
+        for i in range(len(te_family)):
+            row = [
+                te_family[i],
+                te_superfamily[i],
+                te_subclass[i],
+                str(copy_number[i]),
+                str(identity[i]),
+                str(sd[i]),
+                str(indel[i]),
+                tsd[i],
+                str(length[i]),
+                str(fragment[i]),
+                str(nested[i])
+            ]
+            table_out.write("\t".join(row) + "\n")
+
+    print(f"\nGenerated the TE library table for simulation. File saved as {table_path}\n")
+
+if __name__ == "__main__":
+    main()
