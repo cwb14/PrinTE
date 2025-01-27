@@ -8,7 +8,7 @@ This tool is released under the MIT license to promote the advancements in TE re
 
 ## Introduction
 TEgenomeSimulator was created based on [Matias Rodriguez & Wojciech Makałowski. Software evaluation for de novo detection of transposons. 2022 Mobil DNA](https://mobilednajournal.biomedcentral.com/articles/10.1186/s13100-022-00266-2). The original scripts were from [denovoTE-eval](https://github.com/IOB-Muenster/denovoTE-eval). Some existing functions were modified and several new functions were created for TEgenomeSimulator. The following table shows the major features that were kept, modified, or created in TEgenomeSimulator.
-
+ 
 | Features | denovoTE-eval | TEgenomeSimulator |
 |:---------|:-------------:|:-----------------:|
 | Random synthesized genome |  O  |  O  |
