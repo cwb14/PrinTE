@@ -3,62 +3,6 @@ import sys
 import argparse
 import subprocess
 from pathlib import Path
-import gzip
-
-# Function to display help by default
-def print_help(parser):
-    parser.print_help()
-
-# Function to automatically gunzip the TE family fasta file if it's gzipped
-def gunzip_repeat_file(args, final_out):
-    if args.repeat.endswith('.gz'):
-        unzipped_filename = Path(args.repeat).stem
-        unzipped_path = os.path.join(final_out, unzipped_filename)
-        try:
-            with gzip.open(args.repeat, 'rb') as f_in, open(unzipped_path, 'wb') as f_out:
-                f_out.write(f_in.read())
-            args.repeat = unzipped_path
-            print(f"Unzipped {args.repeat}. Updated repeat file to {unzipped_path}.")
-        except Exception as e:
-            print(f"Error while unzipping {args.repeat}: {e}")
-            sys.exit(1)
-
-# Function to run seq_divergence.py before prep_sim_TE_lib.py
-def run_seq_divergence_initial(args, final_out):
-    script_path = os.path.join(os.path.dirname(__file__), 'utils/seq_divergence.py')
-    output_tsv = os.path.join(final_out, 'LTR_domains.tsv')
-    cmd = [
-        'python3', script_path,
-        '-i', args.repeat,
-        '-o', output_tsv,
-        '-t', str(args.threads),
-        '--miu', str(args.miu)
-    ]
-    try:
-        with open(os.path.join(final_out, 'TEgenomeSimulator.log'), 'a') as log_file:
-            subprocess.run(cmd, check=True, stdout=log_file, stderr=subprocess.STDOUT)
-        print(f"seq_divergence.py executed successfully. Output logged to {final_out}/TEgenomeSimulator.log")
-    except subprocess.CalledProcessError as e:
-        print(f"Error occurred while running seq_divergence.py: {e}")
-        sys.exit(1)
-
-# Function to run LTR_fasta_header_appender.py before prep_sim_TE_lib.py
-def run_LTR_fasta_header_appender(args, final_out):
-    script_path = os.path.join(os.path.dirname(__file__), 'utils/LTR_fasta_header_appender.py')
-    output_fasta = os.path.join(final_out, 'TElib.fa')
-    cmd = [
-        'python3', script_path,
-        '-fasta', args.repeat,
-        '-domains', os.path.join(final_out, 'LTR_domains.tsv'),
-        '-div_type', 'none'
-    ]
-    try:
-        with open(output_fasta, 'w') as outfile, open(os.path.join(final_out, 'TEgenomeSimulator.log'), 'a') as log_file:
-            subprocess.run(cmd, check=True, stdout=outfile, stderr=subprocess.STDOUT)
-        print(f"LTR_fasta_header_appender.py executed successfully. Output saved to {output_fasta} and logged to {final_out}/TEgenomeSimulator.log")
-    except subprocess.CalledProcessError as e:
-        print(f"Error occurred while running LTR_fasta_header_appender.py: {e}")
-        sys.exit(1)
 
 # Function to call the prep_sim_TE_lib.py script to generate the TE library table.
 def run_prep_sim_TE_lib(args, final_out):
@@ -124,7 +68,7 @@ def run_prep_sim_TE_lib(args, final_out):
                 sys.exit(1)
         
         # Run the command and capture the output.
-        with open(os.path.join(final_out, "TEgenomeSimulator.log"), "a") as log_file:
+        with open(f"{final_out}/TEgenomeSimulator.log", "w") as log_file:
             subprocess.run(prep_telib_command, check=True, stdout=log_file, stderr=subprocess.STDOUT)
         
         print(f"TE library table generated successfully. Output logged to {final_out}/TEgenomeSimulator.log")
@@ -149,7 +93,7 @@ def run_prep_config_random(args, te_table, final_out, mode):
         ]
 
         # Run the command and append the output to the log file.
-        with open(os.path.join(final_out, "TEgenomeSimulator.log"), "a") as log_file:
+        with open(f"{final_out}/TEgenomeSimulator.log", "a") as log_file:
             subprocess.run(prep_yml_command, check=True, stdout=log_file, stderr=subprocess.STDOUT)
         
         print(f"Config file generated successfully. Output logged to {final_out}/TEgenomeSimulator.log")
@@ -174,7 +118,7 @@ def run_prep_config_custom(args, te_table, final_out, mode):
         ]
         
         # Run the command and append the output to the log file.
-        with open(os.path.join(final_out, "TEgenomeSimulator.log"), "a") as log_file:
+        with open(f"{final_out}/TEgenomeSimulator.log", "a") as log_file:
             subprocess.run(prep_yml_command, check=True, stdout=log_file, stderr=subprocess.STDOUT)
         
         print(f"Config file generated successfully. Output logged to {final_out}/TEgenomeSimulator.log")
@@ -200,7 +144,7 @@ def run_TE_sim_random_insertion(args, final_out, mode):
             prep_sim_command.extend(['-i', args.indel_size])
     
         # Run the command and capture the output.
-        with open(os.path.join(final_out, "TEgenomeSimulator.log"), "a") as log_file:
+        with open(f"{final_out}/TEgenomeSimulator.log", "a") as log_file:
             subprocess.run(prep_sim_command, check=True, stdout=log_file, stderr=subprocess.STDOUT)
         
         print(f"Genome with non-overlap random TE insertions was generated successfully. Output logged to {final_out}/TEgenomeSimulator.log")
@@ -226,7 +170,7 @@ def run_TE_sim_nested_insertion(args, final_out, mode):
             prep_nest_command.extend(['-i', args.indel_size])
     
         # Run the command and capture the output.
-        with open(os.path.join(final_out, "TEgenomeSimulator.log"), "a") as log_file:
+        with open(f"{final_out}/TEgenomeSimulator.log", "a") as log_file:
             subprocess.run(prep_nest_command, check=True, stdout=log_file, stderr=subprocess.STDOUT)
         
         print(f"Genome with non-overlap random and nested TE insertions was generated successfully. Output logged to {final_out}/TEgenomeSimulator.log")
@@ -235,57 +179,12 @@ def run_TE_sim_nested_insertion(args, final_out, mode):
         print(f"Error occurred while running TE_sim_nested_insertion.py: {e}")
         sys.exit(1)
 
-# Function to run seq_divergence.py after TE_sim_nested_insertion.py
-def run_seq_divergence_post(args, final_out):
-    script_path = os.path.join(os.path.dirname(__file__), 'utils/seq_divergence.py')
-    input_fasta = os.path.join(final_out, f"{args.prefix}_repeat_sequence_out_final.fasta")
-    output_tsv = os.path.join(final_out, "LTR_div.tsv")
-    cmd = [
-        'python3', script_path,
-        '-i', input_fasta,
-        '-o', output_tsv,
-        '-t', str(args.threads),
-        '--miu', str(args.miu)
-    ]
-    try:
-        with open(os.path.join(final_out, 'TEgenomeSimulator.log'), 'a') as log_file:
-            subprocess.run(cmd, check=True, stdout=log_file, stderr=subprocess.STDOUT)
-        print(f"seq_divergence.py executed successfully. Output logged to {final_out}/TEgenomeSimulator.log")
-    except subprocess.CalledProcessError as e:
-        print(f"Error occurred while running seq_divergence.py: {e}")
-        sys.exit(1)
-
-# Function to run gffappender.py after TE_sim_nested_insertion.py
-def run_gffappender(args, final_out):
-    script_path = os.path.join(os.path.dirname(__file__), 'utils/gffappender.py')
-    aln_file = os.path.join(final_out, 'LTR_div.tsv')
-    gff_input = os.path.join(final_out, f"{args.prefix}_repeat_annotation_out_final.gff")
-    gff_output = os.path.join(final_out, f"{args.prefix}_repeat_annotation_out_final_mod.gff")
-    cmd = [
-        'python3', script_path,
-        '-aln', aln_file,
-        '-gff', gff_input,
-        '-model', args.model
-    ]
-    try:
-        with open(gff_output, 'w') as outfile, open(os.path.join(final_out, 'TEgenomeSimulator.log'), 'a') as log_file:
-            subprocess.run(cmd, check=True, stdout=outfile, stderr=subprocess.STDOUT)
-        print(f"gffappender.py executed successfully. Output saved to {gff_output} and logged to {final_out}/TEgenomeSimulator.log")
-    except subprocess.CalledProcessError as e:
-        print(f"Error occurred while running gffappender.py: {e}")
-        sys.exit(1)
-
 def main():
     # Set up argument parser.
     parser = argparse.ArgumentParser(
         description="TEgenomeSimulator: Simulate TE mutation and insertion into genome.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-
-    # Display help menu by default
-    if len(sys.argv) == 1:
-        print_help(parser)
-        sys.exit(0)
 
     # Required arguments.
     required = parser.add_argument_group('required arguments')
@@ -330,14 +229,6 @@ def main():
     # New optional parameter for TE_sim_* scripts.
     optional.add_argument('-is', '--indel_size', type=str, default='1,5',
                           help="Indel size range, in the format 'min,max'.")
-    
-    # New optional arguments for post-processing
-    optional.add_argument('-t', '--threads', type=int, default=10,
-                          help="Number of threads for seq_divergence.py.")
-    optional.add_argument('--miu', type=float, default=3e-8,
-                          help="Mutation rate for seq_divergence.py.")
-    optional.add_argument('--model', type=str, default='K2P', choices=['K2P', 'raw', 'JC69'],
-                          help="Substitution model for gffappender.py.")
 
     # Parse arguments.
     args = parser.parse_args()
@@ -357,11 +248,7 @@ def main():
             print("Error: When a custom genome is provided, --genome must also be specified.")
             sys.exit(1)
 
-    # Specify output dir for each project.
-    final_out = os.path.join(args.outdir, f"TEgenomeSimulator_{args.prefix}_result")
-    Path(final_out).mkdir(parents=True, exist_ok=True)
-
-    # Display parsed arguments (for demonstration).
+    # Output parsed arguments (for demonstration).
     print(f"Mode: {mode}")
     print(f"Prefix: {args.prefix}")
     print(f"Repeat: {args.repeat}")
@@ -378,19 +265,10 @@ def main():
     print(f"Frag Range: {args.frag_range}")
     print(f"Nest Range: {args.nest_range}")
     print(f"Indel Size: {args.indel_size}")
-    print(f"Threads: {args.threads}")
-    print(f"Mutation Rate: {args.miu}")
-    print(f"Substitution Model: {args.model}")
 
-    # Automatically gunzip the TE family fasta file if needed
-    gunzip_repeat_file(args, final_out)
-
-    # Run pre-processing scripts
-    run_seq_divergence_initial(args, final_out)
-    run_LTR_fasta_header_appender(args, final_out)
-
-    # Update args.repeat to point to the new TElib.fa
-    args.repeat = os.path.join(final_out, 'TElib.fa')
+    # Specify output dir for each project.
+    final_out = os.path.join(args.outdir, f"TEgenomeSimulator_{args.prefix}_result")
+    Path(final_out).mkdir(parents=True, exist_ok=True)
 
     # Call the prep_sim_TE_lib.py script to generate the TE library table.
     run_prep_sim_TE_lib(args, final_out)
@@ -416,7 +294,7 @@ def main():
                     '-s', str(args.seed),
                     '-o', args.outdir
                 ]
-                with open(os.path.join(final_out, "TEgenomeSimulator.log"), "a") as log_file:
+                with open(f"{final_out}/TEgenomeSimulator.log", "a") as log_file:
                     subprocess.run(prep_yml_command, check=True, stdout=log_file, stderr=subprocess.STDOUT)
                 print(f"Config file generated successfully. Output logged to {final_out}/TEgenomeSimulator.log")
             except subprocess.CalledProcessError as e:
@@ -432,11 +310,5 @@ def main():
     # Nested TE insertion.
     run_TE_sim_nested_insertion(args, final_out, mode)
 
-    # Post-processing scripts
-    run_seq_divergence_post(args, final_out)
-    run_gffappender(args, final_out)
-
 if __name__ == "__main__":
     main()
-
-# END.

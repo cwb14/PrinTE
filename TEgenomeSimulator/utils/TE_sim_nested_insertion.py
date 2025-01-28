@@ -73,6 +73,10 @@ def generate_genome_nests(
     new_seq = ""
     nest_te_dict = {}
     
+    # Helper function to format extra attributes
+    def format_extra_attributes(extra_attributes):
+        return ''.join([f";{key}:{value}" for key, value in extra_attributes.items()])
+    
     # Create a list containing the TE family and the required copies for nested insertion.
     for i in repeats:
         rep_count += [i] * int(repeats[i].num_rep * (repeats[i].nest / 100.0))
@@ -185,6 +189,11 @@ def generate_genome_nests(
         ori_seq_te_id = re.sub(".*_TE", "TE", gff_sel[8])
         ori_seq_te_id = re.sub(";Name.*", "", ori_seq_te_id)
         
+        # Retrieve extra attributes from repeats_dict
+        extra_attributes = repeats[k].extra_attributes if hasattr(repeats[k], 'extra_attributes') else {}
+        formatted_extra_attrs = format_extra_attributes(extra_attributes)
+        
+        # Construct ori_line_1 without extra attributes
         ori_name_1 = [
             gff_sel[8]
             .replace(";Name", "_1;Name")
@@ -193,6 +202,7 @@ def generate_genome_nests(
         ]
         ori_line_1 = gff_sel[:3] + [str(start)] + [str(new_end_1)] + gff_sel[5:8] + ori_name_1
         
+        # Construct nest_name_in without extra attributes (will add extra attributes separately)
         nest_name_in = (
             f"ID={nest_name}_{nested_te_id};"
             f"Name={nested_te_id};"
@@ -210,7 +220,7 @@ def generate_genome_nests(
                 + [str(new_end_1 + 1 + tsd_5_len)]
                 + [str(new_start_2 - tsd_3_len)]
                 + [".", strand, "."]
-                + [nest_name_in]
+                + [nest_name_in + formatted_extra_attrs]  # Append extra attributes only to nested insertion
             )
         else:
             nested_line = (
@@ -219,9 +229,10 @@ def generate_genome_nests(
                 + [str(new_end_1 + 1)]
                 + [str(new_start_2 - tsd_3_len)]
                 + [".", strand, "."]
-                + [nest_name_in]
+                + [nest_name_in + formatted_extra_attrs]  # Append extra attributes only to nested insertion
             )
      
+        # Construct ori_line_2 without extra attributes
         ori_name_2 = [
             gff_sel[8]
             .replace(";Name", "_2;Name")
@@ -256,7 +267,8 @@ def generate_genome_nests(
             f"{nest_name}_{nested_te_id}#{nest_superfam} "
             f"[Location={chr_id}:{str(new_end_1 + 1 + tsd_5_len)}-{str(new_start_2 - tsd_3_len)};"
             f"Identity={str(nest_identity / 100)}"
-            f"{frag_note};Nest_in={ori_seq_te_id}]"
+            f"{frag_note};Nest_in={ori_seq_te_id}"
+            f"{formatted_extra_attrs}"  # Append extra attributes only to nested insertion
         )
         
         isrt_te_dict[ori_seq_te_id].description = ori_seq_name_new
@@ -294,29 +306,26 @@ def print_genome_nest_data(
     te_gff = f"{file_prefix}_repeat_annotation_out_final.gff"
     
     # For genome FASTA file.
-    fasta_out = open(os.path.join(final_out, genome_fa), "w")
-    for chromosome in genome:
-        seq = str(genome[chromosome].seq)
-        fasta_out.write(f">{chromosome}\n{seq}\n")
-    fasta_out.close()
+    with open(os.path.join(final_out, genome_fa), "w") as fasta_out:
+        for chromosome in genome:
+            seq = str(genome[chromosome].seq)
+            fasta_out.write(f">{chromosome}\n{seq}\n")
     
     # For all inserted TE sequences (including nested TEs).
-    te_fa_out = open(os.path.join(final_out, te_fa), "w")
-    for te in isrt_te_dict:
-        header = str(isrt_te_dict[te].description)
-        seq = str(isrt_te_dict[te].seq)
-        te_fa_out.write(f">{header}\n{seq}\n")
-    for nested_te in nest_te_dict:
-        header = nest_te_dict[nested_te]['id']
-        seq = nest_te_dict[nested_te]['seq']
-        te_fa_out.write(f">{str(header)}\n{str(seq)}\n")
-    te_fa_out.close()
+    with open(os.path.join(final_out, te_fa), "w") as te_fa_out:
+        for te in isrt_te_dict:
+            header = str(isrt_te_dict[te].description)
+            seq = str(isrt_te_dict[te].seq)
+            te_fa_out.write(f">{header}\n{seq}\n")
+        for nested_te in nest_te_dict:
+            header = nest_te_dict[nested_te]['id']
+            seq = nest_te_dict[nested_te]['seq']
+            te_fa_out.write(f">{str(header)}\n{str(seq)}\n")
     
     # For the new GFF file.
-    gff_out = open(os.path.join(final_out, te_gff), "w")
-    for i in new_gff:
-        gff_out.write("\t".join(map(str, i)) + "\n")
-    gff_out.close()
+    with open(os.path.join(final_out, te_gff), "w") as gff_out:
+        for i in new_gff:
+            gff_out.write("\t".join(map(str, i)) + "\n")
 
 def main():
     # Set up argument parser.
@@ -426,3 +435,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+# END

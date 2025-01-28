@@ -11,7 +11,7 @@ from pathlib import Path
 class Repeat:
     """Store the information of the TE families.
     This class has been modified by THC"""
-    def __init__(self, name, subclass, superfamily, sequence, num_rep, identity, sd, indels, tsd, frag, nest):
+    def __init__(self, name, subclass, superfamily, sequence, num_rep, identity, sd, indels, tsd, frag, nest, extra_attributes=None):
         self.name = name
         self.subclass = subclass
         self.superfamily = superfamily
@@ -23,13 +23,14 @@ class Repeat:
         self.tsd = tsd
         self.frag = frag
         self.nest = nest
+        self.extra_attributes = extra_attributes if extra_attributes else {}
 
 # Load params_chr from YAML file config_genome.yml in same directory (modified by THC).
 def parse_random_genome_yaml(config_file):
     params_chr = yaml.load(open(config_file, 'r'), Loader=yaml.FullLoader)
     return params_chr
 
-# Load params_chr from YAML file config_custum_genome.yml in same directory (function created by THC).
+# Load params_chr from YAML file config_custom_genome.yml in same directory (function created by THC).
 def parse_custom_genome_yaml(config_file):
     params_chr = yaml.load(open(config_file, 'r'), Loader=yaml.FullLoader)
     return params_chr
@@ -43,40 +44,39 @@ def load_custom_genome(params_chr):
         chrs_dict[chrid] = fasta[chrid].seq
     return chrs_dict
 
-# Load collection of repeats and params.
-def load_repeats(params):
-    repeats_dict = {}
-    fasta = SeqIO.index(params['rep_fasta'], "fasta")
-    with open(params['rep_list'], 'r') as repeats_file:
-        next(repeats_file)
-        for line in repeats_file:
-            elem = line.rstrip().split()
-            name = elem[0]
-            sequence = str(fasta[name].seq).upper()
-            num_rep = int(elem[1])
-            identity = int(elem[2])
-            sd = int(elem[3])
-            indels = int(elem[4])
-            tsd = True if elem[5] == "y" else False
-            frag = int(elem[7])
-            nest = int(elem[8])
-            repeat = Repeat(name, sequence, num_rep, identity, sd, indels, tsd, frag, nest)
-            repeats_dict[name] = repeat
-    return repeats_dict
-
-# Load collection of repeats and params for chrs simulation (function created by THC).
+# Load collection of repeats and params for chrs simulation (modified by THC to include extra attributes).
 def load_repeats_chr(params_chr):
     chr_id = list(params_chr['chrs'].keys())
     repeats_dict = {}
-    fasta = SeqIO.index(params_chr['rep_fasta'], "fasta")
+    
+    # Parse all fasta records and extract extra attributes
+    fasta_dict = {}
+    with open(params_chr['rep_fasta'], 'r') as fasta_file:
+        for record in SeqIO.parse(fasta_file, "fasta"):
+            header = record.description  # Entire header line
+            # Split header on ';' to separate base name and attributes
+            parts = header.split(';')
+            # Extract only the base name before any space
+            base_name = parts[0].lstrip('>').split()[0]
+            extra_attributes = {}
+            for attr in parts[1:]:
+                if ':' in attr:
+                    key, value = attr.split(':', 1)
+                    extra_attributes[key] = value
+            fasta_dict[base_name] = (str(record.seq).upper(), extra_attributes)
+    
+    # Read repeats from rep_list and associate with fasta sequences and extra attributes
     with open(params_chr['rep_list'], 'r') as repeats_file:
-        next(repeats_file)
+        next(repeats_file)  # Skip header line
         for line in repeats_file:
             elem = line.rstrip().split()
             name = elem[0]
+            if name not in fasta_dict:
+                print(f"Warning: Repeat {name} not found in fasta.")
+                continue
+            sequence, extra_attributes = fasta_dict[name]
             subclass = elem[1]
             superfamily = elem[2]
-            sequence = str(fasta[name].seq).upper()
             num_rep = int(elem[3])
             identity = int(elem[4])
             sd = int(elem[5])
@@ -84,10 +84,10 @@ def load_repeats_chr(params_chr):
             tsd = [int(x) for x in elem[7].rstrip().split(",")]
             frag = int(elem[9])
             nest = int(elem[10])
-            repeat = Repeat(name, subclass, superfamily, sequence, num_rep, identity, sd, indels, tsd, frag, nest)
+            repeat = Repeat(name, subclass, superfamily, sequence, num_rep, identity, sd, indels, tsd, frag, nest, extra_attributes)
             repeats_dict[name] = repeat
     return repeats_dict
-
+    
 ### Load other variables ###
 # Calculate length of sequence of all repeats.
 # sum_rep_length = sum([len(rep.sequence) * rep.num_rep for rep in repeats]).
@@ -119,8 +119,8 @@ def generate_random_chr_sequence(params_chr):
 def assign_chr_coord_repeats(params_chr, repeats_dict):
     # Total number of non-nested repeats.
     total_num_rep = 0
-    for rep in repeats_dict:
-        num_rep = int(repeats_dict[rep].num_rep - repeats_dict[rep].num_rep * (repeats_dict[rep].nest / 100.0))
+    for rep in repeats_dict.values():
+        num_rep = int(rep.num_rep - rep.num_rep * (rep.nest / 100.0))
         total_num_rep += num_rep
     # Total genome bp.
     total_genome_bp = sum([params_chr['chrs'][chrid]['seq_length'] for chrid in params_chr['chrs']])
@@ -144,8 +144,7 @@ def assign_chr_coord_repeats(params_chr, repeats_dict):
     random_repeats_coords = []
     for num in random_coords:
         for key, values in chr_cumm_dict.items():
-            start_cumm = values[0]
-            end_cumm = values[1]
+            start_cumm, end_cumm = values
             if num <= end_cumm:
                 random_repeats_coords.append((key, num - start_cumm + 1))
                 break
@@ -155,14 +154,15 @@ def assign_chr_coord_repeats(params_chr, repeats_dict):
 def shuffle_repeats(repeats_dict):
     allnames = []
     allpositions = []
-    for rep in repeats_dict:
-        num_rep = int(repeats_dict[rep].num_rep - repeats_dict[rep].num_rep * (repeats_dict[rep].nest / 100.0))
-        names = num_rep * [repeats_dict[rep].name]
-        n_frags = int(((num_rep * repeats_dict[rep].frag) / 100))
+    for rep in repeats_dict.values():
+        num_rep = int(rep.num_rep - rep.num_rep * (rep.nest / 100.0))
+        names = num_rep * [rep.name]
+        n_frags = int(((num_rep * rep.frag) / 100))
         positions = [0] * num_rep
-        sample_changes = random.sample(range(len(positions)), n_frags)
-        for f in sample_changes:
-            positions[f] += 1
+        if n_frags > 0:
+            sample_changes = random.sample(range(len(positions)), min(n_frags, len(positions)))
+            for f in sample_changes:
+                positions[f] += 1
         allnames += names
         allpositions += positions
     name_pos = list(zip(allnames, allpositions))
@@ -175,7 +175,7 @@ def get_identity(mean, sd):
     # to prevent the warning message, use the following instead.
     identity = numpy.random.normal(mean, sd, 1)
     identity = int(identity[0])
-    while identity > 100:
+    while identity > 100 or identity < 0:
         # identity = int(numpy.random.normal(mean, sd, 1)).
         identity = numpy.random.normal(mean, sd, 1)
         identity = int(identity[0])
@@ -189,11 +189,18 @@ def generate_mismatches(sequence, identity, indels, indel_size_range):
     # Calculate number of nucleotides that need to be changed (i.e. SNPs).
     num_changes = seq_len - int(round((seq_len * identity / 100.0)))
     # Generate a vector containing locations for SNPs.
-    pos_changes_vec = random.sample(range(seq_len), num_changes)
+    if num_changes > 0:
+        pos_changes_vec = random.sample(range(seq_len), num_changes)
+    else:
+        pos_changes_vec = []
     # Calculate number of SNPs that need to be changed as indels.
     num_indels = int(round(num_changes * (indels / 100.0)))
+    num_indels = min(num_indels, len(pos_changes_vec))
     # Generate a vector containing SNP locations to be changed to indels.
-    indel_changes_vec = random.sample(pos_changes_vec, num_indels)
+    if num_indels > 0:
+        indel_changes_vec = random.sample(pos_changes_vec, num_indels)
+    else:
+        indel_changes_vec = []
     # Calculate indel sizes for each indel position.
     indel_sizes = [random.randint(indel_size_range[0], indel_size_range[1]) for _ in indel_changes_vec]
     # Replace single positions with tuples of (position, size).
@@ -244,9 +251,9 @@ def create_TSD(tsd_min, tsd_max, identity, indels, indel_size_range):
     tsd_length = random.randint(tsd_min, tsd_max)
     tsd_seq_5 = "".join([random.choice(alphabet) for _ in range(tsd_length)])
     tsd_len = len(tsd_seq_5)
-    tsd_base_changes_vec, tsd_indels_changes_with_size = generate_mismatches(tsd_seq_5, identity, indels, indel_size_range)
-    tsd_seq_mismatches = add_base_changes(tsd_seq_5, tsd_base_changes_vec)
-    tsd_seq_3 = add_indels(tsd_seq_mismatches, tsd_indels_changes_with_size)
+    base_changes_vec, indels_changes_with_size = generate_mismatches(tsd_seq_5, identity, indels, indel_size_range)
+    tsd_seq_mismatches = add_base_changes(tsd_seq_5, base_changes_vec)
+    tsd_seq_3 = add_indels(tsd_seq_mismatches, indels_changes_with_size)
     return tsd_seq_5, tsd_seq_3
 
 # Fragment TE sequence.
@@ -275,7 +282,7 @@ def fragment(seq, include_tsd, fragmentation_end, tsd_seq_5, tsd_seq_3):
             fragmented_seq = fragmented_seq[:-len(tsd_seq_3)]
     return fragmented_seq, frag_size, cut_length
 
-## Generate new sequence including the repeats in the random one (modified by THC).
+# Generate new sequence including the repeats in the random one (modified by THC).
 def generate_sequence(repeats_dict, rand_rep_pos, rand_seq, shuffled_repeats, indel_size_range):
     seq = ""
     pre_n = 0
@@ -406,7 +413,7 @@ def generate_genome_sequence(repeats_dict, rand_rep_pos, rand_chr_dict, shuffled
     return genome_dict, new_repeats_coord_dict
 
 # Print final genome sequence to file (function created by THC).
-def print_genome_data(genome_dict, new_repeats_coord_dict, params, out_dir):
+def print_genome_data(genome_dict, new_repeats_coord_dict, params, out_dir, repeats_dict):
     # Setup output directory.
     file_prefix = str(params['prefix'])
     final_out = os.path.join(out_dir, f'TEgenomeSimulator_{file_prefix}_result')
@@ -418,11 +425,10 @@ def print_genome_data(genome_dict, new_repeats_coord_dict, params, out_dir):
     te_gff = f"{file_prefix}_repeat_annotation_out.gff"
     
     # Create genome fasta file.
-    fasta_out = open(os.path.join(final_out, genome_fa), "w")
-    for chromosome in genome_dict.keys():
-        seq = str(genome_dict[chromosome])
-        fasta_out.write(f">{chromosome}\n{seq}\n")
-    fasta_out.close()
+    with open(os.path.join(final_out, genome_fa), "w") as fasta_out:
+        for chromosome in genome_dict.keys():
+            seq = str(genome_dict[chromosome])
+            fasta_out.write(f">{chromosome}\n{seq}\n")
     
     # Collapse new_repeats_coord_dict to a list with chr information.
     new_repeats_coord_list = []
@@ -431,55 +437,59 @@ def print_genome_data(genome_dict, new_repeats_coord_dict, params, out_dir):
             new_repeats_coord_list.append([chromosome] + replist)   
     
     # Create repeat fasta and gff files.
-    fasta_rep = open(os.path.join(final_out, te_fa), "w")
-    gff_rep = open(os.path.join(final_out, te_gff), "w")
-    counts = 1
-    for n in new_repeats_coord_list:
-        chr_id = str(n[0])
-        start = str(n[1])
-        end = str(n[2])
-        repeat_seq = str(n[3])
-        identity = str(n[4] / 100)
-        frag = str(n[5] / 100)
-        strand = str(n[6])
-        family = str(n[7])
-        subclas = str(n[8])
-        superfam = str(n[9])
-        tsd_5 = str(n[10])
-        tsd_3 = str(n[11])
-        te_id = str(counts).zfill(7)  # prints at least 7 characters wide; i.e. at most 9,999,999 TE insertions.
-        repeat_name = f">{family}_TE{te_id}#{superfam} [Location={chr_id}:{start}-{end};Identity={identity};Integrity={frag};TSD_5={tsd_5};TSD_3={tsd_3}]\n"
-        repeat_sequence = f"{repeat_seq}\n"
+    with open(os.path.join(final_out, te_fa), "w") as fasta_rep, open(os.path.join(final_out, te_gff), "w") as gff_rep:
+        counts = 1
+        for n in new_repeats_coord_list:
+            chr_id = str(n[0])
+            start = str(n[1])
+            end = str(n[2])
+            repeat_seq = str(n[3])
+            identity = str(n[4] / 100)
+            frag = str(n[5] / 100)
+            strand = str(n[6])
+            family = str(n[7])
+            subclas = str(n[8])
+            superfam = str(n[9])
+            tsd_5 = str(n[10])
+            tsd_3 = str(n[11])
+            te_id = str(counts).zfill(7)  # prints at least 7 characters wide; i.e. at most 9,999,999 TE insertions.
+            repeat_name = f">{family}_TE{te_id}#{superfam} [Location={chr_id}:{start}-{end};Identity={identity};Integrity={frag};TSD_5={tsd_5};TSD_3={tsd_3}]\n"
+            repeat_sequence = f"{repeat_seq}\n"
 
-        fasta_rep.write(repeat_name)
-        fasta_rep.write(repeat_sequence)
+            fasta_rep.write(repeat_name)
+            fasta_rep.write(repeat_sequence)
 
-        # Construct the attribute field with TSD information.
-        attributes = (
-            f"ID={family}_TE{te_id};"
-            f"Name=TE{te_id};"
-            f"Classification={superfam};"
-            f"Identity={identity};"
-            f"Integrity={frag};"
-            f"TSD_5={tsd_5};"
-            f"TSD_3={tsd_3}"
-        )
+            # Construct the attribute field with TSD information and extra attributes.
+            attributes = (
+                f"ID={family}_TE{te_id};"
+                f"Name=TE{te_id};"
+                f"Classification={superfam};"
+                f"Identity={identity};"
+                f"Integrity={frag};"
+                f"TSD_5={tsd_5};"
+                f"TSD_3={tsd_3}"
+            )
 
-        gff_rep.write("\t".join([
-            chr_id,
-            "TEgenomeSimulator",
-            subclas,
-            start,
-            end,
-            ".",
-            strand,
-            ".",
-            attributes + "\n"
-        ]))
-        
-        counts += 1
-    fasta_rep.close()
-    gff_rep.close()
+            # Append extra attributes from the Repeat object, if any
+            extra_attrs = repeats_dict.get(family, {}).extra_attributes
+            if extra_attrs:
+                extra_attrs_str = ';'.join([f"{k}:{v}" for k, v in repeats_dict[family].extra_attributes.items()])
+                attributes += f";{extra_attrs_str}"
+
+            # Write to GFF
+            gff_rep.write("\t".join([
+                chr_id,
+                "TEgenomeSimulator",
+                subclas,
+                start,
+                end,
+                ".",
+                strand,
+                ".",
+                attributes + "\n"
+            ]))
+            
+            counts += 1
 
 def main():
     # Set up argument parser.
@@ -554,8 +564,9 @@ def main():
         repeats_dict, repeats_coord, chrs_dict, shuffled_repeats, indel_size_range
     )
     # Output to fasta and gff files.
-    print_genome_data(genome, new_repeats_coord, params_chr, out_dir)
+    print_genome_data(genome, new_repeats_coord, params_chr, out_dir, repeats_dict)
 
 if __name__ == "__main__":
     main()
 
+# END

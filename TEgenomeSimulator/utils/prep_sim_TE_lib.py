@@ -91,12 +91,15 @@ def main():
         sys.exit(1)
 
     # TE families.
-    te_family = list(te_lib.keys())
+    # Map clean TE family names (without metadata) to original headers
+    te_family_map = {te_id.split(';')[0]: te_id for te_id in te_lib.keys()}
+    te_family = list(te_family_map.keys())  # Cleaned list of TE families
 
     # TE superfamilies.
     te_superfamily = []
     for te_id in te_family:
-        superfamily = re.sub(".*#", "", te_id)
+        # Modified line to ignore metadata after ';'
+        superfamily = re.sub(".*#", "", te_id).split(';')[0]
         te_superfamily.append(superfamily)
 
     # Define TE subclasses.
@@ -181,7 +184,7 @@ def main():
 
     # Length of each TE family.
     print("\n## Extracting the length of each TE family ##")
-    length = [len(te_lib[te_id].seq) for te_id in te_family]
+    length = [len(te_lib[te_family_map[te_id]].seq) for te_id in te_family]
 
     # Fragmented TE loci proportion.
     print("\n## Setting the proportion of fragmented TE loci for each TE family ##")
@@ -222,3 +225,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+# END.
