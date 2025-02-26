@@ -1,0 +1,1 @@
+python ../TEvo/bin/stats_report.py --bed $(ls gen*_final.bed | sort -V) --out_prefix stat
