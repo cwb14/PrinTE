@@ -534,7 +534,8 @@ def main():
                     "or if a nearby entry (within 100 lines) has an identical TSD, strand, and a NAME that is an exact or prefix match.\n\n"
                     "For disrupted genes, a weight is applied. By default, the number of TE excisions is calculated as:\n"
                     "    rate * generations * (sum of disrupted gene weights).\n"
-                    "NEW: Use --fix_ex to bypass this calculation and specify a fixed number of TE excisions.\n\n"
+                    "NEW: Use --fix_ex to bypass this calculation and specify a fixed excision rate (e.g., 1e-6).\n"
+                    "      In this case, the number of excisions is calculated as: --fix_ex * genome_size * generations.\n\n"
                     "Also, publication-quality figures are generated for the log-normal distribution and the weighted candidate selection curve.\n"
                     "Use --no_fig to disable figure generation.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -548,14 +549,18 @@ def main():
     parser.add_argument("--sigma", type=float, default=1.0, help="Sigma for log-normal distribution of disrupted_gene_weight (used if gene_selection.tsv is not present).")
     parser.add_argument("--k", type=float, default=1.0, help="Decay rate for weighted excision selection based on sequence length.")
     parser.add_argument("--no_fig", action="store_true", help="Disable generating PDF figures.")
-    # New argument: fixed excision count. When provided, ignore --rate, --generations, and --sigma.
-    parser.add_argument("--fix_ex", type=int, help="If provided, use this fixed number of TE excisions instead of calculating via rate * generations * (sum of disrupted gene weights).")
+    # New argument: fixed excision rate. When provided, ignore --rate, --generations, and gene weights.
+    parser.add_argument("--fix_ex", type=float, help="If provided, use this fixed excision rate to calculate the number of TE excisions as: fix_ex * genome_size * generations.")
     args = parser.parse_args()
 
     random.seed(args.seed)
 
     print("Parsing genome FASTA...")
     genome_records = parse_fasta(args.genome)
+    # Calculate genome_size: total number of bases in the genome.
+    genome_size = sum(len(rec.seq) for rec in genome_records.values())
+    print(f"Genome size (total bases): {genome_size}")
+
     print("Parsing BED file...")
     entries = parse_bed(args.bed)
 
@@ -571,7 +576,7 @@ def main():
                 if len(parts) == 2:
                     gene_weights[parts[0]] = float(parts[1])
     else:
-        # Only generate synthetic gene weights if fixed excision count is not used
+        # Only generate synthetic gene weights if fixed excision rate is not used
         if args.fix_ex is None:
             print(f"{gene_sel_file} not found. Generating synthetic gene selection weights ...")
             mu = args.sigma ** 2
@@ -582,7 +587,7 @@ def main():
                     f.write(f"{gene}\t{weight:.4f}\n")
             print(f"Synthetic gene selection weights written to {gene_sel_file}")
         else:
-            print("Fixed excision count provided (--fix_ex), so gene weights generation is bypassed.")
+            print("Fixed excision rate provided (--fix_ex), so gene weights generation is bypassed.")
 
     # Optionally generate log-normal distribution figure.
     if not args.no_fig and args.fix_ex is None:
@@ -603,8 +608,10 @@ def main():
 
     # Determine the number of excisions.
     if args.fix_ex is not None:
-        excision_count = args.fix_ex
-        print(f"Using fixed number of TE excisions: {excision_count}")
+        # Calculate excision_count as: fixed rate * genome_size * generations.
+        excision_count = int(args.fix_ex * genome_size * args.generations)
+        print(f"Using fixed excision rate: {args.fix_ex}")
+        print(f"Calculated number of TE excisions: {excision_count}")
     else:
         excision_count = calculate_excision_count(entries, args.rate, args.generations, gene_weights)
     removals = select_removals(entries, nest_groups, excision_count, args.seed, args.k)
