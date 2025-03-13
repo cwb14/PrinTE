@@ -11,7 +11,7 @@ Example usage:
       --bed existing_features.bed \
       --output my_output \
       --seed 42 \
-      --fix_in 800 \
+      --fix_in 1e-6 \
       -b 1e-2 \
       -bf burn_in.txt \
       --TE_ratio TE_ratio.txt \
@@ -31,7 +31,7 @@ def parse_args():
     parser.add_argument("--genome", required=True, help="Input genome FASTA file.")
     parser.add_argument("--TE", required=True, help="FASTA file of TEs to insert.")
     parser.add_argument("--rate", type=float, default=1e-8,
-                        help="Rate of TE insertions per base per generation. Default=1e-8")
+                        help="Rate of TE insertions per intact TE per generation. Default=1e-8")
     parser.add_argument("--generations", type=int, default=1,
                         help="Number of generations to simulate. Default=1")
     parser.add_argument("--bed", required=True,
@@ -39,9 +39,9 @@ def parse_args():
     parser.add_argument("--output", required=True, help="Output prefix (for .bed and .fasta).")
     parser.add_argument("--seed", type=int, default=None,
                         help="Random seed for reproducibility.")
-    # New optional parameter: if provided, use this fixed number for total insertions.
-    parser.add_argument("--fix_in", type=int, default=None,
-                        help="Fixed total number of TE insertions to perform (overrides rate and generations if provided).")
+    # Updated optional parameter: if provided, use this fixed rate for TE insertions per base per generation.
+    parser.add_argument("--fix_in", type=float, default=None,
+                        help="Fixed rate of TE insertions per base per generation (overrides rate and generations if provided).")
     # New parameters for TE Birth functionality.
     parser.add_argument("-b", "--birth_rate", type=float, default=0.0,
                         help="Birth rate of new TEs. Supports scientific (e.g. 1e-2) and numeric (e.g. 10) formats. Default=0.0")
@@ -366,6 +366,11 @@ def main():
 
     print("Reading genome FASTA ...")
     genome_raw = read_fasta(args.genome)  
+
+    # Calculate genome size: total number of bases in the genome.
+    genome_size = sum(len(seq) for seq in genome_raw.values())
+    print(f"Genome size: {genome_size} bases")
+
     print("Converting genome to editable lists ...")
     genome = convert_genome_to_dict_of_lists(genome_raw)
 
@@ -384,12 +389,14 @@ def main():
     for key, count in intact_distribution.items():
         print(f"  {key[0]}/{key[1]}: {count}")
 
+    # Determine total TE insertions to perform.
     if args.fix_in is not None:
-        total_insertions = args.fix_in
-        print(f"Using fixed number of TE insertions: {total_insertions}")
+        total_insertions = int(args.fix_in * genome_size * args.generations)
+        print(f"Using fixed insertion rate: {args.fix_in} per base per generation")
+        print(f"Calculated total TE insertions to perform: {total_insertions}")
     else:
         total_insertions = int(args.rate * intact_TE_count * args.generations)
-        print(f"Rate: {args.rate}")
+        print(f"Rate (per intact TE per generation): {args.rate}")
         print(f"Generations: {args.generations}")
         print(f"Total TE insertions to perform: {total_insertions}")
 
