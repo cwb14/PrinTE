@@ -5,6 +5,7 @@ import random
 import sys
 import bisect
 import re
+import numpy as np
 
 def parse_fasta(file_path):
     fasta_dict = {}
@@ -130,8 +131,6 @@ def get_tsd_length(te_class, te_superfamily):
     Returns an integer representing the TSD length.
     If TSD length is variable, selects a random length within the specified range.
     """
-    # Define the mapping based on the provided specifications
-    # The key is a tuple (TE_class, TE_superfamily)
     tsd_mapping = {
         # Fixed TSD lengths
         ('LTR', 'Copia'): lambda: 5,
@@ -194,6 +193,23 @@ def compute_allowed_intervals(seq_length, exclusion_intervals):
         allowed.append((current, seq_length))
     return allowed
 
+def mutate_sequence(seq, mutation_rate):
+    """
+    Mutate the given sequence by randomly substituting bases with probability mutation_rate.
+    mutation_rate should be a fraction (e.g., 0.03 for 3%).
+    """
+    mutated = []
+    for base in seq:
+        if random.random() < mutation_rate:
+            bases = ['A', 'C', 'G', 'T']
+            # Remove the current base (ignoring case) if it's one of the bases.
+            if base.upper() in bases:
+                bases.remove(base.upper())
+            mutated.append(random.choice(bases))
+        else:
+            mutated.append(base)
+    return ''.join(mutated)
+
 def main():
     parser = argparse.ArgumentParser(
         description="Randomly replace backbone sequence with TE sequences (with TSD duplication) while deleting TE_length+TSD_length bp from the genome. The replacement is done in regions at least 20bp away from genes or previously inserted TEs."
@@ -209,6 +225,7 @@ def main():
     parser.add_argument('-seed', type=int, default=None, help='Seed for the random number generator (optional)')
     parser.add_argument('-TE_ratio', help='Path to TE ratios file (optional)', default=None)
     parser.add_argument('-stat_out', help='File to output statistics (optional)', default=None)
+    parser.add_argument('-TE_mut_range', help='Optional mutation range for TEs as min,max percent (e.g. 3,15)', default=None)
 
     args = parser.parse_args()
 
@@ -218,8 +235,24 @@ def main():
     output_prefix = args.output
     seed = args.seed
 
+    # Parse TE mutation range if provided.
+    te_mut_range = None
+    if args.TE_mut_range:
+        try:
+            parts = args.TE_mut_range.split(',')
+            if len(parts) != 2:
+                raise ValueError("TE_mut_range must have two comma-separated values.")
+            te_mut_range = (float(parts[0]), float(parts[1]))
+            if te_mut_range[0] < 0 or te_mut_range[1] < te_mut_range[0]:
+                raise ValueError("Invalid mutation range values.")
+            print(f"TE mutation range set to {te_mut_range[0]}% - {te_mut_range[1]}%.")
+        except Exception as e:
+            print(f"Error parsing -TE_mut_range parameter: {e}")
+            sys.exit(1)
+
     if seed is not None:
         random.seed(seed)
+        np.random.seed(seed)
         print(f"Random seed set to {seed}.")
     else:
         print("No random seed provided. Results will be non-reproducible.")
@@ -345,6 +378,17 @@ def main():
             te_superfamily = te_info_dict[selected_te]['superfamily']
             tsd_length = get_tsd_length(te_class, te_superfamily)
             te_sequence = te_dict[selected_te]
+
+            # If mutation range is specified, sample a mutation percent from a Poisson distribution.
+            if te_mut_range is not None:
+                mutation_min, mutation_max = te_mut_range
+                lam = (mutation_min + mutation_max) / 2.0
+                sampled = np.random.poisson(lam)
+                mutation_percent = max(mutation_min, min(sampled, mutation_max))
+                mutation_rate = mutation_percent / 100.0
+                te_sequence = mutate_sequence(te_sequence, mutation_rate)
+                print(f"Mutating TE {selected_te} at {mutation_percent}% rate.")
+
             TE_length = len(te_sequence)
             deletion_length = TE_length + tsd_length  # Total backbone sequence to delete.
 

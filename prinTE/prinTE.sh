@@ -2,36 +2,13 @@
 ###############################################################################
 # prinTE.sh
 #
-# A wrapper to run the TE evolution simulation pipeline in two phases.
+# A wrapper to run the TE evolution simulation pipeline in two phases,
+# and then perform supplemental post-processing.
 #
 # Phase 1 (Burn‐in) is performed unless the user provides starting input files
 # via --bed and --fasta, or if --continue is provided and previous outputs are found.
 #
-#   (1) Burn‐in (skipped if both --bed and --fasta are provided OR if --continue is provided and previous outputs exist):
-#       (a) Build a synthetic genome with CDS using synthetic_genome.py.
-#           Note: synthetic_genome.py accepts two additional, mutually
-#           exclusive optional arguments: -cds_num and -cds_percent.
-#       (b) Estimate LTR lengths with seq_divergence.py.
-#       (c) Append LTR lengths to the TE library.
-#       (d) Insert TEs using shared_ltr_inserter.py.
-#           Note: shared_ltr_inserter.py now accepts either -n (number of
-#           insertions) or -p (target percent TE) (but not both) and an extra
-#           option: -stat_out burnin.stat.
-#
-#   (2) Looping generations:
-#       For each generation “step” (until generation_end) run:
-#         - ltr_mutator (simulate mutation),
-#         - nest_inserter (insert new TEs, with an optional fixed insertion
-#           count via --fix_in). Updated nest_inserter.py now also accepts:
-#             --TE_ratio, -bf burnin.stat, --birth_rate (default 1e-3),
-#             and two new parameters controlling euchromatin bias:
-#             --euch_het_bias and --euch_het_buffer.
-#           In this wrapper, these are provided with friendlier names:
-#             --euch-bias (default: 1.2) and --euch-buffer (default: 10000).
-#         - TE_exciser (purge some TEs and convert a percentage of intact TEs to
-#           soloLTRs). New options: --sigma (default 1.0) and --k (default 10).
-#           The first TE_exciser run will include figures; subsequent runs add
-#           --no_fig.
+# [The detailed description of Phase 1 and Phase 2 is the same as before...]
 #
 # New functionality and changes:
 #
@@ -40,95 +17,45 @@
 #      (e.g., gen${i}_final.fasta) and resumes from the next iteration.
 #
 #  (2) New flag --keep_temps (or -kt):
-#      When provided, temporary files (e.g., ${mut_prefix}.fa, ${nest_prefix}.bed, and ${nest_prefix}.fasta)
-#      are kept. Otherwise, these are removed at the end of each loop.
+#      When provided, temporary files are kept. Otherwise, they are removed after each loop.
 #
-#  (3) New user-friendly parameters --euch-bias and --euch-buffer
-#      (mapped internally to --euch_het_bias and --euch_het_buffer)
-#      to control the insertion bias toward open euchromatin.
+#  (3) New user-friendly parameters --euch-bias and --euch-buffer to control insertion bias.
 #
-# The script determines the directories for the pipeline’s binaries
-# (assumed to be in TOOL_DIR/bin/) and tools (TOOL_DIR) and writes its log and
-# error files ("pipeline.log" and "pipeline.error") in the current directory.
+#  (4) New option --model for per-generation post-processing (model options: raw, K2P, JC69; default: raw).
+#
+#  (5) New option -tm, --TE_mut_in:
+#      Provides a mutation range (min,max in percent) for shared_ltr_inserter.py.
+#      Example: -tm 3,15. The script will pass this as "-TE_mut_range 3,15" to the TE inserter,
+#      which then models a Poisson distribution between the given values.
+#
+#  (6) Supplemental post-processing scripts:
+#      (a) Global analyses (run at the end of the pipeline):
+#          - plot_TE_frac.py
+#          - plot_solo_intact.py
+#          - stats_report.py
+#          - plot_superfamily_count.py
+#          - plot_category_bar.py
+#
+#      (b) Per-generation analyses (run on a maximum of 4 evenly distributed final generations):
+#          - extract_intact_LTR.py
+#          - seq_divergence.py (on extracted LTR fasta)
+#
+# Directories:
+#   TOOL_DIR: Directory containing this script (assumed to be TESS/prinTE)
+#   BIN_DIR:  TESS/prinTE/bin
+#   UTIL_DIR: TESS/prinTE/util
 #
 # Usage:
-#   prinTEsh [options]
+#   prinTE.sh [options]
 #
-# Options (defaults in parentheses; some options are REQUIRED):
-#
-#   -c,  --cds              Path to CDS file for synthetic_genome.py
-#                           (default: $TOOL_DIR/TAIR10.cds.fa)
-#
-#   -N,  --cds_num          Number of CDS sequences to insert.
-#                           (Mutually exclusive with --cds_percent)
-#
-#   -P,  --cds_percent      Percent of the genome that should be CDS.
-#                           (Mutually exclusive with --cds_num)
-#
-#   -cn, --chr_number       Number of chromosomes (default: 3)
-#
-#   -sz, --size             Genome size in kb, Mb, or Gb (default: 100Mb)
-#
-#   -s,  --seed             Random seed (default: 42)
-#
-#   -i,  --TE_lib           TE library file (default: $TOOL_DIR/combined_curated_TE_lib_ATOSZM_selected.fasta)
-#
-#   -m,  --mutation_rate    Mutation rate (default: 1.3e-8)
-#
-#   -r,  --TE_ratio         TE ratio file (default: $TOOL_DIR/ratios.tsv)
-#
-#   -n,  --TE_num           Number of TE insertions in burn‐in (default: 2000)
-#
-#   -p,  --TE_percent       Target percent of the genome that should be TE
-#                           (mutually exclusive with --TE_num)
-#
-#   -st, --step             Generation step (number of generations per loop; REQUIRED)
-#
-#   -ge, --generation_end   Final generation (REQUIRED; must be a multiple of step)
-#
-#   -t,  --threads          Number of threads (default: 4)
-#
-#   -ir, --insert_rate      TE insertion rate for nest_inserter.py (default: 1e-8)
-#
-#   -br, --birth_rate       Birth rate for new TEs in nest_inserter.py (default: 1e-3)
-#
-#   -dr, --delete_rate      TE deletion rate for TE_exciser.py (default: 1e-4)
-#
-#   -sr, --solo_rate        Percentage chance to convert an intact TE to soloLTR
-#                           in TE_exciser.py (default: 5)
-#
-#   -sc, --sigma           Sigma value for TE_exciser.py (default: 1.0)
-#
-#   -k,  --k               TE length decay slope for TE_exciser.py (default: 10)
-#
-#   -F,  --fix              Fixed insertion and excision numbers, comma-separated.
-#                           Format: insertion,excision (e.g., 500,200)
-#
-#   -b,  --bed              Input BED file for starting generation (requires --fasta)
-#
-#   -f,  --fasta            Input FASTA file for starting generation (requires --bed)
-#
-#   -x, --continue          Resume simulation from the last completed generation.
-#
-#   -z, --keep_temps, -kt   Keep temporary files (default: remove them after each loop).
-#
-#   -w, --euch-bias         Weight of bias toward euchromatin (default: 1.2)
-#
-#   -j, --euch-buffer       Interval upstream/downstream of genes considered euchromatin (default: 10000)
-#
-#   -h,  --help             Display this help message and exit.
-#
-# Note: Fasta inputs (CDS, TE_lib, and -fasta) may be provided as plain text or gzipped (.gz).
-#
-# Example:
-#   $(basename "$0") -st 1000 -ge 3000
+# [A detailed options list follows...]
 #
 ###############################################################################
 
 # --- Determine directories ---
-# Assume this script is stored in TOOL_DIR; BIN_DIR is assumed to be TOOL_DIR/bin
 TOOL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-BIN_DIR="$TOOL_DIR/bin"
+BIN_DIR="${TOOL_DIR}/bin"
+UTIL_DIR="${TOOL_DIR}/util"
 
 # --- Log file names ---
 LOG="pipeline.log"
@@ -145,23 +72,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# --- Function: If a fasta file is gzipped, decompress it to a temporary file.
-#     If the given file does not exist and does not end with .gz, check if a .gz version exists.
+# --- Function: If a fasta file is gzipped, decompress it.
 decompress_if_gz() {
   local file="$1"
+  local base_name="$(basename "$file" .gz)"  # Remove .gz if present
+  local decompressed_file="./${base_name}"
+
   if [[ ! -f "$file" && "$file" != *.gz ]]; then
     if [ -f "${file}.gz" ]; then
       file="${file}.gz"
     fi
   fi
+
   if [[ "$file" == *.gz ]]; then
-    local tmp
-    tmp=$(mktemp)
-    if gunzip -c "$file" > "$tmp"; then
-      temp_files+=("$tmp")
-      echo "$tmp"
+    echo "Decompressing $file to ${decompressed_file}" | tee -a "$LOG" >&2
+    if gunzip -c "$file" > "$decompressed_file"; then
+      temp_files+=("$decompressed_file")
+      echo "$decompressed_file"  # Only output the filename
     else
-      echo "Error decompressing $file" | tee -a "$ERR"
+      echo "Error decompressing $file" | tee -a "$ERR" >&2
       exit 1
     fi
   else
@@ -175,42 +104,44 @@ print_help() {
 Usage: $(basename "$0") [options]
 
 Options:
-  -c,  --cds              Path to CDS file for synthetic_genome.py
-                         (default: ${TOOL_DIR}/TAIR10.cds.fa)
-                         (gzipped files ending in .gz are supported)
-  -N,  --cds_num          Number of CDS sequences to insert.
-                         (Mutually exclusive with --cds_percent)
-  -P,  --cds_percent      Percent of the genome that should be CDS.
-                         (Mutually exclusive with --cds_num)
+############### REQUIRED ###############
+  -ge, --generation_end   Number of generations to simulate (REQUIRED; must be an exact multiple of step)
+  -st, --step             Generation step size (number of generations per loop; REQUIRED)
+
+############### BURN-IN ###############
+  -c,  --cds              Path to CDS file (default: ${TOOL_DIR}/TAIR10.cds.fa)
+  -N,  --cds_num          Number of CDS sequences to insert. (Mutually exclusive with --cds_percent)
+  -P,  --cds_percent      Percent of the genome that should be CDS. (Mutually exclusive with --cds_num)
+  -n,  --TE_num           Number of TE insertions in burn‐in (default: 2000) (Mutually exclusive with --TE_percent)
+  -p,  --TE_percent       Percent of the genome that should be TEs in the burn‐in (Mutually exclusive with --TE_num)
   -cn, --chr_number       Number of chromosomes (default: 3)
   -sz, --size             Genome size in kb, Mb, or Gb (default: 100Mb)
+  -tm, --TE_mut_in        TE mutation range  in burn-in (min,max in percent). Example: -tm 3,15
+
+########## FIXED TE INDEL RATE ##########
+  -F,  --fix              Fixed insertion and deletion numbers, comma-separated. Format: insertion,deletion (e.g., 1e-9,1e-9)
+
+######### VARIABLE TE INDEL RATE #########  
+  -ir, --insert_rate      TE insertion rate (default: 1e-8)
+  -dr, --delete_rate      TE deletion rate (default: 1e-4)  
+  -br, --birth_rate       TE birth rate (default: 1e-3)
+  -sc, --sigma            Selection coeefieint for gene insertions (default: 1.0)                
+  
+########## GENERAL USE ##########                 
   -s,  --seed             Random seed (default: 42)
   -i,  --TE_lib           TE library file (default: ${TOOL_DIR}/combined_curated_TE_lib_ATOSZM_selected.fasta)
-                         (gzipped files ending in .gz are supported)
-  -m,  --mutation_rate    Mutation rate (default: 1.3e-8)
+  -m,  --mutation_rate    DNA Mutation rate (default: 1.3e-8)
   -r,  --TE_ratio         TE ratio file (default: ${TOOL_DIR}/ratios.tsv)
-  -n,  --TE_num           Number of TE insertions in burn‐in (default: 2000)
-  -p,  --TE_percent       Target percent of the genome that should be TE
-                         (mutually exclusive with --TE_num)
-  -st, --step             Generation step (number of generations per loop; REQUIRED)
-  -ge, --generation_end   Final generation (REQUIRED; must be a multiple of step)
   -t,  --threads          Number of threads (default: 4)
-  -ir, --insert_rate      TE insertion rate for nest_inserter.py (default: 1e-8)
-  -br, --birth_rate       Birth rate for new TEs in nest_inserter.py (default: 1e-3)
-  -dr, --delete_rate      TE deletion rate for TE_exciser.py (default: 1e-4)
-  -sr, --solo_rate        Percentage chance to convert an intact TE to soloLTR
-                         in TE_exciser.py (default: 5)
-  -sc, --sigma           Sigma value for TE_exciser.py (default: 1.0)
-  -k,  --k               TE length decay slope for TE_exciser.py (default: 10)
-  -F,  --fix              Fixed insertion and excision numbers, comma-separated.
-                         Format: insertion,excision (e.g., 500,200)
-  -b,  --bed              Input BED file for starting generation (requires --fasta)
-  -f,  --fasta            Input FASTA file for starting generation (requires --bed)
-                         (gzipped files ending in .gz are supported)
+  -sr, --solo_rate        Percentage chance to convert an intact TE to soloLTR in TE_exciser.py (default: 5)
+  -k,  --k                TE length decay slope (default: 10)
+  -b,  --bed              Input BED file for starting generation (skip burn-in; requires --fasta)
+  -f,  --fasta            Input FASTA file for starting generation (skip burn-in; requires --bed)
   -x, --continue          Resume simulation from the last completed generation.
   --keep_temps, -kt       Keep temporary files (default: remove them after each loop)
-  -w, --euch-bias         Weight of bias toward euchromatin (default: 1.2)
+  -w, --euch-bias         Weight of bias toward euchromatin (default: 1.0; disabled)
   -j, --euch-buffer       Interval upstream/downstream of genes considered euchromatin (default: 10000)
+  --model                 DNA mutation model for LTR dating (choose from: raw, K2P, JC69; default: raw)
   -h,  --help             Display this help message and exit
 
 Example:
@@ -222,8 +153,10 @@ EOF
 # Initialize flags and new parameters with defaults.
 cont_flag=0
 keep_temps=0
-euch_bias=1.2
+euch_bias=1.0
 euch_buffer=10000
+model="raw"
+TE_mut_in=""
 
 while [[ $# -gt 0 ]]; do
   key="$1"
@@ -300,7 +233,7 @@ while [[ $# -gt 0 ]]; do
     -x|--continue)
       cont_flag=1
       shift;;
-    --keep_temps| -kt)
+    --keep_temps|-kt)
       keep_temps=1
       shift;;
     -w|--euch-bias)
@@ -308,6 +241,12 @@ while [[ $# -gt 0 ]]; do
       shift; shift;;
     -j|--euch-buffer)
       euch_buffer="$2"
+      shift; shift;;
+    --model)
+      model="$2"
+      shift; shift;;
+    -tm|--TE_mut_in)
+      TE_mut_in="$2"
       shift; shift;;
     -h|--help)
       print_help
@@ -338,7 +277,7 @@ k="${k:-10}"
 
 # --- Validate mutually exclusive CDS options ---
 if [[ -n "$cds_num" && -n "$cds_percent" ]]; then
-  echo "Error: Please provide either --cds_num (or -N) or --cds_percent (or -P), not both." | tee -a "$ERR"
+  echo "Error: Provide either --cds_num (or -N) or --cds_percent (or -P), not both." | tee -a "$ERR"
   exit 1
 fi
 
@@ -414,7 +353,7 @@ if [[ "$skip_burnin" -eq 0 ]]; then
     exit 1
   fi
 
-  # (1b) Get LTR lengths from the TE fasta library.
+  # (1b) Estimate LTR lengths from the TE fasta library.
   cmd="python ${BIN_DIR}/seq_divergence.py -i ${TE_lib} -o lib.txt -t ${threads} --min_align 100 --max_off 20 --miu ${mutation_rate} --blast_outfmt '6 qseqid sseqid sstart send slen qstart qend qlen length nident btop'"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
@@ -433,7 +372,6 @@ if [[ "$skip_burnin" -eq 0 ]]; then
   fi
 
   # (1d) Insert TEs into the synthetic genome.
-  # Use either -n (TE_num) or -p (TE_percent) and add -stat_out burnin.stat.
   cmd="python ${BIN_DIR}/shared_ltr_inserter.py -genome backbone.fa -TE lib.fa"
   if [[ -n "$TE_percent" ]]; then
     cmd+=" -p ${TE_percent}"
@@ -441,6 +379,10 @@ if [[ "$skip_burnin" -eq 0 ]]; then
     cmd+=" -n ${TE_num}"
   fi
   cmd+=" -bed backbone.bed -output burnin -seed ${seed} -TE_ratio ${TE_ratio} -stat_out burnin.stat"
+  # If the user provided the TE mutation range, add it.
+  if [[ -n "$TE_mut_in" ]]; then
+    cmd+=" -TE_mut_range ${TE_mut_in}"
+  fi
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
   if [ $? -ne 0 ]; then
@@ -517,7 +459,6 @@ for (( i=start_iter; i<=iterations; i++ )); do
   # (2b) Insert new TEs (allowing for nesting) using nest_inserter.py.
   nest_prefix="gen${i}_nest"
   cmd="python ${BIN_DIR}/nest_inserter.py --genome ${mut_prefix}.fa --TE lib.fa --generations ${step} --bed ${prev_bed} --output ${nest_prefix} --seed ${current_seed} --rate ${insert_rate} ${extra_fix_in} --TE_ratio ${TE_ratio} -bf burnin.stat --birth_rate ${birth_rate}"
-  # Append the new euchromatin bias parameters (mapping our friendlier names).
   cmd+=" --euch_het_bias ${euch_bias} --euch_het_buffer ${euch_buffer}"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
@@ -526,9 +467,8 @@ for (( i=start_iter; i<=iterations; i++ )); do
     exit 1
   fi
 
-  # (2c) Purge some TE insertions and convert intact TEs to soloLTRs using TE_exciser.py.
+  # (2c) Purge some TEs and convert intact TEs to soloLTRs using TE_exciser.py.
   cmd="python ${BIN_DIR}/TE_exciser.py --genome ${nest_prefix}.fasta --bed ${nest_prefix}.bed --rate ${delete_rate} --generations ${step} --soloLTR_freq ${solo_rate} ${extra_fix_ex} --output gen${i}_final --seed ${current_seed} --sigma ${sigma} --k ${k}"
-  # For generation 1, include figures; for later generations, add --no_fig.
   if [ $i -ne 1 ]; then
     cmd+=" --no_fig"
   fi
@@ -548,3 +488,80 @@ for (( i=start_iter; i<=iterations; i++ )); do
 done
 
 echo "Pipeline completed at $(date)" | tee -a "$LOG"
+
+###############################################################################
+# Supplemental Post-Processing (Global)
+###############################################################################
+echo "=== Global Post-Processing ===" | tee -a "$LOG"
+
+# Run the global analysis scripts from the util directory.
+# 1. Plot TE fraction (includes burnin and all gen*_final files)
+python ${UTIL_DIR}/plot_TE_frac.py --bed $(echo "burnin.bed"; ls gen*_final.bed | sort -V) \
+  --fasta $(echo "burnin.fa"; ls gen*_final.fasta | sort -V) \
+  --feature Intact_TE:SoloLTR:Fragmented_TE --out_prefix percent_TE
+
+# 2. Plot solo versus intact TE proportions.
+python ${UTIL_DIR}/plot_solo_intact.py --bed $(echo "burnin.bed"; ls gen*_final.bed | sort -V) \
+  --out_prefix solo_intact
+
+# 3. Generate overall statistics report.
+python ${UTIL_DIR}/stats_report.py --bed $(ls gen*_final.bed | sort -V) \
+  --out_prefix stat
+
+# 4. Plot superfamily count.
+python ${UTIL_DIR}/plot_superfamily_count.py
+
+# 5. Plot category bar.
+python ${UTIL_DIR}/plot_category_bar.py
+
+# 6. Genome  size through time.
+python ${UTIL_DIR}/genome_plot.py
+
+###############################################################################
+# Supplemental Post-Processing (Per-Generation Analysis)
+###############################################################################
+echo "=== Per-Generation Post-Processing ===" | tee -a "$LOG"
+
+# Determine the total number of final generation files (iterations)
+total_gens=$iterations
+
+# Choose at most 4 evenly distributed generations.
+selected=()
+if [ "$total_gens" -le 4 ]; then
+  for (( i=1; i<=total_gens; i++ )); do
+    selected+=("$i")
+  done
+else
+  # Always include the first and last iterations.
+  selected+=(1)
+  # Compute two intermediate indices.
+  mid1=$(printf "%.0f" "$(echo "scale=2; 1 + ($total_gens - 1)/3" | bc -l)")
+  mid2=$(printf "%.0f" "$(echo "scale=2; 1 + 2*($total_gens - 1)/3" | bc -l)")
+  selected+=("$mid1" "$mid2" "$total_gens")
+fi
+
+# Sort the selected generations in descending order (as per example: highest to lowest)
+IFS=$'\n' selected=($(sort -nr <<<"${selected[*]}"))
+unset IFS
+
+echo "Selected generations for per-generation analysis: ${selected[@]}" | tee -a "$LOG"
+
+for i in "${selected[@]}"; do
+  final_prefix="gen${i}_final"
+  echo "Processing per-generation analysis for ${final_prefix}" | tee -a "$LOG"
+  
+  # (a) Extract intact LTR sequences.
+  python ${BIN_DIR}/extract_intact_LTR.py --bed ${final_prefix}.bed --genome ${final_prefix}.fasta --out_fasta ${final_prefix}_LTR.fasta
+  
+  # (b) Compute sequence divergence on extracted LTR sequences.
+  python ${BIN_DIR}/seq_divergence.py -i ${final_prefix}_LTR.fasta -o ${final_prefix}_LTR.tsv -t ${threads} \
+    --min_align 100 --max_off 20 --miu ${mutation_rate} --blast_outfmt '6 qseqid sseqid sstart send slen qstart qend qlen length nident btop'
+  
+  # Removed ltr_dens.py call from here.
+done
+
+# Run ltr_dens.py once after per-generation analyses.
+echo "Running global LTR density analysis" | tee -a "$LOG"
+python ${BIN_DIR}/ltr_dens.py --model ${model} --output all_LTR_density.pdf --miu ${mutation_rate}
+
+echo "Post-processing completed at $(date)" | tee -a "$LOG"

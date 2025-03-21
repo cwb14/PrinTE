@@ -41,7 +41,7 @@ def parse_args():
                         help="Random seed for reproducibility.")
     # Updated optional parameter: if provided, use this fixed rate for TE insertions per base per generation.
     parser.add_argument("--fix_in", type=float, default=None,
-                        help="Fixed rate of TE insertions per base per generation (overrides rate and generations if provided).")
+                        help="Fixed rate of TE insertions per base per generation (overrides rate, if provided).")
     # New parameters for TE Birth functionality.
     parser.add_argument("-b", "--birth_rate", type=float, default=0.0,
                         help="Birth rate of new TEs. Supports scientific (e.g. 1e-2) and numeric (e.g. 10) formats. Default=0.0")
@@ -400,42 +400,12 @@ def main():
         print(f"Generations: {args.generations}")
         print(f"Total TE insertions to perform: {total_insertions}")
 
-    insertion_events = []  
-    intact_total = sum(intact_distribution.values())
-    for cat, count in intact_distribution.items():
-        insertion_count = round(total_insertions * (count / intact_total))
-        for i in range(insertion_count):
-            insertion_events.append(cat)
-    diff = total_insertions - len(insertion_events)
-    if diff > 0:
-        categories = list(intact_distribution.keys())
-        weights = [intact_distribution[cat] for cat in categories]
-        for i in range(diff):
-            chosen_cat = random.choices(categories, weights=weights)[0]
-            insertion_events.append(chosen_cat)
-    elif diff < 0:
-        for i in range(-diff):
-            removal_index = random.randrange(len(insertion_events))
-            insertion_events.pop(removal_index)
-
-    # --- New TE Birth functionality ---
-    if args.birth_rate and args.birth_file and args.TE_ratio_file:
-        try:
-            with open(args.birth_file, 'r') as bf:
-                line = bf.readline().strip()
-            m = re.search(r'(\d+)\s+TEs', line)
-            if m:
-                number_initial_tes = int(m.group(1))
-            else:
-                print("Error: Could not extract number of initial TEs from birth_file.")
-                sys.exit(1)
-        except Exception as e:
-            print(f"Error reading birth_file: {e}")
+    # Build insertion events based on either intact_distribution or TE_ratio_file if --fix_in is used.
+    if args.fix_in is not None:
+        if not args.TE_ratio_file:
+            print("Error: --TE_ratio file must be provided if --fix_in is used.")
             sys.exit(1)
-        number_of_born_tes = int(round(args.generations * args.birth_rate * number_initial_tes))
-        print(f"Number of born TEs to insert (from birth_rate and birth_file): {number_of_born_tes}")
-
-        te_ratio = {}  
+        te_ratio = {}
         try:
             with open(args.TE_ratio_file, 'r') as f:
                 for line in f:
@@ -460,8 +430,73 @@ def main():
         total_weight = sum(te_ratio.values())
         for k in te_ratio:
             te_ratio[k] /= total_weight
-        born_categories = list(te_ratio.keys())
-        born_weights = [te_ratio[cat] for cat in born_categories]
+        insertion_events = []
+        for i in range(total_insertions):
+            chosen_cat = random.choices(list(te_ratio.keys()), weights=list(te_ratio.values()), k=1)[0]
+            insertion_events.append(chosen_cat)
+    else:
+        insertion_events = []  
+        intact_total = sum(intact_distribution.values())
+        for cat, count in intact_distribution.items():
+            insertion_count = round(total_insertions * (count / intact_total))
+            for i in range(insertion_count):
+                insertion_events.append(cat)
+        diff = total_insertions - len(insertion_events)
+        if diff > 0:
+            categories = list(intact_distribution.keys())
+            weights = [intact_distribution[cat] for cat in categories]
+            for i in range(diff):
+                chosen_cat = random.choices(categories, weights=weights)[0]
+                insertion_events.append(chosen_cat)
+        elif diff < 0:
+            for i in range(-diff):
+                removal_index = random.randrange(len(insertion_events))
+                insertion_events.pop(removal_index)
+
+    # --- New TE Birth functionality ---
+    if args.birth_rate and args.birth_file and args.TE_ratio_file:
+        try:
+            with open(args.birth_file, 'r') as bf:
+                line = bf.readline().strip()
+            m = re.search(r'(\d+)\s+TEs', line)
+            if m:
+                number_initial_tes = int(m.group(1))
+            else:
+                print("Error: Could not extract number of initial TEs from birth_file.")
+                sys.exit(1)
+        except Exception as e:
+            print(f"Error reading birth_file: {e}")
+            sys.exit(1)
+        number_of_born_tes = int(round(args.generations * args.birth_rate * number_initial_tes))
+        print(f"Number of born TEs to insert (from birth_rate and birth_file): {number_of_born_tes}")
+
+        te_ratio_birth = {}  
+        try:
+            with open(args.TE_ratio_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split()
+                    if len(parts) < 3:
+                        continue
+                    te_class, te_superfamily, weight_str = parts[:3]
+                    try:
+                        weight = float(weight_str)
+                    except:
+                        weight = 0.0
+                    te_ratio_birth[(te_class, te_superfamily)] = weight
+        except Exception as e:
+            print(f"Error reading TE_ratio_file: {e}")
+            sys.exit(1)
+        if not te_ratio_birth:
+            print("Error: No TE ratio information loaded from TE_ratio_file.")
+            sys.exit(1)
+        total_weight_birth = sum(te_ratio_birth.values())
+        for k in te_ratio_birth:
+            te_ratio_birth[k] /= total_weight_birth
+        born_categories = list(te_ratio_birth.keys())
+        born_weights = [te_ratio_birth[cat] for cat in born_categories]
         for i in range(number_of_born_tes):
             chosen_cat = random.choices(born_categories, weights=born_weights, k=1)[0]
             insertion_events.append(chosen_cat)

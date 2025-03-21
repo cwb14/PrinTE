@@ -181,26 +181,28 @@ def main():
         # Process -cds_percent
         elif args.cds_percent is not None:
             desired_percent = float(args.cds_percent)
-            target_cds_total = (desired_percent / 100) * total_size
-            available_cds_total = sum(len(seq) for seq in cds_seqs)
-            if available_cds_total < target_cds_total:
-                print(f"Warning: Available CDS total length ({available_cds_total} bases) is less than needed for {desired_percent}% of genome size {total_size} bases ({target_cds_total} bases). Using all available CDS.")
-                cds_list = cds_seqs
+            if desired_percent == 0:
+                # For 0% CDS, do not insert any CDS sequences.
+                cds_list = []
             else:
-                # Select a random subset (shuffling then accumulating until the target is met)
-                random.shuffle(cds_seqs)
-                chosen_cds = []
-                cumulative = 0
-                for seq in cds_seqs:
-                    chosen_cds.append(seq)
-                    cumulative += len(seq)
-                    if cumulative >= target_cds_total:
-                        break
-                cds_list = chosen_cds
-                # Adjust the genome size so that CDS equals exactly the desired percentage.
-                new_total_size = int(round(cumulative * 100 / desired_percent))
-                print(f"Adjusting genome size from {total_size} to {new_total_size} to achieve desired CDS percent of {desired_percent}%.")
-                total_size = new_total_size
+                target_cds_total = (desired_percent / 100) * total_size
+                available_cds_total = sum(len(seq) for seq in cds_seqs)
+                if available_cds_total < target_cds_total:
+                    print(f"Warning: Available CDS total length ({available_cds_total} bases) is less than needed for {desired_percent}% of genome size {total_size} bases ({target_cds_total} bases). Using all available CDS.")
+                    cds_list = cds_seqs
+                else:
+                    random.shuffle(cds_seqs)
+                    chosen_cds = []
+                    cumulative = 0
+                    for seq in cds_seqs:
+                        chosen_cds.append(seq)
+                        cumulative += len(seq)
+                        if cumulative >= target_cds_total:
+                            break
+                    cds_list = chosen_cds
+                    new_total_size = int(round(cumulative * 100 / desired_percent))
+                    print(f"Adjusting genome size from {total_size} to {new_total_size} to achieve desired CDS percent of {desired_percent}%.")
+                    total_size = new_total_size
         else:
             # Neither -cds_num nor -cds_percent was provided; use all CDS sequences.
             cds_list = cds_seqs
@@ -263,9 +265,9 @@ def main():
         print(f"BED file written to '{bed_path}'.")
 
         # Compute and print the percent of the genome that is CDS.
-        total_cds_bases = sum(end - start for _, start, end in (pos for entry in [generate_chromosome_sequence(chr_sizes[i], chr_cds[i])[1] for i in range(chr_number)] for pos in entry))
-        # Alternatively, since each BED entry covers one CDS, you could also do:
-        # total_cds_bases = sum(end - start for _, start, end, _ in bed_entries)
+        total_cds_bases = sum(end - start for _, start, end in (
+            pos for entry in [generate_chromosome_sequence(chr_sizes[i], chr_cds[i])[1] for i in range(chr_number)]
+            for pos in entry))
         percent_cds = (total_cds_bases / total_size) * 100
         print(f"CDS accounts for {percent_cds:.2f}% of the genomic landscape.")
 
