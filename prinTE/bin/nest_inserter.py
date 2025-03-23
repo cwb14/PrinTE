@@ -41,7 +41,7 @@ def parse_args():
                         help="Random seed for reproducibility.")
     # Updated optional parameter: if provided, use this fixed rate for TE insertions per base per generation.
     parser.add_argument("--fix_in", type=float, default=None,
-                        help="Fixed rate of TE insertions per base per generation (overrides rate, if provided).")
+                        help="Fixed rate of TE insertions per base per generation (overrides rate and birth_rate, if provided).")
     # New parameters for TE Birth functionality.
     parser.add_argument("-b", "--birth_rate", type=float, default=0.0,
                         help="Birth rate of new TEs. Supports scientific (e.g. 1e-2) and numeric (e.g. 10) formats. Default=0.0")
@@ -454,7 +454,8 @@ def main():
                 insertion_events.pop(removal_index)
 
     # --- New TE Birth functionality ---
-    if args.birth_rate and args.birth_file and args.TE_ratio_file:
+    # Only perform TE birth if --fix_in is NOT provided.
+    if args.fix_in is None and args.birth_rate and args.birth_file and args.TE_ratio_file:
         try:
             with open(args.birth_file, 'r') as bf:
                 line = bf.readline().strip()
