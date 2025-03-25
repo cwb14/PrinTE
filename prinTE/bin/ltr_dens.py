@@ -85,7 +85,26 @@ def create_density_plot(data, miu, model, output):
     secax.set_xlabel("Time (MYA)")
     
     plt.title(f"Density Plot for {model} distances\nMutation Rate (miu) = {miu}")
-    plt.legend(title="Generation")
+    
+    # Get current legend handles and labels.
+    handles, labels = ax.get_legend_handles_labels()
+    # Remove the 'Generation' prefix and sort numerically.
+    legend_pairs = []
+    for h, label in zip(handles, labels):
+        try:
+            # Remove "Generation" and any extra spaces, then convert to int.
+            num = int(label.replace("Generation", "").strip())
+        except ValueError:
+            num = float('inf')
+        legend_pairs.append((num, h))
+    legend_pairs.sort(key=lambda x: x[0])
+    
+    # Unzip sorted pairs.
+    sorted_handles = [h for num, h in legend_pairs]
+    sorted_labels = [str(num) for num, h in legend_pairs]
+    
+    ax.legend(sorted_handles, sorted_labels, title="Generation")
+    
     plt.tight_layout()
     plt.savefig(output, dpi=300)
     print(f"Plot saved to {output}")
