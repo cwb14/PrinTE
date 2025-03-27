@@ -6,6 +6,8 @@ import sys
 import bisect
 import re
 import numpy as np
+import math
+import matplotlib.pyplot as plt
 
 def parse_fasta(file_path):
     fasta_dict = {}
@@ -202,7 +204,6 @@ def mutate_sequence(seq, mutation_rate):
     for base in seq:
         if random.random() < mutation_rate:
             bases = ['A', 'C', 'G', 'T']
-            # Remove the current base (ignoring case) if it's one of the bases.
             if base.upper() in bases:
                 bases.remove(base.upper())
             mutated.append(random.choice(bases))
@@ -210,13 +211,35 @@ def mutate_sequence(seq, mutation_rate):
             mutated.append(base)
     return ''.join(mutated)
 
+def plot_decay_function(k, Mmax, pdf_out):
+    """
+    Generate a publication-quality PDF of the exponential decay function used for sampling mutation percentages.
+    The probability density function (PDF) is:
+      f(M) = (k / (Mmax * (1 - exp(-k)))) * exp(-k * (M / Mmax))
+    for M in [0, Mmax].
+    """
+    M_values = np.linspace(0, Mmax, 500)
+    # Compute normalized PDF
+    norm_const = 1 - math.exp(-k)
+    f_values = (k / (Mmax * norm_const)) * np.exp(-k * (M_values / Mmax))
+    
+    plt.figure(figsize=(6,4))
+    plt.plot(M_values, f_values, lw=2)
+    plt.xlabel("Mutation Percent (%)", fontsize=12)
+    plt.ylabel("Probability Density", fontsize=12)
+    plt.title("Exponential Decay Function for Mutation Sampling", fontsize=14)
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.tight_layout()
+    plt.savefig(pdf_out, format='pdf')
+    plt.close()
+    print(f"Decay function plot saved to {pdf_out}.")
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Randomly replace backbone sequence with TE sequences (with TSD duplication) while deleting TE_length+TSD_length bp from the genome. The replacement is done in regions at least 20bp away from genes or previously inserted TEs."
+        description="Randomly replace backbone sequence with TE sequences (with TSD duplication) while deleting TE_length+TSD_length bp from the genome. The replacement is done in regions at least 20bp away from genes or previously inserted TEs. Mutation percentages for TEs are sampled from an exponential decay distribution."
     )
     parser.add_argument('-genome', required=True, help='Path to the genome FASTA file (genome.fa)')
     parser.add_argument('-TE', required=True, help='Path to the TE FASTA file (TE.fa)')
-    # Create a mutually exclusive group for -n and -p.
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('-n', type=int, help='Number of TE insertions to perform')
     group.add_argument('-p', type=float, help='Target percent of the genome that should be TE (e.g. -p 20 for 20%% TE)')
@@ -225,7 +248,10 @@ def main():
     parser.add_argument('-seed', type=int, default=None, help='Seed for the random number generator (optional)')
     parser.add_argument('-TE_ratio', help='Path to TE ratios file (optional)', default=None)
     parser.add_argument('-stat_out', help='File to output statistics (optional)', default=None)
-    parser.add_argument('-TE_mut_range', help='Optional mutation range for TEs as min,max percent (e.g. 3,15)', default=None)
+    # New parameters for exponential decay mutation sampling:
+    parser.add_argument('-k', type=float, default=10.0, help='Exponential decay parameter (default 10)')
+    parser.add_argument('-Mmax', type=float, default=10.0, help='Maximum mutation percent (default 10)')
+    parser.add_argument('-pdf_out', help='Output PDF file for mutation decay function plot (default mutation_decay.pdf)', default="mutation_decay.pdf")
 
     args = parser.parse_args()
 
@@ -234,21 +260,8 @@ def main():
     bed_path = args.bed
     output_prefix = args.output
     seed = args.seed
-
-    # Parse TE mutation range if provided.
-    te_mut_range = None
-    if args.TE_mut_range:
-        try:
-            parts = args.TE_mut_range.split(',')
-            if len(parts) != 2:
-                raise ValueError("TE_mut_range must have two comma-separated values.")
-            te_mut_range = (float(parts[0]), float(parts[1]))
-            if te_mut_range[0] < 0 or te_mut_range[1] < te_mut_range[0]:
-                raise ValueError("Invalid mutation range values.")
-            print(f"TE mutation range set to {te_mut_range[0]}% - {te_mut_range[1]}%.")
-        except Exception as e:
-            print(f"Error parsing -TE_mut_range parameter: {e}")
-            sys.exit(1)
+    k = args.k
+    Mmax = args.Mmax
 
     if seed is not None:
         random.seed(seed)
@@ -256,6 +269,9 @@ def main():
         print(f"Random seed set to {seed}.")
     else:
         print("No random seed provided. Results will be non-reproducible.")
+
+    # Plot the decay function for mutation percentages.
+    plot_decay_function(k, Mmax, args.pdf_out)
 
     output_genome_path = f"{output_prefix}.fa"
     output_bed_path = f"{output_prefix}.bed"
@@ -311,10 +327,10 @@ def main():
     # Build a lookup from (TE_class, TE_superfamily) to list of TE headers.
     te_type_to_headers = {}
     for header, info in te_info_dict.items():
-        key = (info['class'], info['superfamily'])
-        if key not in te_type_to_headers:
-            te_type_to_headers[key] = []
-        te_type_to_headers[key].append(header)
+        key_tuple = (info['class'], info['superfamily'])
+        if key_tuple not in te_type_to_headers:
+            te_type_to_headers[key_tuple] = []
+        te_type_to_headers[key_tuple].append(header)
 
     print("Reading gene BED file...")
     gene_bed_dict = parse_bed(bed_path)
@@ -331,10 +347,8 @@ def main():
             'tsd': 'NA'
         })
 
-    # Prepare per-chromosome data:
+    # Prepare per-chromosome data.
     chromosomes = list(genome_dict.keys())
-    # For each chromosome, store the sequence as a list (for in-place editing),
-    # its length, and initial exclusion intervals from genes (with 20bp buffer).
     chrom_data = {}
     for chrom in chromosomes:
         seq = list(genome_dict[chrom])
@@ -349,7 +363,6 @@ def main():
 
     te_bed_entries = []  # Store TE insertion BED entries.
 
-    # Define a helper function to attempt one TE insertion on a given chromosome.
     def try_insertion(chrom):
         """Attempt one TE insertion on chromosome 'chrom'.
         Returns the length of the inserted TE if successful, or 0 if no insertion was possible."""
@@ -358,7 +371,6 @@ def main():
         chr_length = data['length']
         exclusion_intervals = data['exclusion']
 
-        # Attempt a limited number of times with different TE choices.
         max_attempts = 10
         for attempt in range(max_attempts):
             # Select a TE.
@@ -379,15 +391,12 @@ def main():
             tsd_length = get_tsd_length(te_class, te_superfamily)
             te_sequence = te_dict[selected_te]
 
-            # If mutation range is specified, sample a mutation percent from a Poisson distribution.
-            if te_mut_range is not None:
-                mutation_min, mutation_max = te_mut_range
-                lam = (mutation_min + mutation_max) / 2.0
-                sampled = np.random.poisson(lam)
-                mutation_percent = max(mutation_min, min(sampled, mutation_max))
-                mutation_rate = mutation_percent / 100.0
-                te_sequence = mutate_sequence(te_sequence, mutation_rate)
-                print(f"Mutating TE {selected_te} at {mutation_percent}% rate.")
+            # Sample a mutation percent using the exponential decay function.
+            u = random.random()
+            mutation_percent = - (Mmax / k) * math.log(1 - u * (1 - math.exp(-k)))
+            mutation_rate = mutation_percent / 100.0
+            te_sequence = mutate_sequence(te_sequence, mutation_rate)
+            print(f"Mutating TE {selected_te} at {mutation_percent:.2f}% rate.")
 
             TE_length = len(te_sequence)
             deletion_length = TE_length + tsd_length  # Total backbone sequence to delete.
@@ -403,7 +412,6 @@ def main():
                     candidate_intervals.append((lower_bound, upper_bound))
                     total_candidates += (upper_bound - lower_bound + 1)
             if total_candidates <= 0:
-                # This TE choice cannot be inserted on this chromosome.
                 continue
 
             # Randomly choose a deletion start position.
@@ -433,38 +441,31 @@ def main():
                 te_seq_final = te_sequence
 
             replacement = te_seq_final + tsd_seq
-            # Replace the backbone sequence from deletion_start to deletion_start+deletion_length.
             seq[deletion_start : deletion_start + deletion_length] = list(replacement)
 
-            # Record the TE insertion BED entry.
             te_bed_entries.append({
                 'chromosome': chrom,
                 'start': deletion_start,
-                'end': deletion_start + len(te_seq_final),  # TE sequence occupies the first TE_length bp.
+                'end': deletion_start + len(te_seq_final),
                 'name': selected_te,
                 'strand': strand,
                 'tsd': tsd_seq if tsd_length > 0 else 'NA'
             })
 
-            # Update the exclusion intervals by adding the replaced region with 20bp buffer.
             new_excl_start = max(0, deletion_start - 20)
             new_excl_end = min(chr_length, deletion_start + deletion_length + 20)
             exclusion_intervals.append((new_excl_start, new_excl_end))
             data['exclusion'] = merge_intervals(exclusion_intervals)
-            # Insertion successful; return the TE length inserted.
             return TE_length
-        # If no TE could be inserted after several attempts, return 0.
         return 0
 
-    # Insertion loop.
     total_TE_bp_inserted = 0
     total_insertions_done = 0
     if args.n is not None:
-        # Fixed number of insertions.
         num_insertions = args.n
         print(f"Performing a fixed number of TE insertions: {num_insertions}")
         attempts = 0
-        max_global_attempts = num_insertions * 20  # safeguard to avoid infinite loop.
+        max_global_attempts = num_insertions * 20
         while total_insertions_done < num_insertions and attempts < max_global_attempts:
             chrom = random.choice(chromosomes)
             inserted = try_insertion(chrom)
@@ -477,14 +478,12 @@ def main():
             print("Error: Not enough deletable backbone sequence for the requested number of TE insertions.")
             sys.exit(1)
     else:
-        # Target percent mode.
         target_percent = args.p
-        # Calculate total genome size.
         total_genome_bp = sum(chrom_data[chrom]['length'] for chrom in chromosomes)
         target_TE_bp = total_genome_bp * (target_percent / 100)
         print(f"Performing TE insertions until the genome reaches approximately {target_percent}% TE content (~{target_TE_bp:.0f}bp of TE).")
         attempts = 0
-        max_global_attempts = 100000  # safeguard to avoid infinite loop.
+        max_global_attempts = 100000
         while total_TE_bp_inserted < target_TE_bp and attempts < max_global_attempts:
             chrom = random.choice(chromosomes)
             inserted = try_insertion(chrom)
@@ -496,12 +495,10 @@ def main():
         if attempts >= max_global_attempts:
             print("Warning: Maximum number of attempts reached. Insertion process stopped.")
     
-    # Assemble the modified genome.
     modified_genome = {}
     for chrom in chromosomes:
         modified_genome[chrom] = ''.join(chrom_data[chrom]['seq'])
 
-    # Combine gene and TE BED entries.
     output_bed_entries = gene_bed_entries + te_bed_entries
     output_bed_entries_sorted = sorted(output_bed_entries, key=lambda x: (x['chromosome'], x['start']))
 
@@ -511,7 +508,6 @@ def main():
     print(f"Writing BED file to {output_bed_path}...")
     write_bed(output_bed_path, output_bed_entries_sorted)
 
-    # Compute genomic composition statistics.
     genome_length = sum(len(seq) for seq in modified_genome.values())
     gene_total_bp = sum(gene['end'] - gene['start'] for gene in original_genes)
     TE_total_bp = sum(entry['end'] - entry['start'] for entry in te_bed_entries)
@@ -520,13 +516,11 @@ def main():
     gene_count = len(original_genes)
     TE_count = len(te_bed_entries)
 
-    # Prepare the summary statistics message.
     stat_message = (f"The burn-in genome is {genome_length}bp in length with {gene_count} genes "
                     f"({gene_percent:.2f}%) and {TE_count} TEs ({TE_percent:.2f}%).")
     print("Replacement process completed successfully.")
     print(stat_message)
 
-    # If a stats output file is provided, write the statistics to the file.
     if args.stat_out:
         try:
             with open(args.stat_out, 'w') as stat_file:
