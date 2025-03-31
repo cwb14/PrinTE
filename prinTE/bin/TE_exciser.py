@@ -161,7 +161,7 @@ def calculate_excision_count(entries, rate, generations, gene_weights):
     For disrupted genes, use the disrupted_gene_weight from gene_weights instead of counting each as 1.
     A gene is considered disrupted if its feature_ID starts with 'gene' and its NAME contains a semicolon.
     Sum the weights of all unique disrupted genes and calculate:
-         number_of_TE_excisions = rate * generations * (sum of disrupted_gene_weight)
+         number_of_TE_excisions = rate * generations * (sum of disrupted gene weight)
     """
     disrupted_genes = {e.feature_id for e in entries if e.feature_id.startswith("gene") and (';' in e.name)}
     weight_sum = sum(gene_weights.get(gene, 1) for gene in disrupted_genes)
@@ -301,10 +301,13 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
                             return False
         return True
 
+    # Iterate over removals in a deterministic order.
+    sorted_removals = sorted(removals, key=lambda x: (x.chrom, x.start, x.end, x.lineno))
+    
     # Determine which removal events will be partial excisions.
     # Map entry id -> LTR offset (extracted from "LTRlen:XXX") for those chosen for partial excision.
     partial_info = {}
-    for e in removals:
+    for e in sorted_removals:
         if e.subtype in ["NEST_TE_IN_TE", "NEST_TE_IN_GENE", "NON_NEST_GROUP_TE"]:
             if ("LTRlen" in e.feature_id) and ("_SOLO" not in e.feature_id):
                 if not qualifies_as_intact_ltr(e, entries):
@@ -317,9 +320,9 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
 
     removals_by_chrom = defaultdict(list)
     new_entries = []
-    to_remove = set(removals)
+    to_remove = set(sorted_removals)
     nest_middle_removed = set()
-    for e in removals:
+    for e in sorted_removals:
         if e.subtype in ["NEST_TE_IN_TE", "NEST_TE_IN_GENE"]:
             if id(e) not in partial_info:
                 nest_middle_removed.add(e.group)
@@ -580,7 +583,8 @@ def main():
         if args.fix_ex is None:
             print(f"{gene_sel_file} not found. Generating synthetic gene selection weights ...")
             mu = args.sigma ** 2
-            for gene in unique_genes:
+            # Use sorted list of unique genes to ensure deterministic ordering.
+            for gene in sorted(unique_genes):
                 gene_weights[gene] = random.lognormvariate(mu, args.sigma)
             with open(gene_sel_file, "w") as f:
                 for gene, weight in gene_weights.items():
@@ -616,8 +620,9 @@ def main():
         excision_count = calculate_excision_count(entries, args.rate, args.generations, gene_weights)
     removals = select_removals(entries, nest_groups, excision_count, args.seed, args.k)
 
+    # Print removal events in a sorted order for determinism.
     print("Selected removal events:")
-    for e in removals:
+    for e in sorted(removals, key=lambda x: (x.chrom, x.start, x.end, x.lineno)):
         print(f" - {e.chrom}:{e.start}-{e.end}, {e.feature_id}, subtype: {e.subtype}, length: {e.length()}")
 
     print("Simulating excisions and updating coordinates...")

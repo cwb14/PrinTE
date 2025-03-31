@@ -169,8 +169,9 @@ def parse_bed(bed_path):
 def write_bed(features, out_bed):
     with open(out_bed, 'w') as f:
         for feat in features:
+            # Write TSD in the 5th column and strand in the 6th column.
             f.write(f"{feat['chrom']}\t{feat['start']}\t{feat['end']}\t"
-                    f"{feat['name']}\t{feat['strand']}\t{feat['tsd']}\n")
+                    f"{feat['name']}\t{feat['tsd']}\t{feat['strand']}\n")
 
 def pick_random_TE(te_dict):
     headers = list(te_dict.keys())
@@ -367,8 +368,10 @@ def process_chromosome(args_tuple):
     It applies insertion events sequentially on the chromosome’s sequence and features.
     """
     (chrom, seq_list, features, events, te_raw, bias_intervals, global_seed) = args_tuple
-    # Set a per-chromosome seed to aid reproducibility in parallel.
-    random.seed((global_seed or 0) + hash(chrom))
+    # Compute a deterministic seed using the global seed and the chromosome name.
+    # (Using the sum of ordinal values for characters in the chromosome name.)
+    chrom_seed = (global_seed if global_seed is not None else 0) + sum(ord(c) for c in chrom)
+    random.seed(chrom_seed)
     nested_count = 0
     non_nested_count = 0
     # Process each insertion event assigned to this chromosome.

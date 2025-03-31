@@ -8,8 +8,6 @@
 # Phase 1 (Burn‐in) is performed unless the user provides starting input files
 # via --bed and --fasta, or if --continue is provided and previous outputs are found.
 #
-# [The detailed description of Phase 1 and Phase 2 is the same as before...]
-#
 # New functionality and changes:
 #
 #  (1) New flag --continue:
@@ -23,22 +21,15 @@
 #
 #  (4) New option --model for per-generation post-processing (model options: raw, K2P, JC69; default: raw).
 #
-#  (5) New option -tm, --TE_mut_in:
-#      Provides a mutation range (min,max in percent) for shared_ltr_inserter.py.
-#      Example: -tm 3,15. The script will pass this as "-TE_mut_range 3,15" to the TE inserter,
-#      which then models a Poisson distribution between the given values.
+#  (5) New option -m, --TE_mut_in is replaced by two new options for shared_ltr_inserter_parallel.py:
+#         --TE_mut_k and --TE_mut_Mmax, which replace the old TE_mut_in parameter.
+#         Also, shared_ltr_inserter_parallel.py now takes:
+#           - '-pdf_out burnin_mut_dist.pdf'
+#           - '-m ${threads}' for threads.
 #
-#  (6) Supplemental post-processing scripts:
-#      (a) Global analyses (run at the end of the pipeline):
-#          - plot_TE_frac.py
-#          - plot_solo_intact.py
-#          - stats_report.py
-#          - plot_superfamily_count.py
-#          - plot_category_bar.py
-#
-#      (b) Per-generation analyses (run on a maximum of 4 evenly distributed final generations):
-#          - extract_intact_LTR.py
-#          - seq_divergence.py (on extracted LTR fasta)
+#  (6) New parallel versions of internal scripts:
+#         - Use 'shared_ltr_inserter_parallel.py' instead of 'shared_ltr_inserter.py'
+#         - Use 'nest_inserter_parallel.py' instead of 'nest_inserter.py', which now adds a '-m' parameter for threads.
 #
 # Directories:
 #   TOOL_DIR: Directory containing this script (assumed to be TESS/prinTE)
@@ -116,7 +107,9 @@ Options:
   -p,  --TE_percent       Percent of the genome that should be TEs in the burn‐in (Mutually exclusive with --TE_num)
   -cn, --chr_number       Number of chromosomes (default: 3)
   -sz, --size             Genome size in kb, Mb, or Gb (default: 100Mb)
-  -tm, --TE_mut_in        TE mutation range  in burn-in (min,max in percent). Example: -tm 3,15
+  # The old option -tm, --TE_mut_in is replaced by two new options below:
+  -tk, --TE_mut_k             Slope of exponential decay for TE mutation (default: 10)
+  -tmx, --TE_mut_Mmax          X-limit for exponential decay function (default: 20)
 
 ########## FIXED TE INDEL RATE ##########
   -F,  --fix              Fixed insertion and deletion numbers, comma-separated. Format: insertion,deletion (e.g., 1e-9,1e-9)
@@ -125,7 +118,7 @@ Options:
   -ir, --insert_rate      TE insertion rate (default: 1e-8)
   -dr, --delete_rate      TE deletion rate (default: 1e-4)  
   -br, --birth_rate       TE birth rate (default: 1e-3)
-  -sc, --sigma            Selection coeefieint for gene insertions (default: 1.0)                
+  -sc, --sigma            Selection coefficient for gene insertions (default: 1.0)                
   
 ########## GENERAL USE ##########                 
   -s,  --seed             Random seed (default: 42)
@@ -134,7 +127,7 @@ Options:
   -r,  --TE_ratio         TE ratio file (default: ${TOOL_DIR}/ratios.tsv)
   -t,  --threads          Number of threads (default: 4)
   -sr, --solo_rate        Percentage chance to convert an intact TE to soloLTR in TE_exciser.py (default: 5)
-  -k,  --k                TE length decay slope (default: 10)
+  -k,  --k                TE length decay slope for TE excision (default: 10)
   -b,  --bed              Input BED file for starting generation (skip burn-in; requires --fasta)
   -f,  --fasta            Input FASTA file for starting generation (skip burn-in; requires --bed)
   -x, --continue          Resume simulation from the last completed generation.
@@ -156,7 +149,9 @@ keep_temps=0
 euch_bias=1.0
 euch_buffer=10000
 model="raw"
-TE_mut_in=""
+# New TE inserter mutation options defaults:
+TE_mut_k=10
+TE_mut_Mmax=20
 
 while [[ $# -gt 0 ]]; do
   key="$1"
@@ -215,9 +210,6 @@ while [[ $# -gt 0 ]]; do
     -sr|--solo_rate)
       solo_rate="$2"
       shift; shift;;
-    -sc|--sigma)
-      sigma="$2"
-      shift; shift;;
     -k|--k)
       k="$2"
       shift; shift;;
@@ -245,8 +237,14 @@ while [[ $# -gt 0 ]]; do
     --model)
       model="$2"
       shift; shift;;
-    -tm|--TE_mut_in)
-      TE_mut_in="$2"
+    -sc|--sigma)
+      sigma="$2"
+      shift; shift;;
+    -tk|--TE_mut_k)
+      TE_mut_k="$2"
+      shift; shift;;
+    -tmx|--TE_mut_Mmax)
+      TE_mut_Mmax="$2"
       shift; shift;;
     -h|--help)
       print_help
@@ -272,8 +270,8 @@ insert_rate="${insert_rate:-1e-8}"
 birth_rate="${birth_rate:-1e-3}"
 delete_rate="${delete_rate:-1e-4}"
 solo_rate="${solo_rate:-5}"
-sigma="${sigma:-1.0}"
 k="${k:-10}"
+sigma="${sigma:-1.0}"
 
 # --- Validate mutually exclusive CDS options ---
 if [[ -n "$cds_num" && -n "$cds_percent" ]]; then
@@ -371,22 +369,20 @@ if [[ "$skip_burnin" -eq 0 ]]; then
     exit 1
   fi
 
-  # (1d) Insert TEs into the synthetic genome.
-  cmd="python ${BIN_DIR}/shared_ltr_inserter.py -genome backbone.fa -TE lib.fa"
+  # (1d) Insert TEs into the synthetic genome using the parallel version.
+  cmd="python ${BIN_DIR}/shared_ltr_inserter_parallel.py -genome backbone.fa -TE lib.fa"
   if [[ -n "$TE_percent" ]]; then
     cmd+=" -p ${TE_percent}"
   else
     cmd+=" -n ${TE_num}"
   fi
   cmd+=" -bed backbone.bed -output burnin -seed ${seed} -TE_ratio ${TE_ratio} -stat_out burnin.stat"
-  # If the user provided the TE mutation range, add it.
-  if [[ -n "$TE_mut_in" ]]; then
-    cmd+=" -TE_mut_range ${TE_mut_in}"
-  fi
+  # Add new TE mutation parameters in place of the old TE_mut_in.
+  cmd+=" -k ${TE_mut_k} -Mmax ${TE_mut_Mmax} -pdf_out burnin_mut_dist.pdf -m ${threads}"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
   if [ $? -ne 0 ]; then
-    echo "Error running shared_ltr_inserter.py" | tee -a "$ERR"
+    echo "Error running shared_ltr_inserter_parallel.py" | tee -a "$ERR"
     exit 1
   fi
 fi
@@ -456,14 +452,14 @@ for (( i=start_iter; i<=iterations; i++ )); do
     exit 1
   fi
 
-  # (2b) Insert new TEs (allowing for nesting) using nest_inserter.py.
+  # (2b) Insert new TEs (allowing for nesting) using the parallel nest inserter.
   nest_prefix="gen${i}_nest"
-  cmd="python ${BIN_DIR}/nest_inserter.py --genome ${mut_prefix}.fa --TE lib.fa --generations ${step} --bed ${prev_bed} --output ${nest_prefix} --seed ${current_seed} --rate ${insert_rate} ${extra_fix_in} --TE_ratio ${TE_ratio} -bf burnin.stat --birth_rate ${birth_rate}"
-  cmd+=" --euch_het_bias ${euch_bias} --euch_het_buffer ${euch_buffer}"
+  cmd="python ${BIN_DIR}/nest_inserter_parallel.py --genome ${mut_prefix}.fa --TE lib.fa --generations ${step} --bed ${prev_bed} --output ${nest_prefix} --seed ${current_seed} --rate ${insert_rate} ${extra_fix_in} --TE_ratio ${TE_ratio} -bf burnin.stat --birth_rate ${birth_rate}"
+  cmd+=" --euch_het_bias ${euch_bias} --euch_het_buffer ${euch_buffer} -m ${threads}"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
   if [ $? -ne 0 ]; then
-    echo "Error running nest_inserter.py for generation $i" | tee -a "$ERR"
+    echo "Error running nest_inserter_parallel.py for generation $i" | tee -a "$ERR"
     exit 1
   fi
 
@@ -514,7 +510,7 @@ python ${UTIL_DIR}/plot_superfamily_count.py
 # 5. Plot category bar.
 python ${UTIL_DIR}/plot_category_bar.py
 
-# 6. Genome  size through time.
+# 6. Genome size through time.
 python ${UTIL_DIR}/genome_plot.py
 
 ###############################################################################
