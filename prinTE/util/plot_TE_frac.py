@@ -5,7 +5,6 @@ import re
 import matplotlib.pyplot as plt
 
 def parse_line(line):
-    """Parse a BED line into its columns."""
     parts = line.strip().split("\t")
     if len(parts) < 6:
         return None
@@ -20,7 +19,6 @@ def parse_line(line):
     }
 
 def parse_attributes(name):
-    """Split the NAME into feature_ID and additional attributes."""
     if ";" in name:
         parts = name.split(";")
         feature_id = parts[0]
@@ -31,7 +29,6 @@ def parse_attributes(name):
     return feature_id, additional
 
 def process_bed_file(bed_file):
-    """Process one BED file and return feature lengths for each category."""
     feature_lengths = {
         "Intact gene": 0,
         "Fragmented gene": 0,
@@ -64,7 +61,6 @@ def process_bed_file(bed_file):
     return feature_lengths
 
 def get_genome_length(fasta_file):
-    """Calculate total length of genome in the FASTA file."""
     total_length = 0
     with open(fasta_file) as f:
         for line in f:
@@ -74,7 +70,6 @@ def get_genome_length(fasta_file):
     return total_length
 
 def extract_gen_number(label):
-    """Extract the numeric part from a generation label. If 'burnin' is present, return 0."""
     if "burnin" in label.lower():
         return 0
     match = re.search(r'gen(\d+)_', label)
@@ -92,6 +87,10 @@ def main():
     parser.add_argument("--feature", required=True,
                         help="Colon-separated feature categories (e.g., 'Intact_TE:SoloLTR').")
     parser.add_argument("--out_prefix", required=True, help="Output prefix for stats files and plot (PDF).")
+    parser.add_argument("--ymax", type=int, default=100, help="Maximum y-axis limit for the plot. Default is 100.")
+    parser.add_argument("--vert_grid", type=int, default=None,
+                        help="Interval at which to draw vertical grid lines on the plot (e.g., every 10 generations).")
+
     args = parser.parse_args()
 
     if len(args.bed) != len(args.fasta):
@@ -121,12 +120,10 @@ def main():
 
         generation_data.append((gen_num, file_base, overall_percent, per_feature_percent))
 
-    # Sort generations numerically
     generation_data.sort(key=lambda x: x[0])
-    x_vals = [x[0] for x in generation_data]  # generation numbers (integers)
+    x_vals = [x[0] for x in generation_data]
     x_tick_labels = [str(x[0]) for x in generation_data]
 
-    # Extract data for plotting
     stacked_data = {key: [] for key in feature_keys}
     overall_percents = []
     for gen in generation_data:
@@ -135,27 +132,32 @@ def main():
         for key in feature_keys:
             stacked_data[key].append(per_feature.get(key, 0))
 
-    # Plotting
     plt.figure(figsize=(8, 6))
+
+    # ⬇ Add vertical grid lines *before* plotting to keep them in the background
+    if args.vert_grid:
+        for idx, x in enumerate(x_vals):
+            if idx % args.vert_grid == 0 and idx != 0:
+                plt.axvline(x=x, color='gray', linestyle='--', linewidth=0.7, zorder=1)
+
+    # ⬇ Plot the data on top of grid
     if len(feature_keys) > 1:
-        # Create a stackplot for each feature contribution
         stack_arrays = [stacked_data[key] for key in feature_keys]
-        plt.stackplot(x_vals, *stack_arrays, labels=feature_keys)
-        plt.plot(x_vals, overall_percents, color='black', linewidth=1.5)
+        for stack in stack_arrays:
+            assert len(stack) == len(x_vals)
+        plt.stackplot(x_vals, *stack_arrays, labels=feature_keys, zorder=2)
+        plt.plot(x_vals, overall_percents, color='black', linewidth=1.5, zorder=3)
         plt.legend(loc='best')
     else:
-        plt.plot(x_vals, overall_percents, marker='o', linestyle='-')
+        plt.plot(x_vals, overall_percents, marker='o', linestyle='-', zorder=2)
 
     plt.xlabel("Generation")
     plt.ylabel("Feature Percentage")
-    feature_names_str = ", ".join(feature_keys)
-    plt.title(f"Feature Percentage Over Generations: {feature_names_str}")
-    plt.xticks(x_vals, x_tick_labels)
-    
-    # **Exact X-axis limits**
-    plt.xlim(min(x_vals), max(x_vals))  
+    plt.title(f"Feature Percentage Over Generations: {', '.join(feature_keys)}")
+    plt.xticks(x_vals, x_tick_labels, rotation=45)
+    plt.xlim(min(x_vals), max(x_vals))
+    plt.ylim(0, args.ymax)
 
-    plt.grid(True, linestyle="--", alpha=0.6)
     plt.tight_layout()
     plt.savefig(args.out_prefix + ".pdf")
     plt.close()

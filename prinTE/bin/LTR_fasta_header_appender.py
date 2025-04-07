@@ -4,11 +4,15 @@ from Bio import SeqIO
 import sys
 
 def main():
-    parser = argparse.ArgumentParser(description='Append LTR information to FASTA headers using semicolon separators.')
+    parser = argparse.ArgumentParser(
+        description='Append LTR information to FASTA headers using semicolon separators.')
     parser.add_argument('-fasta', required=True, help='Input FASTA file')
     parser.add_argument('-domains', required=True, help='Domains TSV file')
     parser.add_argument('-div_type', default='K2P', choices=['raw', 'K2P', 'JC69', 'none'],
                         help='Divergence type (raw, K2P, JC69, none)')
+    # New flag to exclude records with no hits in the domains file
+    parser.add_argument('-exclude_no_hits', action='store_true',
+                        help='Exclude FASTA sequences that do not occur in domains file')
     args = parser.parse_args()
 
     # Read domains data into a dictionary using original headers as keys
@@ -42,37 +46,23 @@ def main():
         original_headers.append(original_header)
 
         # Split the header into name, class, and superfamily parts
-        name_part = class_part = superfamily_part = 'Unknown'
         parts = original_header.split('#', 1)
-        name_part = parts[0] if parts else 'Unknown'
+        name_part = parts[0] if parts[0].strip() else 'Unknown'
+        class_part = superfamily_part = 'Unknown'
         remaining_after_name = parts[1] if len(parts) > 1 else ''
 
         if remaining_after_name:
             class_super = remaining_after_name.split('/', 1)
-            class_part = class_super[0] if class_super else 'Unknown'
+            class_part = class_super[0].strip() if class_super[0].strip() else 'Unknown'
             remaining_after_class = class_super[1] if len(class_super) > 1 else ''
             if remaining_after_class:
                 super_match = re.match(r'^([^\s]*)', remaining_after_class)
-                superfamily_part = super_match.group(1) if super_match else 'Unknown'
-            else:
-                superfamily_part = 'Unknown'
-        else:
-            class_part = 'Unknown'
-            superfamily_part = 'Unknown'
-
-        # Ensure name_part is not empty
-        if not name_part.strip():
-            name_part = 'Unknown'
-
-        # Ensure class_part and superfamily_part are not empty
-        class_part = class_part.strip() if class_part.strip() else 'Unknown'
-        superfamily_part = superfamily_part.strip() if superfamily_part.strip() else 'Unknown'
-
-        # Generate corrected header (without uniqueness)
+                superfamily_part = super_match.group(1).strip() if super_match and super_match.group(1).strip() else 'Unknown'
+        # Generate corrected header (without uniqueness yet)
         corrected_header = f"{name_part}#{class_part}/{superfamily_part}"
 
         # Ensure name_part is unique
-        base_name = name_part  # The original name from header processing
+        base_name = name_part
         if base_name in name_counts:
             name_counts[base_name] += 1
             new_name = f"{base_name}_{name_counts[base_name] - 1}"
@@ -80,17 +70,20 @@ def main():
             name_counts[base_name] = 1
             new_name = base_name
 
-        # Create new_header with unique name
+        # Create new header with unique name
         new_header = f"{new_name}#{class_part}/{superfamily_part}"
-
-        # Update the record's id and description
         record.id = new_header
         record.description = new_header
         corrected_records.append(record)
 
-    # Append LTR information based on original headers
-    for i, record in enumerate(corrected_records):
-        original_header = original_headers[i]
+    # Prepare final records list based on the -exclude_no_hits flag
+    final_records = []
+    for original_header, record in zip(original_headers, corrected_records):
+        if args.exclude_no_hits and original_header not in domains_data:
+            # Skip records that don't have a corresponding domain hit
+            continue
+
+        # Append LTR information if available
         if original_header in domains_data:
             data = domains_data[original_header]
             if args.div_type == 'none':
@@ -100,8 +93,10 @@ def main():
             record.id = new_desc
             record.description = new_desc
 
+        final_records.append(record)
+
     # Write the modified records to standard output
-    SeqIO.write(corrected_records, sys.stdout, 'fasta')
+    SeqIO.write(final_records, sys.stdout, 'fasta')
 
 if __name__ == '__main__':
     main()

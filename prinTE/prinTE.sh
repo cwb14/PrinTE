@@ -19,17 +19,26 @@
 #
 #  (3) New user-friendly parameters --euch-bias and --euch-buffer to control insertion bias.
 #
-#  (4) New option --model for per-generation post-processing (model options: raw, K2P, JC69; default: raw).
+#  (4) New option --model (and shorthand -md) for per-generation post-processing
+#      DNA mutation model for LTR dating (options: raw, K2P, JC69; default: K2P).
 #
-#  (5) New option -m, --TE_mut_in is replaced by two new options for shared_ltr_inserter_parallel.py:
-#         --TE_mut_k and --TE_mut_Mmax, which replace the old TE_mut_in parameter.
-#         Also, shared_ltr_inserter_parallel.py now takes:
-#           - '-pdf_out burnin_mut_dist.pdf'
-#           - '-m ${threads}' for threads.
+#  (5) New options -tk/--TE_mut_k and -tmx/--TE_mut_Mmax replace the old TE_mut_in parameter.
 #
 #  (6) New parallel versions of internal scripts:
 #         - Use 'shared_ltr_inserter_parallel.py' instead of 'shared_ltr_inserter.py'
-#         - Use 'nest_inserter_parallel.py' instead of 'nest_inserter.py', which now adds a '-m' parameter for threads.
+#         - Use 'nest_inserter_parallel2.py' instead of 'nest_inserter_parallel.py', which now adds a '-m' parameter for threads.
+#           Also accepts the new optional flag --disable_genes (-dg) to disable insertion into genes.
+#
+#  (7) New flag -bo, --burnin_only:
+#      When activated, the script will run the burn-in phase only and then exit.
+#      In this case, --generation_end and --step are not required.
+#
+#  (8) File naming: The output files from Phase 2 now have names
+#      reflecting the true generation simulated.
+#
+#  (9) New option --ex_LTR (or -ex):
+#      When provided, it passes '-exclude_no_hits' to LTR_fasta_header_appender.py,
+#      excluding LTR sequences without an identified domain.
 #
 # Directories:
 #   TOOL_DIR: Directory containing this script (assumed to be TESS/prinTE)
@@ -95,9 +104,9 @@ print_help() {
 Usage: $(basename "$0") [options]
 
 Options:
-############### REQUIRED ###############
-  -ge, --generation_end   Number of generations to simulate (REQUIRED; must be an exact multiple of step)
-  -st, --step             Generation step size (number of generations per loop; REQUIRED)
+############### REQUIRED (for full pipeline) ###############
+  -ge, --generation_end   Number of generations to simulate (REQUIRED unless --burnin_only is used; must be an exact multiple of step)
+  -st, --step             Generation step size (number of generations per loop; REQUIRED unless --burnin_only is used)
 
 ############### BURN-IN ###############
   -c,  --cds              Path to CDS file (default: ${TOOL_DIR}/TAIR10.cds.fa)
@@ -105,8 +114,8 @@ Options:
   -P,  --cds_percent      Percent of the genome that should be CDS. (Mutually exclusive with --cds_num)
   -n,  --TE_num           Number of TE insertions in burn‐in (default: 2000) (Mutually exclusive with --TE_percent)
   -p,  --TE_percent       Percent of the genome that should be TEs in the burn‐in (Mutually exclusive with --TE_num)
-  -cn, --chr_number       Number of chromosomes (default: 3)
-  -sz, --size             Genome size in kb, Mb, or Gb (default: 100Mb)
+  -cn, --chr_number       Number of chromosomes (default: 4)
+  -sz, --size             Genome size in kb, Mb, or Gb (default: 400Mb)
   # The old option -tm, --TE_mut_in is replaced by two new options below:
   -tk, --TE_mut_k             Slope of exponential decay for TE mutation (default: 10)
   -tmx, --TE_mut_Mmax          X-limit for exponential decay function (default: 20)
@@ -116,9 +125,11 @@ Options:
 
 ######### VARIABLE TE INDEL RATE #########  
   -ir, --insert_rate      TE insertion rate (default: 1e-8)
-  -dr, --delete_rate      TE deletion rate (default: 1e-4)  
+  -dr, --delete_rate      TE deletion rate (default: 1e-7)  
   -br, --birth_rate       TE birth rate (default: 1e-3)
-  -sc, --sigma            Selection coefficient for gene insertions (default: 1.0)                
+  -sc, --sigma            Selection coefficient for gene insertions (default: 1.0)  
+  -sf, --sel_coeff        Selection coefficient for TE excision (variable-rate only; default: 0)
+                          0 = neutral; 0.1 = 2× bias; 1 = 11× bias.             
   
 ########## GENERAL USE ##########                 
   -s,  --seed             Random seed (default: 42)
@@ -126,15 +137,18 @@ Options:
   -m,  --mutation_rate    DNA Mutation rate (default: 1.3e-8)
   -r,  --TE_ratio         TE ratio file (default: ${TOOL_DIR}/ratios.tsv)
   -t,  --threads          Number of threads (default: 4)
-  -sr, --solo_rate        Percentage chance to convert an intact TE to soloLTR in TE_exciser.py (default: 5)
+  -sr, --solo_rate        Percent chance to convert an intact TE to soloLTR (default: 95)
   -k,  --k                TE length decay slope for TE excision (default: 10)
   -b,  --bed              Input BED file for starting generation (skip burn-in; requires --fasta)
   -f,  --fasta            Input FASTA file for starting generation (skip burn-in; requires --bed)
-  -x, --continue          Resume simulation from the last completed generation.
+  -x,  --continue         Resume simulation from the last completed generation.
   --keep_temps, -kt       Keep temporary files (default: remove them after each loop)
-  -w, --euch-bias         Weight of bias toward euchromatin (default: 1.0; disabled)
-  -j, --euch-buffer       Interval upstream/downstream of genes considered euchromatin (default: 10000)
-  --model                 DNA mutation model for LTR dating (choose from: raw, K2P, JC69; default: raw)
+  -w,  --euch-bias        Weight of bias toward euchromatin (default: 1.0; disabled)
+  -j,  --euch-buffer      Interval upstream/downstream of genes considered euchromatin (default: 10000)
+  --model, -md           DNA mutation model for LTR dating (choose from: raw, K2P, JC69; default: K2P)
+  -bo, --burnin_only      Run burn-in phase only and then exit.
+  -ex, --ex_LTR          Exclude LTR sequences without a domain hit (passed as '-exclude_no_hits' to LTR_fasta_header_appender.py)
+  -dg, --disable_genes   Disable insertion into genes (only effective if -F/--fix is provided)
   -h,  --help             Display this help message and exit
 
 Example:
@@ -146,12 +160,16 @@ EOF
 # Initialize flags and new parameters with defaults.
 cont_flag=0
 keep_temps=0
+burnin_only=0
 euch_bias=1.0
 euch_buffer=10000
-model="raw"
+model="K2P"
+ex_ltr=0
+disable_genes=0
 # New TE inserter mutation options defaults:
 TE_mut_k=10
 TE_mut_Mmax=20
+sel_coeff=0
 
 while [[ $# -gt 0 ]]; do
   key="$1"
@@ -234,7 +252,7 @@ while [[ $# -gt 0 ]]; do
     -j|--euch-buffer)
       euch_buffer="$2"
       shift; shift;;
-    --model)
+    --model|-md)
       model="$2"
       shift; shift;;
     -sc|--sigma)
@@ -245,6 +263,18 @@ while [[ $# -gt 0 ]]; do
       shift; shift;;
     -tmx|--TE_mut_Mmax)
       TE_mut_Mmax="$2"
+      shift; shift;;
+    -bo|--burnin_only)
+      burnin_only=1
+      shift;;
+    -ex|--ex_LTR)
+      ex_ltr=1
+      shift;;
+    -dg|--disable_genes)
+      disable_genes=1
+      shift;;
+    -sf|--sel_coeff)
+      sel_coeff="$2"
       shift; shift;;
     -h|--help)
       print_help
@@ -258,8 +288,8 @@ done
 
 # --- Set default values for options not provided ---
 cds="${cds:-${TOOL_DIR}/TAIR10.cds.fa}"
-chr_number="${chr_number:-3}"
-size="${size:-100Mb}"
+chr_number="${chr_number:-4}"
+size="${size:-400Mb}"
 seed="${seed:-42}"
 TE_lib="${TE_lib:-${TOOL_DIR}/combined_curated_TE_lib_ATOSZM_selected.fasta}"
 mutation_rate="${mutation_rate:-1.3e-8}"
@@ -268,8 +298,8 @@ TE_num="${TE_num:-2000}"
 threads="${threads:-4}"
 insert_rate="${insert_rate:-1e-8}"
 birth_rate="${birth_rate:-1e-3}"
-delete_rate="${delete_rate:-1e-4}"
-solo_rate="${solo_rate:-5}"
+delete_rate="${delete_rate:-1e-7}"
+solo_rate="${solo_rate:-95}"
 k="${k:-10}"
 sigma="${sigma:-1.0}"
 
@@ -284,17 +314,19 @@ if [[ -z "$TE_percent" ]]; then
   TE_num="${TE_num:-2000}"
 fi
 
-# --- Validate required parameters ---
-if [[ -z "$step" || -z "$generation_end" ]]; then
-  echo "Error: Both --step and --generation_end must be provided." | tee -a "$ERR"
-  print_help
-  exit 1
-fi
+# --- Validate required parameters (if not running burn-in only) ---
+if [[ "$burnin_only" -eq 0 ]]; then
+  if [[ -z "$step" || -z "$generation_end" ]]; then
+    echo "Error: Both --step and --generation_end must be provided for the looping phase." | tee -a "$ERR"
+    print_help
+    exit 1
+  fi
 
-# Ensure generation_end is an exact multiple of step.
-if (( generation_end % step != 0 )); then
-  echo "Error: generation_end must be an exact multiple of step." | tee -a "$ERR"
-  exit 1
+  # Ensure generation_end is an exact multiple of step.
+  if (( generation_end % step != 0 )); then
+    echo "Error: generation_end must be an exact multiple of step." | tee -a "$ERR"
+    exit 1
+  fi
 fi
 
 # --- Check for BED and FASTA input consistency ---
@@ -362,6 +394,9 @@ if [[ "$skip_burnin" -eq 0 ]]; then
 
   # (1c) Append LTR lengths to the TE library.
   cmd="python ${BIN_DIR}/LTR_fasta_header_appender.py -fasta ${TE_lib} -domains lib.txt -div_type none"
+  if [[ "$ex_ltr" -eq 1 ]]; then
+    cmd+=" -exclude_no_hits"
+  fi
   echo "Running: $cmd > lib.fa" | tee -a "$LOG"
   eval $cmd > lib.fa 2>> "$ERR"
   if [ $? -ne 0 ]; then
@@ -387,6 +422,12 @@ if [[ "$skip_burnin" -eq 0 ]]; then
   fi
 fi
 
+# If the burnin_only flag is set, exit after Phase 1.
+if [[ "$burnin_only" -eq 1 ]]; then
+  echo "Burn-in phase completed. --burnin_only flag activated. Exiting." | tee -a "$LOG"
+  exit 0
+fi
+
 ###############################################################################
 # Phase 2: Looping Generations
 ###############################################################################
@@ -398,17 +439,17 @@ iterations=$(( generation_end / step ))
 # If --continue is set, look for the highest completed generation.
 start_iter=1
 if [[ "$cont_flag" -eq 1 ]]; then
-  last_iter=0
+  last_gen=0
   for file in gen*_final.fasta; do
     if [[ $file =~ gen([0-9]+)_final.fasta ]]; then
       num=${BASH_REMATCH[1]}
-      if (( num > last_iter )); then
-        last_iter=$num
+      if (( num > last_gen )); then
+        last_gen=$num
       fi
     fi
   done
-  if (( last_iter > 0 )); then
-    start_iter=$(( last_iter + 1 ))
+  if (( last_gen > 0 )); then
+    start_iter=$(( last_gen / step + 1 ))
     echo "Resuming from generation $(( start_iter * step )) (iteration $start_iter) based on existing output." | tee -a "$LOG"
   else
     echo "No previous final outputs found; starting from the beginning." | tee -a "$LOG"
@@ -420,8 +461,10 @@ seed_list=($(python -c "import random; random.seed(${seed}); print(' '.join([str
 echo "Seed list for Phase 2 iterations: ${seed_list[@]}" | tee -a "$LOG"
 
 for (( i=start_iter; i<=iterations; i++ )); do
+  # Calculate the true generation number for file naming.
+  current_gen=$(( i * step ))
   current_seed=${seed_list[$((i-1))]}
-  echo "----- Generation $(( i * step )) using seed ${current_seed} -----" | tee -a "$LOG"
+  echo "----- Generation ${current_gen} using seed ${current_seed} -----" | tee -a "$LOG"
   
   # For the first iteration (if not resuming) use burn-in or user-supplied inputs.
   if [ $i -eq 1 ]; then
@@ -438,46 +481,50 @@ for (( i=start_iter; i<=iterations; i++ )); do
       prev_bed="burnin.bed"
     fi
   else
-    prev_genome="gen$((i-1))_final.fasta"
-    prev_bed="gen$((i-1))_final.bed"
+    prev_genome="gen$(( (i-1) * step ))_final.fasta"
+    prev_bed="gen$(( (i-1) * step ))_final.bed"
   fi
 
   # (2a) Mutate the genome.
-  mut_prefix="gen${i}_mut"
+  mut_prefix="gen${current_gen}_mut"
   cmd="${BIN_DIR}/ltr_mutator -fasta ${prev_genome} -rate ${mutation_rate} -generations ${step} -mode 0 -threads ${threads} -seed ${current_seed} -out_prefix ${mut_prefix}"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
   if [ $? -ne 0 ]; then
-    echo "Error running ltr_mutator for generation $i" | tee -a "$ERR"
+    echo "Error running ltr_mutator for generation ${current_gen}" | tee -a "$ERR"
     exit 1
   fi
 
   # (2b) Insert new TEs (allowing for nesting) using the parallel nest inserter.
-  nest_prefix="gen${i}_nest"
-  cmd="python ${BIN_DIR}/nest_inserter_parallel.py --genome ${mut_prefix}.fa --TE lib.fa --generations ${step} --bed ${prev_bed} --output ${nest_prefix} --seed ${current_seed} --rate ${insert_rate} ${extra_fix_in} --TE_ratio ${TE_ratio} -bf burnin.stat --birth_rate ${birth_rate}"
+  # Now using nest_inserter_parallel2.py and adding --disable_genes if specified.
+  nest_prefix="gen${current_gen}_nest"
+  cmd="python ${BIN_DIR}/nest_inserter_parallel2.py --genome ${mut_prefix}.fa --TE lib.fa --generations ${step} --bed ${prev_bed} --output ${nest_prefix} --seed ${current_seed} --rate ${insert_rate} ${extra_fix_in} --TE_ratio ${TE_ratio} -bf burnin.stat --birth_rate ${birth_rate}"
   cmd+=" --euch_het_bias ${euch_bias} --euch_het_buffer ${euch_buffer} -m ${threads}"
+  if [[ $disable_genes -eq 1 ]]; then
+    cmd+=" --disable_genes"
+  fi
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
   if [ $? -ne 0 ]; then
-    echo "Error running nest_inserter_parallel.py for generation $i" | tee -a "$ERR"
+    echo "Error running nest_inserter_parallel2.py for generation ${current_gen}" | tee -a "$ERR"
     exit 1
   fi
 
   # (2c) Purge some TEs and convert intact TEs to soloLTRs using TE_exciser.py.
-  cmd="python ${BIN_DIR}/TE_exciser.py --genome ${nest_prefix}.fasta --bed ${nest_prefix}.bed --rate ${delete_rate} --generations ${step} --soloLTR_freq ${solo_rate} ${extra_fix_ex} --output gen${i}_final --seed ${current_seed} --sigma ${sigma} --k ${k}"
+  cmd="python ${BIN_DIR}/TE_exciser2.py --genome ${nest_prefix}.fasta --bed ${nest_prefix}.bed --rate ${delete_rate} --generations ${step} --soloLTR_freq ${solo_rate} ${extra_fix_ex} --output gen${current_gen}_final --seed ${current_seed} --sigma ${sigma} --k ${k} --sel_coeff ${sel_coeff}"
   if [ $i -ne 1 ]; then
     cmd+=" --no_fig"
   fi
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
   if [ $? -ne 0 ]; then
-    echo "Error running TE_exciser.py for generation $i" | tee -a "$ERR"
+    echo "Error running TE_exciser.py for generation ${current_gen}" | tee -a "$ERR"
     exit 1
   fi
 
   # If --keep_temps is not provided, remove intermediate files.
   if [[ "$keep_temps" -ne 1 ]]; then
-    echo "Removing temporary files for iteration $i" | tee -a "$LOG"
+    echo "Removing temporary files for generation ${current_gen}" | tee -a "$LOG"
     rm -f "${mut_prefix}.fa" "${nest_prefix}.bed" "${nest_prefix}.fasta"
   fi
 
@@ -536,14 +583,15 @@ else
   selected+=("$mid1" "$mid2" "$total_gens")
 fi
 
-# Sort the selected generations in descending order (as per example: highest to lowest)
+# Sort the selected generations in descending order (highest to lowest)
 IFS=$'\n' selected=($(sort -nr <<<"${selected[*]}"))
 unset IFS
 
-echo "Selected generations for per-generation analysis: ${selected[@]}" | tee -a "$LOG"
+echo "Selected iterations for per-generation analysis: ${selected[@]}" | tee -a "$LOG"
 
-for i in "${selected[@]}"; do
-  final_prefix="gen${i}_final"
+for iter in "${selected[@]}"; do
+  gen_num=$(( iter * step ))
+  final_prefix="gen${gen_num}_final"
   echo "Processing per-generation analysis for ${final_prefix}" | tee -a "$LOG"
   
   # (a) Extract intact LTR sequences.
