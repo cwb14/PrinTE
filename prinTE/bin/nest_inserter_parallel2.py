@@ -26,6 +26,7 @@ import random
 import re
 import sys
 import multiprocessing
+import numpy as np
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -502,6 +503,11 @@ def main():
     if args.seed is not None:
         random.seed(args.seed)
 
+    # Determine whether we are in "rate" mode (no --fix_in) or "fix_in" mode
+    use_rate_mode = (args.fix_in is None)
+    if not use_rate_mode and (args.euch_het_buffer is not None or args.euch_het_bias is not None):
+        print("Warning: --euch_het_buffer and --euch_het_bias are ignored when --fix_in is used.", file=sys.stderr)
+
     print("Reading genome FASTA ...")
     genome_raw = read_fasta(args.genome)
     genome_size = sum(len(seq) for seq in genome_raw.values())
@@ -526,16 +532,26 @@ def main():
         print(f"  {key[0]}/{key[1]}: {count}")
 
     # Determine total TE insertions to perform.
-    if args.fix_in is not None:
-        total_insertions = int(args.fix_in * genome_size * args.generations)
-        print(f"Using fixed insertion rate: {args.fix_in} per base per generation")
-        print(f"Calculated total TE insertions to perform: {total_insertions}")
+    if args.seed is not None:
+        # seed both Python and NumPy RNGs
+        random.seed(args.seed)
+        rng = np.random.default_rng(args.seed)
     else:
-        total_insertions = int(args.rate * intact_TE_count * args.generations)
+        rng = np.random.default_rng()
+
+    if args.fix_in is not None:
+        lam = args.fix_in * genome_size * args.generations
+        print(f"Using fixed insertion rate: {args.fix_in} per base per generation")
+    else:
+        lam = args.rate * intact_TE_count * args.generations
         print(f"Rate (per intact TE per generation): {args.rate}")
         print(f"Generations: {args.generations}")
-        print(f"Total TE insertions to perform: {total_insertions}")
 
+    # draw actual number of insertions from Poisson(λ)
+    total_insertions = int(rng.poisson(lam))
+    print(f"Expected insertions (λ): {lam:.2f}")
+    print(f"Sampled total TE insertions to perform: {total_insertions}")
+   
     # Build insertion events.
     if args.fix_in is not None:
         if not args.TE_ratio_file:
@@ -642,7 +658,8 @@ def main():
     random.shuffle(insertion_events)
 
     # --- Pre-calculate insertion position intervals if euchromatin bias is in effect ---
-    use_bias = (args.euch_het_buffer is not None and args.euch_het_bias is not None)
+    use_bias = use_rate_mode and (args.euch_het_buffer is not None and args.euch_het_bias is not None)
+
     bias_intervals_all = None
     if use_bias:
         print("Computing euchromatin/heterochromatin intervals based on gene features and buffer ...")
@@ -667,8 +684,8 @@ def main():
             features_by_chrom[feat['chrom']] = [feat]
 
     # Determine if disable_genes should be active (only if fix_in is provided).
-    disable_genes_flag = args.disable_genes if args.fix_in is not None else False
-
+    disable_genes_flag = args.disable_genes if not use_rate_mode else False
+    
     # Prepare arguments for parallel processing.
     tasks = []
     for chrom in chroms:
