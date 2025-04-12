@@ -114,9 +114,11 @@ def main():
             total_bp += bp
 
         overall_percent = (total_bp / genome_length * 100) if genome_length > 0 else 0
+        # Attempt to extract the generation number from the file name.
         gen_num = extract_gen_number(file_base)
         if gen_num is None:
-            raise ValueError(f"Could not extract generation number from file name: {file_base}")
+            # If no generation number can be extracted, assume generation zero.
+            gen_num = 0
 
         generation_data.append((gen_num, file_base, overall_percent, per_feature_percent))
 

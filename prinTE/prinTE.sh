@@ -62,6 +62,8 @@ LOG="pipeline.log"
 ERR="pipeline.error"
 echo "Pipeline started at $(date)" > "$LOG"
 echo "Pipeline started at $(date)" > "$ERR"
+# --- Modification (1): Log the command used to run the script ---
+echo "Command: $0 $@" >> "$LOG"
 
 # --- Temporary files array (for unzipped inputs) ---
 temp_files=()
@@ -364,68 +366,66 @@ if [[ -n "$fix" ]]; then
 fi
 
 ###############################################################################
-# Phase 1: Burn-in (skip if BED/FASTA are provided or if resuming with --continue)
+# TE Library Processing (always executed)
 ###############################################################################
-if [[ "$skip_burnin" -eq 0 ]]; then
-  echo "=== Phase 1: Burn-in ===" | tee -a "$LOG"
+echo "=== TE Library Processing ===" | tee -a "$LOG"
 
-  # (1a) Build synthetic genome with CDS using synthetic_genome.py.
-  cmd="python ${BIN_DIR}/synthetic_genome.py -cds ${cds} -out_prefix backbone -chr_number ${chr_number} -size ${size} -seed ${seed}"
-  if [[ -n "$cds_num" ]]; then
-    cmd+=" -cds_num ${cds_num}"
-  elif [[ -n "$cds_percent" ]]; then
-    cmd+=" -cds_percent ${cds_percent}"
-  fi
-  echo "Running: $cmd" | tee -a "$LOG"
-  eval $cmd >> "$LOG" 2>> "$ERR"
-  if [ $? -ne 0 ]; then
-    echo "Error running synthetic_genome.py" | tee -a "$ERR"
-    exit 1
-  fi
-
-  # (1b) Estimate LTR lengths from the TE fasta library.
-  cmd="python ${BIN_DIR}/seq_divergence.py -i ${TE_lib} -o lib.txt -t ${threads} --min_align 100 --max_off 20 --miu ${mutation_rate} --blast_outfmt '6 qseqid sseqid sstart send slen qstart qend qlen length nident btop'"
-  echo "Running: $cmd" | tee -a "$LOG"
-  eval $cmd >> "$LOG" 2>> "$ERR"
-  if [ $? -ne 0 ]; then
+# (A) Compute divergence info from the TE library.
+cmd="python ${BIN_DIR}/seq_divergence.py -i ${TE_lib} -o lib.txt -t ${threads} --min_align 100 --max_off 20 --miu ${mutation_rate} --blast_outfmt '6 qseqid sseqid sstart send slen qstart qend qlen length nident btop'"
+echo "Running: $cmd" | tee -a "$LOG"
+eval $cmd >> "$LOG" 2>> "$ERR"
+if [ $? -ne 0 ]; then
     echo "Error running seq_divergence.py" | tee -a "$ERR"
     exit 1
-  fi
-
-  # (1c) Append LTR lengths to the TE library.
-  cmd="python ${BIN_DIR}/LTR_fasta_header_appender.py -fasta ${TE_lib} -domains lib.txt -div_type none"
-  if [[ "$ex_ltr" -eq 1 ]]; then
-    cmd+=" -exclude_no_hits"
-  fi
-  echo "Running: $cmd > lib.fa" | tee -a "$LOG"
-  eval $cmd > lib.fa 2>> "$ERR"
-  if [ $? -ne 0 ]; then
-    echo "Error running LTR_fasta_header_appender.py" | tee -a "$ERR"
-    exit 1
-  fi
-
-  # (1d) Insert TEs into the synthetic genome using the parallel version.
-  cmd="python ${BIN_DIR}/shared_ltr_inserter_parallel.py -genome backbone.fa -TE lib.fa"
-  if [[ -n "$TE_percent" ]]; then
-    cmd+=" -p ${TE_percent}"
-  else
-    cmd+=" -n ${TE_num}"
-  fi
-  cmd+=" -bed backbone.bed -output burnin -seed ${seed} -TE_ratio ${TE_ratio} -stat_out burnin.stat"
-  # Add new TE mutation parameters in place of the old TE_mut_in.
-  cmd+=" -k ${TE_mut_k} -Mmax ${TE_mut_Mmax} -pdf_out burnin_mut_dist.pdf -m ${threads}"
-  echo "Running: $cmd" | tee -a "$LOG"
-  eval $cmd >> "$LOG" 2>> "$ERR"
-  if [ $? -ne 0 ]; then
-    echo "Error running shared_ltr_inserter_parallel.py" | tee -a "$ERR"
-    exit 1
-  fi
 fi
 
-# If the burnin_only flag is set, exit after Phase 1.
-if [[ "$burnin_only" -eq 1 ]]; then
-  echo "Burn-in phase completed. --burnin_only flag activated. Exiting." | tee -a "$LOG"
-  exit 0
+# (B) Append LTR lengths to TE library.
+cmd="python ${BIN_DIR}/LTR_fasta_header_appender.py -fasta ${TE_lib} -domains lib.txt -div_type none"
+if [[ "$ex_ltr" -eq 1 ]]; then
+    cmd+=" -exclude_no_hits"
+fi
+echo "Running: $cmd > lib.fa" | tee -a "$LOG"
+eval $cmd > lib.fa 2>> "$ERR"
+if [ $? -ne 0 ]; then
+    echo "Error running LTR_fasta_header_appender.py" | tee -a "$ERR"
+    exit 1
+fi
+
+###############################################################################
+# Phase 1: Burn-in Genome Generation (only if no external BED/FASTA provided)
+###############################################################################
+if [[ "$skip_burnin" -eq 0 ]]; then
+    echo "=== Phase 1: Burn-in ===" | tee -a "$LOG"
+
+    # (1a) Build synthetic genome with CDS using synthetic_genome.py.
+    cmd="python ${BIN_DIR}/synthetic_genome.py -cds ${cds} -out_prefix backbone -chr_number ${chr_number} -size ${size} -seed ${seed}"
+    if [[ -n "$cds_num" ]]; then
+        cmd+=" -cds_num ${cds_num}"
+    elif [[ -n "$cds_percent" ]]; then
+        cmd+=" -cds_percent ${cds_percent}"
+    fi
+    echo "Running: $cmd" | tee -a "$LOG"
+    eval $cmd >> "$LOG" 2>> "$ERR"
+    if [ $? -ne 0 ]; then
+        echo "Error running synthetic_genome.py" | tee -a "$ERR"
+        exit 1
+    fi
+
+    # (1b) Insert TEs into the synthetic genome using the parallel version.
+    cmd="python ${BIN_DIR}/shared_ltr_inserter_parallel.py -genome backbone.fa -TE lib.fa"
+    if [[ -n "$TE_percent" ]]; then
+        cmd+=" -p ${TE_percent}"
+    else
+        cmd+=" -n ${TE_num}"
+    fi
+    cmd+=" -bed backbone.bed -output burnin -seed ${seed} -TE_ratio ${TE_ratio} -stat_out burnin.stat"
+    cmd+=" -k ${TE_mut_k} -Mmax ${TE_mut_Mmax} -pdf_out burnin_mut_dist.pdf -m ${threads}"
+    echo "Running: $cmd" | tee -a "$LOG"
+    eval $cmd >> "$LOG" 2>> "$ERR"
+    if [ $? -ne 0 ]; then
+        echo "Error running shared_ltr_inserter_parallel.py" | tee -a "$ERR"
+        exit 1
+    fi
 fi
 
 ###############################################################################
@@ -537,28 +537,44 @@ echo "Pipeline completed at $(date)" | tee -a "$LOG"
 ###############################################################################
 echo "=== Global Post-Processing ===" | tee -a "$LOG"
 
-# Run the global analysis scripts from the util directory.
-# 1. Plot TE fraction (includes burnin and all gen*_final files)
-python ${UTIL_DIR}/plot_TE_frac.py --bed $(echo "burnin.bed"; ls gen*_final.bed | sort -V) \
-  --fasta $(echo "burnin.fa"; ls gen*_final.fasta | sort -V) \
-  --feature Intact_TE:SoloLTR:Fragmented_TE --out_prefix percent_TE
+# --- Modification (3): Choose the proper starting file names for post-processing ---
+if [[ "$skip_burnin" -eq 1 ]]; then
+    initial_bed="$input_bed"
+    initial_fasta="$input_fasta"
+else
+    initial_bed="burnin.bed"
+    initial_fasta="burnin.fa"
+fi
+
+# 1. Plot TE fraction (includes starting file and all gen*_final files)
+cmd="python ${UTIL_DIR}/plot_TE_frac.py --bed \$(echo \"${initial_bed}\"; ls gen*_final.bed | sort -V) --fasta \$(echo \"${initial_fasta}\"; ls gen*_final.fasta | sort -V) --feature Intact_TE:SoloLTR:Fragmented_TE --out_prefix percent_TE"
+echo "Running: $cmd" | tee -a "$LOG"
+eval $cmd
 
 # 2. Plot solo versus intact TE proportions.
-python ${UTIL_DIR}/plot_solo_intact.py --bed $(echo "burnin.bed"; ls gen*_final.bed | sort -V) \
-  --out_prefix solo_intact
+cmd="python ${UTIL_DIR}/plot_solo_intact.py --bed \$(echo \"${initial_bed}\"; ls gen*_final.bed | sort -V) --out_prefix solo_intact"
+echo "Running: $cmd" | tee -a "$LOG"
+eval $cmd
 
 # 3. Generate overall statistics report.
-python ${UTIL_DIR}/stats_report.py --bed $(ls gen*_final.bed | sort -V) \
-  --out_prefix stat
+cmd="python ${UTIL_DIR}/stats_report.py --bed \$(ls gen*_final.bed | sort -V) --out_prefix stat"
+echo "Running: $cmd" | tee -a "$LOG"
+eval $cmd
 
 # 4. Plot superfamily count.
-python ${UTIL_DIR}/plot_superfamily_count.py
+cmd="python ${UTIL_DIR}/plot_superfamily_count.py"
+echo "Running: $cmd" | tee -a "$LOG"
+eval $cmd
 
 # 5. Plot category bar.
-python ${UTIL_DIR}/plot_category_bar.py
+cmd="python ${UTIL_DIR}/plot_category_bar.py"
+echo "Running: $cmd" | tee -a "$LOG"
+eval $cmd
 
 # 6. Genome size through time.
-python ${UTIL_DIR}/genome_plot.py
+cmd="python ${UTIL_DIR}/genome_plot.py"
+echo "Running: $cmd" | tee -a "$LOG"
+eval $cmd
 
 ###############################################################################
 # Supplemental Post-Processing (Per-Generation Analysis)
@@ -595,17 +611,19 @@ for iter in "${selected[@]}"; do
   echo "Processing per-generation analysis for ${final_prefix}" | tee -a "$LOG"
   
   # (a) Extract intact LTR sequences.
-  python ${BIN_DIR}/extract_intact_LTR.py --bed ${final_prefix}.bed --genome ${final_prefix}.fasta --out_fasta ${final_prefix}_LTR.fasta
+  cmd="python ${BIN_DIR}/extract_intact_LTR.py --bed ${final_prefix}.bed --genome ${final_prefix}.fasta --out_fasta ${final_prefix}_LTR.fasta"
+  echo "Running: $cmd" | tee -a "$LOG"
+  eval $cmd
   
   # (b) Compute sequence divergence on extracted LTR sequences.
-  python ${BIN_DIR}/seq_divergence.py -i ${final_prefix}_LTR.fasta -o ${final_prefix}_LTR.tsv -t ${threads} \
-    --min_align 100 --max_off 20 --miu ${mutation_rate} --blast_outfmt '6 qseqid sseqid sstart send slen qstart qend qlen length nident btop'
-  
-  # Removed ltr_dens.py call from here.
+  cmd="python ${BIN_DIR}/seq_divergence.py -i ${final_prefix}_LTR.fasta -o ${final_prefix}_LTR.tsv -t ${threads} --min_align 100 --max_off 20 --miu ${mutation_rate} --blast_outfmt '6 qseqid sseqid sstart send slen qstart qend qlen length nident btop'"
+  echo "Running: $cmd" | tee -a "$LOG"
+  eval $cmd
 done
 
 # Run ltr_dens.py once after per-generation analyses.
-echo "Running global LTR density analysis" | tee -a "$LOG"
-python ${BIN_DIR}/ltr_dens.py --model ${model} --output all_LTR_density.pdf --miu ${mutation_rate}
+cmd="python ${BIN_DIR}/ltr_dens.py --model ${model} --output all_LTR_density.pdf --miu ${mutation_rate}"
+echo "Running: $cmd" | tee -a "$LOG"
+eval $cmd
 
 echo "Post-processing completed at $(date)" | tee -a "$LOG"
