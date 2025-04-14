@@ -174,15 +174,19 @@ def calculate_excision_count(entries, rate, generations, gene_weights):
     For disrupted genes, use the disrupted_gene_weight from gene_weights instead of counting each as 1.
     A gene is considered disrupted if its feature_ID starts with 'gene' and its NAME contains a semicolon.
     Sum the weights of all unique disrupted genes and calculate:
-         number_of_TE_excisions = rate * generations * (sum of disrupted gene weight)
+         lambda_val = rate * generations * (sum of disrupted gene weights)
+    Then sample the number of TE excisions from a Poisson distribution with lambda_val.
     """
     disrupted_genes = {e.feature_id for e in entries if e.feature_id.startswith("gene") and (';' in e.name)}
     weight_sum = sum(gene_weights.get(gene, 1) for gene in disrupted_genes)
     print(f"Disrupted genes (unique): {len(disrupted_genes)}")
     print(f"Sum of disrupted gene weights: {weight_sum:.4f}")
-    excisions = int(rate * generations * weight_sum)
-    print(f"Number of TE excisions to simulate: {excisions}")
-    return excisions
+    
+    lambda_val = rate * generations * weight_sum
+    excision_count = np.random.poisson(lambda_val)
+    print(f"Lambda for Poisson (rate mode): {lambda_val:.4f}")
+    print(f"Number of TE excisions to simulate: {excision_count}")
+    return excision_count
 
 # =============================================================================
 # Select Removal Events (Weighted by length and selection for gene-disrupting TEs)
@@ -517,7 +521,7 @@ def write_bed(bed_entries, output_prefix):
 
 def plot_lognormal(sigma, outname):
     """
-    Plot a publication-quality figure of the log-normal PDF.
+    Plot the log-normal gene selection curve.
     The lognormal distribution used has parameters: mu = sigma^2 and sigma.
     """
     mu = sigma ** 2
@@ -538,7 +542,7 @@ def plot_lognormal(sigma, outname):
 
 def plot_weighted_candidate_curve(k, Lmax, outname):
     """
-    Plot a publication-quality figure of the weighted candidate selection curve.
+    Plot weighted candidate selection curve.
     The weight is defined as: weight = exp( - k * (1 - (L / Lmax)) ) for L in [0, Lmax].
     """
     L = np.linspace(0, Lmax, 500)
@@ -593,6 +597,7 @@ def main():
     args = parser.parse_args()
 
     random.seed(args.seed)
+    np.random.seed(args.seed)
 
     print("Parsing genome FASTA...")
     genome_records = parse_fasta(args.genome)
@@ -648,9 +653,10 @@ def main():
 
     # Determine the number of excisions.
     if args.fix_ex is not None:
-        # Calculate excision_count as: fixed rate * genome_size * generations.
-        excision_count = int(args.fix_ex * genome_size * args.generations)
+        lambda_val = args.fix_ex * genome_size * args.generations
+        excision_count = np.random.poisson(lambda_val)
         print(f"Using fixed excision rate: {args.fix_ex}")
+        print(f"Lambda for Poisson (fix_ex mode): {lambda_val:.4f}")
         print(f"Calculated number of TE excisions: {excision_count}")
     else:
         excision_count = calculate_excision_count(entries, args.rate, args.generations, gene_weights)
@@ -658,7 +664,6 @@ def main():
     if args.fix_ex is None:
         removals = select_removals(entries, nest_groups, excision_count, args.seed, args.k, gene_weights, args.generations, args.sel_coeff)
     else:
-        # If using fixed excision rate, we do not modify weights by gene disruption.
         removals = select_removals(entries, nest_groups, excision_count, args.seed, args.k, gene_weights, args.generations, 0.0)
 
     # Print removal events in a sorted order for determinism.
