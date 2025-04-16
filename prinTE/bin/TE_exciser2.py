@@ -32,6 +32,13 @@ This adjustment reflects selection acting against individuals that fail to delet
 Additionally, if a fixed excision rate is provided with --fix_ex, the gene weights and selection coefficient are bypassed.
   
 The script also produces publication-quality figures for the log-normal distribution and the weighted candidate selection curve.
+
+NEW CHROMATIN BIAS:
+In rate mode, the likelihood of a TE excision is further modulated by its chromatin context.
+A new parameter --euch_het_buffer specifies a buffer (in bp) around gene features to be treated as euchromatin.
+Any TE whose midpoint falls in one of these regions will have its base weight multiplied
+by --euch_het_bias (e.g. 1.1 increases the weight by 10%). Regions outside these merged gene intervals
+are assumed to be heterochromatin and receive no additional boost.
 """
 
 import argparse
@@ -96,6 +103,36 @@ def parse_fasta(fasta_file):
     for rec in SeqIO.parse(fasta_file, "fasta"):
         recs[rec.id] = rec
     return recs
+
+def build_euchromatin_intervals(entries, buffer):
+    """
+    Build a dictionary of euchromatin intervals from gene entries.
+    For each gene (feature_ID starts with "gene"), extend its interval by the specified buffer.
+    Overlapping intervals on the same chromosome are merged.
+    Returns a dict: {chrom: [(start, end), ...]}.
+    """
+    intervals_by_chrom = defaultdict(list)
+    for e in entries:
+        if e.feature_id.startswith("gene"):
+            start = max(0, e.start - buffer)
+            end = e.end + buffer
+            intervals_by_chrom[e.chrom].append((start, end))
+    merged = {}
+    for chrom, intervals in intervals_by_chrom.items():
+        if not intervals:
+            continue
+        intervals.sort(key=lambda x: x[0])
+        merged_list = []
+        current_start, current_end = intervals[0]
+        for s, e_val in intervals[1:]:
+            if s <= current_end:  # overlapping intervals
+                current_end = max(current_end, e_val)
+            else:
+                merged_list.append((current_start, current_end))
+                current_start, current_end = s, e_val
+        merged_list.append((current_start, current_end))
+        merged[chrom] = merged_list
+    return merged
 
 # =============================================================================
 # Classification of BED Entries
@@ -189,10 +226,11 @@ def calculate_excision_count(entries, rate, generations, gene_weights):
     return excision_count
 
 # =============================================================================
-# Select Removal Events (Weighted by length and selection for gene-disrupting TEs)
+# Select Removal Events (Weighted by length, chromatin state and selection for gene-disrupting TEs)
 # =============================================================================
 
-def select_removals(entries, nest_groups, num_excision, seed, k, gene_weights, generations, sel_coeff):
+def select_removals(entries, nest_groups, num_excision, seed, k, gene_weights, generations, sel_coeff,
+                    euch_intervals=None, euch_het_bias=1.0):
     """
     Eligible for removal are:
        - NON_NEST_GROUP_TE entries,
@@ -206,6 +244,8 @@ def select_removals(entries, nest_groups, num_excision, seed, k, gene_weights, g
     For each eligible entry, let L = end - start, and Lmax be the maximum L among eligible entries.
     Then assign the base excision weight as:
          weight_base = exp( - k * (1 - (L / Lmax)) )
+    Additionally, if euch_intervals is provided (rate mode), and the candidate’s midpoint falls within any
+    euchromatin interval, multiply the weight by euch_het_bias.
     
     NEW EDIT: For candidates that are gene-disrupting (subtype NEST_TE_IN_GENE), their weight is multiplied
     by an additional factor: (1 + sel_coeff * gene_weight * generations), where gene_weight is obtained from gene_weights
@@ -233,6 +273,15 @@ def select_removals(entries, nest_groups, num_excision, seed, k, gene_weights, g
     weights = {}
     for e in eligible:
         base_weight = math.exp(-k * (1 - (e.length() / Lmax)))
+        # Apply chromatin state bias if euch_intervals is provided.
+        if euch_intervals is not None:
+            # Use the midpoint of the TE candidate.
+            mid = (e.start + e.end) // 2
+            if e.chrom in euch_intervals:
+                for (istart, iend) in euch_intervals[e.chrom]:
+                    if istart <= mid <= iend:
+                        base_weight *= euch_het_bias
+                        break
         # If the candidate is gene-disrupting, further weight it.
         if e.subtype == "NEST_TE_IN_GENE" and e.group is not None:
             # For nest groups with gene disruption, use the gene ID from one of the flanking entries.
@@ -409,7 +458,7 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
                     ltr_val = partial_info[id(e)]
                     rem_len = e.end - (e.start + ltr_val)
                     removals_by_chrom[e.chrom].append( (e.start + ltr_val, e.end, rem_len) )
-                    print(f"Partial excision: {e.chrom}:{e.start}-{e.end} reduced to {e.start}-{e.start+ltr_val} (removed {rem_len} bases)")
+                    print(f"Partial excision: {e.chrom}:{e.start}-{e.end} reduced to {e.chrom}:{e.start}-{e.start+ltr_val} (removed {rem_len} bases)")
                     e.end = e.start + ltr_val
                     new_feature_id = e.feature_id + "_SOLO"
                     e.feature_id = new_feature_id
@@ -577,6 +626,10 @@ def main():
                     "EDIT: For the non-fixed rate model (--rate), candidate excisions are now further weighted so that\n"
                     "gene-disrupting TEs (NEST_TE_IN_GENE) are favored. Their base weight (from feature length and --k)\n"
                     "is multiplied by (1 + sel_coeff * gene_weight * generations), where gene_weight comes from gene_selection.tsv.\n\n"
+                    "CHROMATIN BIAS (rate mode only): Define euchromatin regions as any region within a buffer around a gene.\n"
+                    "Candidates whose midpoints lie within these merged intervals get their weight multiplied by --euch_het_bias.\n"
+                    "For example, '--euch_het_buffer 10000 --euch_het_bias 1.1' treats 10kb upstream and downstream of each gene\n"
+                    "as euchromatin and gives candidate TE excisions in these regions a 10% weight boost.\n"
                     "Also, publication-quality figures are generated for the log-normal distribution and the weighted candidate selection curve.\n"
                     "Use --no_fig to disable figure generation.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -594,6 +647,11 @@ def main():
     parser.add_argument("--fix_ex", type=float, help="If provided, use this fixed excision rate to calculate the number of TE excisions as: fix_ex * genome_size * generations.")
     # New argument: selection coefficient for gene-disrupting TEs.
     parser.add_argument("--sel_coeff", type=float, default=0.0, help="Selection coefficient to weight excision of gene-disrupting TEs.")
+    # New arguments for chromatin bias in rate mode.
+    parser.add_argument("--euch_het_buffer", type=int, default=0,
+                        help="Buffer (in bp) around gene features to be considered euchromatin. Only interpreted in rate mode.")
+    parser.add_argument("--euch_het_bias", type=float, default=1.0,
+                        help="Bias factor to increase probability of TE excision in euchromatin. Only interpreted in rate mode.")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -661,8 +719,14 @@ def main():
     else:
         excision_count = calculate_excision_count(entries, args.rate, args.generations, gene_weights)
     
+    # Build euchromatin intervals if in rate mode and a buffer is specified.
+    euch_intervals = None
+    if args.fix_ex is None and args.euch_het_buffer > 0:
+        euch_intervals = build_euchromatin_intervals(entries, args.euch_het_buffer)
+    
     if args.fix_ex is None:
-        removals = select_removals(entries, nest_groups, excision_count, args.seed, args.k, gene_weights, args.generations, args.sel_coeff)
+        removals = select_removals(entries, nest_groups, excision_count, args.seed, args.k, gene_weights, args.generations, args.sel_coeff,
+                                    euch_intervals=euch_intervals, euch_het_bias=args.euch_het_bias)
     else:
         removals = select_removals(entries, nest_groups, excision_count, args.seed, args.k, gene_weights, args.generations, 0.0)
 
