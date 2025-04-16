@@ -39,11 +39,12 @@ A new parameter --euch_het_buffer specifies a buffer (in bp) around gene feature
 Any TE whose midpoint falls in one of these regions will have its base weight multiplied
 by --euch_het_bias (e.g. 1.1 increases the weight by 10%). Regions outside these merged gene intervals
 are assumed to be heterochromatin and receive no additional boost.
-  
-NEW PARALLELISM:
-A new parameter (-m) allows simultaneous processing of up to m chromosomes (based on their independent coordinate space).
-For example, if there are 10 chromosomes in the genome and “-m 10” is used,
-each chromosome’s excision (and coordinate adjustment) is processed concurrently. This can provide a dramatic speedup.
+
+MULTIPROCESSING EDIT:
+A new option -m [int] specifies the maximum number of chromosomes to process in parallel.
+For example, '-m 10' processes up to 10 chromosomes concurrently.
+Each chromosome gets a unique deterministic seed (global seed + index) so that results are reproducible.
+Multiprocessing.Pool.map() is used to parallelize the genome update step.
 """
 
 import argparse
@@ -53,14 +54,13 @@ import copy
 import os
 import math
 from collections import defaultdict
-import concurrent.futures
-
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 import re
 import numpy as np
 import matplotlib.pyplot as plt
+from multiprocessing import Pool
 
 # =============================================================================
 # Data Structures and Helpers
@@ -340,49 +340,43 @@ def select_removals(entries, nest_groups, num_excision, seed, k, gene_weights, g
     return removals
 
 # =============================================================================
-# Helper for per-chromosome processing (for parallel simulation)
+# Helper for multiprocessing: Genome update per chromosome
 # =============================================================================
 
-def process_chromosome(chrom, rec, events, bed_entries):
+def update_chromosome(task):
     """
-    Process one chromosome:
-      - Remove sequences from the chromosome based on the provided removal events.
-      - Adjust the coordinates of bed_entries (list of BedEntry) on this chromosome.
-    Returns a tuple: (chrom, updated SeqRecord, updated list of BedEntry).
+    Process the genome sequence update for one chromosome.
+    task: (chrom, rec, events, seed_val)
+    Sets the random seed for reproducibility.
+    Returns (chrom, updated SeqRecord, total_shift) where total_shift is the sum of removed bases.
     """
+    chrom, rec, events, seed_val = task
+    random.seed(seed_val)
+    np.random.seed(seed_val)
     seq = list(str(rec.seq))
-    sorted_events = sorted(events, key=lambda x: x[0])
     total_shift = 0
-    for (rstart, rend, rlen) in sorted_events:
+    events_sorted = sorted(events, key=lambda x: x[0])
+    for (rstart, rend, rlen) in events_sorted:
         adj_start = rstart - total_shift
         adj_end = rend - total_shift
         del seq[adj_start:adj_end]
         total_shift += rlen
     updated_seq = "".join(seq)
     new_rec = SeqRecord(Seq(updated_seq), id=rec.id, description="")
-
-    # Adjust bed entry coordinates
-    for e in bed_entries:
-        shift = 0
-        for (rstart, rend, rlen) in sorted_events:
-            if rstart < e.start:
-                shift += rlen
-        e.start -= shift
-        e.end -= shift
-    return chrom, new_rec, bed_entries
+    return chrom, new_rec, total_shift
 
 # =============================================================================
 # Simulation: Remove sequences and adjust bed coordinates
 # =============================================================================
 
-def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_freq, max_simultaneous=1):
+def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_freq, max_proc, global_seed):
     """
-    This function modifies the genome sequences and BED entries.
+    This function modifies the genome sequences and bed entries.
     
     There are two main cases:
     
     1) Simple removal (NON_NEST_GROUP_TE, or flanking entries in a nest group that get excised)
-       - For a given BED entry to remove, remove from the genome the sequence from start to (end - TSD_length)
+       - For a given bed entry to remove, remove from the genome the sequence from start to (end - TSD_length)
          (if TSD is not 'NA'; if TSD=='NA', remove the whole region).
        - Remove the bed entry.
        - For subsequent coordinates on that chromosome, shift by the removed length.
@@ -390,8 +384,8 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
     2) Nested removal: if a nest-group middle (NEST_TE_IN_TE or NEST_TE_IN_GENE) is selected
        and it is NOT a partial (solo) excision, then:
        - Remove the sequence corresponding to the middle entry.
-       - Then consolidate the flanking entries into one BED entry.
-         The new BED entry will have:
+       - Then consolidate the flanking entries into one bed entry.
+         The new bed entry will have:
              start = CUT_PAIR_x_1.start (unchanged)
              end = CUT_PAIR_x_2.end - (middle.length())
          (i.e. the gap from removal is subtracted)
@@ -407,6 +401,9 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
          In a partial excision, the sequence from (start + LTRlen) to end is removed, and the BED entry is updated so that
          end becomes (start+LTRlen) and '_SOLO' is appended to the feature_ID while preserving supplemental info.
          Note: No consolidation is performed after a partial excision.
+         
+    MULTIPROCESSING: Genome sequences are processed per chromosome concurrently using a Pool.
+    The global seed is used to assign each chromosome a unique seed for reproducibility.
     """
     def qualifies_as_intact_ltr(e, all_entries):
         # Condition (a): if the first supplemental attribute contains "CUT_BY", reject.
@@ -459,7 +456,6 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
             print(f"Excision (nest group consolidation): Group {gid} - Removing middle element {group[1].chrom}:{group[1].start}-{group[1].end} (length {rem_len})")
             new_start = group[0].start
             new_end = group[2].end - rem_len
-            # Use the feature_ID from the flanking entry, ignoring supplemental info.
             new_name = group[0].feature_id  
             new_strand = group[0].strand
             new_tsd = group[0].tsd
@@ -473,7 +469,7 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
                         ltr_val = partial_info[id(e)]
                         rem_len = e.end - (e.start + ltr_val)
                         removals_by_chrom[e.chrom].append( (e.start + ltr_val, e.end, rem_len) )
-                        print(f"Partial excision in group {gid}: {e.chrom}:{e.start}-{e.end} reduced to {e.chrom}:{e.start}-{e.start+ltr_val} (removed {rem_len} bases)")
+                        print(f"Partial excision in group {gid}: {e.chrom}:{e.start}-{e.end} reduced to {e.start}-{e.start+ltr_val} (removed {rem_len} bases)")
                         e.end = e.start + ltr_val
                         new_feature_id = e.feature_id + "_SOLO"
                         e.feature_id = new_feature_id
@@ -514,44 +510,39 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
             else:
                 new_entries.append(e)
     
-    # -------------------------------
-    # Parallel processing per chromosome
-    # -------------------------------
-    # updated_genome and adjusted bed entries will be computed per chromosome.
-    updated_genome = {}
-    updated_bed_all = []
-    
-    # Group bed entries (new_entries) by chromosome.
-    bed_entries_by_chrom = defaultdict(list)
-    for e in new_entries:
-        bed_entries_by_chrom[e.chrom].append(e)
-    
-    # Prepare list of chromosomes to process.
-    chrom_jobs = []
-    for chrom, rec in genome_records.items():
+    # -----------------------------
+    # Parallel genome sequence update per chromosome:
+    # -----------------------------
+    # Prepare tasks: for each chromosome, get its removals events and assign a unique seed.
+    tasks = []
+    for idx, (chrom, rec) in enumerate(sorted(genome_records.items())):
         events = removals_by_chrom.get(chrom, [])
-        bed_entries = bed_entries_by_chrom.get(chrom, [])
-        chrom_jobs.append( (chrom, rec, events, bed_entries) )
+        seed_val = global_seed + idx  # unique and deterministic seed for each chromosome
+        tasks.append((chrom, rec, events, seed_val))
     
-    if max_simultaneous > 1:
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_simultaneous) as executor:
-            futures = []
-            for job in chrom_jobs:
-                chrom, rec, events, bed_entries = job
-                futures.append(executor.submit(process_chromosome, chrom, rec, events, bed_entries))
-            for future in concurrent.futures.as_completed(futures):
-                chrom, new_rec, bed_entries_updated = future.result()
-                updated_genome[chrom] = new_rec
-                updated_bed_all.extend(bed_entries_updated)
+    updated_genome = {}
+    # Use multiprocessing if more than one process is requested.
+    if max_proc > 1:
+        with Pool(processes=max_proc) as pool:
+            results = pool.map(update_chromosome, tasks)
     else:
-        # Process sequentially if max_simultaneous == 1
-        for chrom, rec, events, bed_entries in chrom_jobs:
-            chrom, new_rec, bed_entries_updated = process_chromosome(chrom, rec, events, bed_entries)
-            updated_genome[chrom] = new_rec
-            updated_bed_all.extend(bed_entries_updated)
+        results = list(map(update_chromosome, tasks))
     
-    updated_bed_all.sort(key=lambda x: (x.chrom, x.start))
-    return updated_genome, updated_bed_all
+    for chrom, new_rec, _ in results:
+        updated_genome[chrom] = new_rec
+
+    # Adjust bed coordinates based on removed lengths.
+    for entry in new_entries:
+        shift = 0
+        events = sorted(removals_by_chrom.get(entry.chrom, []), key=lambda x: x[0])
+        for (rstart, rend, rlen) in events:
+            if rstart < entry.start:
+                shift += rlen
+        entry.start -= shift
+        entry.end -= shift
+
+    new_entries.sort(key=lambda x: (x.chrom, x.start))
+    return updated_genome, new_entries
 
 # =============================================================================
 # Failsafe consolidation for adjacent gene entries
@@ -682,8 +673,9 @@ def main():
                     "Candidates whose midpoints lie within these merged intervals get their weight multiplied by --euch_het_bias.\n"
                     "For example, '--euch_het_buffer 10000 --euch_het_bias 1.1' treats 10kb upstream and downstream of each gene\n"
                     "as euchromatin and gives candidate TE excisions in these regions a 10% weight boost.\n\n"
-                    "NEW PARALLELISM: Use -m to specify the maximum number of chromosomes to process simultaneously.\n"
-                    "For example, '-m 10' will process up to 10 chromosomes concurrently.",
+                    "MULTIPROCESSING: Use -m [int] to process up to that many chromosomes in parallel.\n"
+                    "Publication-quality figures are generated for the log-normal distribution and the weighted candidate selection curve.\n"
+                    "Use --no_fig to disable figure generation.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--genome", required=True, help="Input genome FASTA file.")
     parser.add_argument("--rate", type=float, default=1e-4, help="Rate of TE deletion per generation per disrupted gene weight.")
@@ -704,8 +696,8 @@ def main():
                         help="Buffer (in bp) around gene features to be considered euchromatin. Only interpreted in rate mode.")
     parser.add_argument("--euch_het_bias", type=float, default=1.0,
                         help="Bias factor to increase probability of TE excision in euchromatin. Only interpreted in rate mode.")
-    # New argument: maximum number of chromosomes to process simultaneously.
-    parser.add_argument("-m", type=int, default=1, help="Maximum number of chromosomes to process concurrently.")
+    # New argument for multiprocessing: max number of chromosomes processed in parallel.
+    parser.add_argument("-m", type=int, default=1, help="Maximum number of chromosomes to process in parallel.")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -790,7 +782,7 @@ def main():
         print(f" - {e.chrom}:{e.start}-{e.end}, {e.feature_id}, subtype: {e.subtype}, length: {e.length()}")
 
     print("Simulating excisions and updating coordinates...")
-    updated_genome, updated_bed = simulate_excision(genome_records, entries, nest_groups, removals, args.soloLTR_freq, max_simultaneous=args.m)
+    updated_genome, updated_bed = simulate_excision(genome_records, entries, nest_groups, removals, args.soloLTR_freq, args.m, args.seed)
 
     # Failsafe: Consolidate adjacent gene entries that share the same feature_ID.
     updated_bed = fail_safe_consolidation(updated_bed)
