@@ -39,14 +39,7 @@ A new parameter --euch_het_buffer specifies a buffer (in bp) around gene feature
 Any TE whose midpoint falls in one of these regions will have its base weight multiplied
 by --euch_het_bias (e.g. 1.1 increases the weight by 10%). Regions outside these merged gene intervals
 are assumed to be heterochromatin and receive no additional boost.
-
-MULTIPROCESSING EDIT:
-A new option -m [int] specifies the maximum number of chromosomes to process in parallel.
-For example, '-m 10' processes up to 10 chromosomes concurrently.
-Each chromosome gets a unique deterministic seed (global seed + index) so that results are reproducible.
-Multiprocessing.Pool.map() is used to parallelize the genome update step.
 """
-
 import argparse
 import sys
 import random
@@ -60,7 +53,7 @@ from Bio.SeqRecord import SeqRecord
 import re
 import numpy as np
 import matplotlib.pyplot as plt
-from multiprocessing import Pool
+import concurrent.futures
 
 # =============================================================================
 # Data Structures and Helpers
@@ -74,23 +67,19 @@ class BedEntry:
         self.name = name
         self.strand = strand
         self.tsd = tsd
-        self.lineno = lineno   # original order line number (for debugging)
-        self.group = None      # if part of a nest group, reference to the group id
-        self.subtype = None    # classification (see below)
-        # Derived attributes:
-        # feature_ID: first attribute before ';'
+        self.lineno = lineno
+        self.group = None
+        self.subtype = None
         self.feature_id = name.split(';')[0]
-        # supplemental info (list of attributes after first)
         self.supp = name.split(';')[1:] if ';' in name else []
-    
+
     def __str__(self):
         return "\t".join([self.chrom, str(self.start), str(self.end), self.name, self.strand, self.tsd])
-    
+
     def length(self):
         return self.end - self.start
 
 def parse_bed(bed_file):
-    """Parse the BED file and return a list of BedEntry objects."""
     entries = []
     with open(bed_file) as f:
         for lineno, line in enumerate(f):
@@ -100,37 +89,16 @@ def parse_bed(bed_file):
             fields = line.split("\t")
             if len(fields) < 6:
                 sys.exit(f"Error: Line {lineno+1} in BED file does not have 6 columns.")
-            entry = BedEntry(fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], lineno)
-            entries.append(entry)
+            entries.append(BedEntry(fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], lineno))
     return entries
-    
-def _select_removals_per_chrom(task):
-    """
-    Wrapper for per-chromosome select_removals.
-    task: tuple of (chrom, entries, nest_groups, num_excision, seed, k, gene_weights, generations,
-                    sel_coeff, euchromatin_intervals, euch_het_bias)
-    Returns: set of selected BedEntry objects for this chromosome
-    """
-    chrom, entries, nest_groups, num_excision, seed, k, gene_weights, generations, sel_coeff, euch_intervals, euch_het_bias = task
-    return select_removals(
-        entries, nest_groups, num_excision, seed, k, gene_weights, generations, sel_coeff,
-        euch_intervals=euch_intervals, euch_het_bias=euch_het_bias
-    )
 
 def parse_fasta(fasta_file):
-    """Parse FASTA file and return a dict: {chrom: SeqRecord}."""
     recs = {}
     for rec in SeqIO.parse(fasta_file, "fasta"):
         recs[rec.id] = rec
     return recs
 
 def build_euchromatin_intervals(entries, buffer):
-    """
-    Build a dictionary of euchromatin intervals from gene entries.
-    For each gene (feature_ID starts with "gene"), extend its interval by the specified buffer.
-    Overlapping intervals on the same chromosome are merged.
-    Returns a dict: {chrom: [(start, end), ...]}.
-    """
     intervals_by_chrom = defaultdict(list)
     for e in entries:
         if e.feature_id.startswith("gene"):
@@ -138,25 +106,19 @@ def build_euchromatin_intervals(entries, buffer):
             end = e.end + buffer
             intervals_by_chrom[e.chrom].append((start, end))
     merged = {}
-    for chrom, intervals in intervals_by_chrom.items():
-        if not intervals:
-            continue
-        intervals.sort(key=lambda x: x[0])
+    for chrom, ivals in intervals_by_chrom.items():
+        ivals.sort(key=lambda x: x[0])
         merged_list = []
-        current_start, current_end = intervals[0]
-        for s, e_val in intervals[1:]:
-            if s <= current_end:  # overlapping intervals
-                current_end = max(current_end, e_val)
+        cs, ce = ivals[0]
+        for s, e in ivals[1:]:
+            if s <= ce:
+                ce = max(ce, e)
             else:
-                merged_list.append((current_start, current_end))
-                current_start, current_end = s, e_val
-        merged_list.append((current_start, current_end))
+                merged_list.append((cs, ce))
+                cs, ce = s, e
+        merged_list.append((cs, ce))
         merged[chrom] = merged_list
     return merged
-
-# =============================================================================
-# Classification of BED Entries
-# =============================================================================
 
 def classify_entries(entries):
     """
@@ -249,9 +211,6 @@ def calculate_excision_count(entries, rate, generations, gene_weights):
 # Select Removal Events (Weighted by length, chromatin state and selection for gene-disrupting TEs)
 # =============================================================================
 
-from collections import defaultdict
-from multiprocessing import Pool
-
 def select_removals(entries, nest_groups, num_excision, seed, k, gene_weights, generations, sel_coeff,
                     euch_intervals=None, euch_het_bias=1.0):
     """
@@ -335,18 +294,23 @@ def select_removals(entries, nest_groups, num_excision, seed, k, gene_weights, g
                 break
         if chosen is None:
             chosen = eligible[-1]
-        
-        # If this candidate belongs to a nest group, check if one from the group is already selected.
+                        
         if chosen.group is not None:
-            if chosen.group in group_removed:
+            # detect TE‐only nest groups by inspecting the flanking subtype
+            grp = nest_groups.get(chosen.group)
+            is_te_group = grp and grp[0].subtype.startswith("CUT_PAIR_TE")
+
+            if is_te_group:
+                # TE‐nest groups remain fully eligible: just remove the chosen entry
                 eligible = [e for e in eligible if e is not chosen]
-                continue
             else:
-                if chosen.subtype in ["NEST_TE_IN_TE", "NEST_TE_IN_GENE"]:
-                    group_removed[chosen.group] = "middle"
-                else:
-                    group_removed[chosen.group] = "flank"
-                # Remove all candidates from this group from eligible.
+                # gene‐nest groups: keep the old behavior
+                if chosen.group in group_removed:
+                    eligible = [e for e in eligible if e is not chosen]
+                    continue
+                group_removed[chosen.group] = ("middle"
+                                               if chosen.subtype == "NEST_TE_IN_GENE"
+                                               else "flank")
                 eligible = [e for e in eligible if e.group != chosen.group]
         else:
             eligible = [e for e in eligible if e is not chosen]
@@ -355,111 +319,11 @@ def select_removals(entries, nest_groups, num_excision, seed, k, gene_weights, g
     print(f"Selected {len(removals)} removal events.")
     return removals
 
-def parallel_select_removals(entries, nest_groups, rate, generations, gene_weights,
-                              sel_coeff, euch_intervals, euch_het_bias, seed, k, max_proc,
-                              fix_ex=None, genome_size=None):
-    """
-    Parallel version of select_removals, operating per chromosome.
-    Supports both variable-rate (default) and fixed-rate (--fix_ex) modes.
-
-    Parameters:
-        - fix_ex: If provided, use fixed excision rate model.
-        - genome_size: Required if fix_ex is provided.
-    """
-    # Partition entries and nest groups by chromosome
-    entries_by_chrom = defaultdict(list)
-    nest_groups_by_chrom = defaultdict(dict)
-    for e in entries:
-        entries_by_chrom[e.chrom].append(e)
-    for gid, group in nest_groups.items():
-        chrom = group[1].chrom
-        nest_groups_by_chrom[chrom][gid] = group
-
-    excision_counts = {}
-
-    if fix_ex is not None:
-        # Fixed-rate mode: use genome size to determine number of excisions
-        if genome_size is None:
-            raise ValueError("genome_size must be provided when using --fix_ex.")
-        lambda_val = fix_ex * genome_size * generations
-        total_excision_count = np.random.poisson(lambda_val)
-        print(f"[Fixed-rate mode] Global lambda: {lambda_val:.4f}, total TE excisions: {total_excision_count}")
-
-        # Distribute excisions across chromosomes proportional to chromosome size
-        chrom_lengths = {chrom: sum(e.length() for e in ents)
-                         for chrom, ents in entries_by_chrom.items()}
-        total_length = sum(chrom_lengths.values())
-        for chrom in entries_by_chrom:
-            prop = chrom_lengths[chrom] / total_length if total_length > 0 else 0
-            chrom_lambda = prop * total_excision_count
-            excision_counts[chrom] = np.random.poisson(chrom_lambda)
-    else:
-        # Rate-based mode: use disrupted gene weights
-        for chrom, ents in entries_by_chrom.items():
-            disrupted = {e.feature_id for e in ents
-                         if e.feature_id.startswith("gene") and ";" in e.name}
-            weight_sum = sum(gene_weights.get(g, 1) for g in disrupted)
-            lambda_val = rate * generations * weight_sum
-            excision_counts[chrom] = np.random.poisson(lambda_val)
-
-    # Build task list
-    tasks = []
-    for idx, chrom in enumerate(entries_by_chrom):
-        ents = entries_by_chrom[chrom]
-        ngroups = nest_groups_by_chrom.get(chrom, {})
-        num_exc = excision_counts.get(chrom, 0)
-        chrom_seed = seed + idx
-        euch = euch_intervals.get(chrom) if euch_intervals else None
-
-        sc = sel_coeff if fix_ex is None else 0.0  # ignore selection coefficient in fixed mode
-
-        tasks.append((chrom, ents, ngroups, num_exc, chrom_seed,
-                      k, gene_weights, generations, sc, euch, euch_het_bias))
-
-    # Run in parallel
-    if max_proc > 1:
-        with Pool(processes=max_proc) as pool:
-            results = pool.map(_select_removals_per_chrom, tasks)
-    else:
-        results = map(_select_removals_per_chrom, tasks)
-
-    removals = set()
-    for r in results:
-        removals.update(r)
-    print(f"Total removal events selected across all chromosomes: {len(removals)}")
-    return removals
-
-# =============================================================================
-# Helper for multiprocessing: Genome update per chromosome
-# =============================================================================
-
-def update_chromosome(task):
-    """
-    Process the genome sequence update for one chromosome.
-    task: (chrom, rec, events, seed_val)
-    Sets the random seed for reproducibility.
-    Returns (chrom, updated SeqRecord, total_shift) where total_shift is the sum of removed bases.
-    """
-    chrom, rec, events, seed_val = task
-    random.seed(seed_val)
-    np.random.seed(seed_val)
-    seq = list(str(rec.seq))
-    total_shift = 0
-    events_sorted = sorted(events, key=lambda x: x[0])
-    for (rstart, rend, rlen) in events_sorted:
-        adj_start = rstart - total_shift
-        adj_end = rend - total_shift
-        del seq[adj_start:adj_end]
-        total_shift += rlen
-    updated_seq = "".join(seq)
-    new_rec = SeqRecord(Seq(updated_seq), id=rec.id, description="")
-    return chrom, new_rec, total_shift
-
 # =============================================================================
 # Simulation: Remove sequences and adjust bed coordinates
 # =============================================================================
 
-def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_freq, max_proc, global_seed):
+def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_freq):
     """
     This function modifies the genome sequences and bed entries.
     
@@ -491,9 +355,6 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
          In a partial excision, the sequence from (start + LTRlen) to end is removed, and the BED entry is updated so that
          end becomes (start+LTRlen) and '_SOLO' is appended to the feature_ID while preserving supplemental info.
          Note: No consolidation is performed after a partial excision.
-         
-    MULTIPROCESSING: Genome sequences are processed per chromosome concurrently using a Pool.
-    The global seed is used to assign each chromosome a unique seed for reproducibility.
     """
     def qualifies_as_intact_ltr(e, all_entries):
         # Condition (a): if the first supplemental attribute contains "CUT_BY", reject.
@@ -518,7 +379,7 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
     # Map entry id -> LTR offset (extracted from "LTRlen:XXX") for those chosen for partial excision.
     partial_info = {}
     for e in sorted_removals:
-        if e.subtype in ["NEST_TE_IN_TE", "NEST_TE_IN_GENE", "NON_NEST_GROUP_TE"]:
+        if e.subtype in ["NEST_TE_IN_TE", "NON_NEST_GROUP_TE"]:
             if ("LTRlen" in e.feature_id) and ("_SOLO" not in e.feature_id):
                 if not qualifies_as_intact_ltr(e, entries):
                     continue
@@ -539,13 +400,20 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
     
     # Process nest groups.
     for gid, group in nest_groups.items():
-        if gid in nest_middle_removed:
+        # determine if this is a TE‐only nest group
+        is_te_group = group[0].subtype.startswith("CUT_PAIR_TE")
+        # only consolidate when middle was removed AND (if TE group) neither flank was removed
+        if gid in nest_middle_removed and (
+            not is_te_group or
+            (group[0] not in to_remove and group[2] not in to_remove)
+        ):
             rem_len = group[1].length()
             chrom = group[1].chrom
             removals_by_chrom[chrom].append( (group[1].start, group[1].end, rem_len) )
             print(f"Excision (nest group consolidation): Group {gid} - Removing middle element {group[1].chrom}:{group[1].start}-{group[1].end} (length {rem_len})")
             new_start = group[0].start
             new_end = group[2].end - rem_len
+            # Use the feature_ID from the flanking entry, ignoring supplemental info.
             new_name = group[0].feature_id  
             new_strand = group[0].strand
             new_tsd = group[0].tsd
@@ -600,28 +468,20 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
             else:
                 new_entries.append(e)
     
-    # -----------------------------
-    # Parallel genome sequence update per chromosome:
-    # -----------------------------
-    # Prepare tasks: for each chromosome, get its removals events and assign a unique seed.
-    tasks = []
-    for idx, (chrom, rec) in enumerate(sorted(genome_records.items())):
-        events = removals_by_chrom.get(chrom, [])
-        seed_val = global_seed + idx  # unique and deterministic seed for each chromosome
-        tasks.append((chrom, rec, events, seed_val))
-    
     updated_genome = {}
-    # Use multiprocessing if more than one process is requested.
-    if max_proc > 1:
-        with Pool(processes=max_proc) as pool:
-            results = pool.map(update_chromosome, tasks)
-    else:
-        results = list(map(update_chromosome, tasks))
-    
-    for chrom, new_rec, _ in results:
+    for chrom, rec in genome_records.items():
+        seq = list(str(rec.seq))
+        events = sorted(removals_by_chrom.get(chrom, []), key=lambda x: x[0])
+        total_shift = 0
+        for (rstart, rend, rlen) in events:
+            adj_start = rstart - total_shift
+            adj_end = rend - total_shift
+            del seq[adj_start:adj_end]
+            total_shift += rlen
+        updated_seq = "".join(seq)
+        new_rec = SeqRecord(Seq(updated_seq), id=rec.id, description="")
         updated_genome[chrom] = new_rec
 
-    # Adjust bed coordinates based on removed lengths.
     for entry in new_entries:
         shift = 0
         events = sorted(removals_by_chrom.get(entry.chrom, []), key=lambda x: x[0])
@@ -740,7 +600,41 @@ def plot_weighted_candidate_curve(k, Lmax, outname):
     print(f"Weighted candidate selection curve figure saved as {outname}")
 
 # =============================================================================
-# Main function
+# Per-chromosome worker
+# =============================================================================
+
+def process_chrom(args_tuple):
+    (chrom, entries, genome_record, nest_groups, excision_count,
+     seed_i, k, gene_weights, generations, sel_coeff,
+     euch_intervals, euch_het_bias, soloLTR_freq) = args_tuple
+
+    # Ensure reproducibility per-chrom:
+    random.seed(seed_i)
+    np.random.seed(seed_i)
+
+    # Select removal events for this chromosome
+    removals = select_removals(
+        entries, nest_groups, excision_count, seed_i, k,
+        gene_weights, generations, sel_coeff,
+        euch_intervals=euch_intervals, euch_het_bias=euch_het_bias
+    )
+
+    # Reseed before simulation to keep partial excision deterministic
+    random.seed(seed_i + 1)
+
+    # Simulate and adjust sequences and coords for this chrom
+    updated_genome_chrom, updated_entries = simulate_excision(
+        {chrom: genome_record},
+        entries,
+        nest_groups,
+        removals,
+        soloLTR_freq
+    )
+
+    return updated_genome_chrom, updated_entries
+
+# =============================================================================
+# Main
 # =============================================================================
 
 def main():
@@ -762,132 +656,153 @@ def main():
                     "CHROMATIN BIAS (rate mode only): Define euchromatin regions as any region within a buffer around a gene.\n"
                     "Candidates whose midpoints lie within these merged intervals get their weight multiplied by --euch_het_bias.\n"
                     "For example, '--euch_het_buffer 10000 --euch_het_bias 1.1' treats 10kb upstream and downstream of each gene\n"
-                    "as euchromatin and gives candidate TE excisions in these regions a 10% weight boost.\n\n"
-                    "MULTIPROCESSING: Use -m [int] to process up to that many chromosomes in parallel.\n"
-                    "Publication-quality figures are generated for the log-normal distribution and the weighted candidate selection curve.\n"
+                    "as euchromatin and gives candidate TE excisions in these regions a 10% weight boost.\n"
+                    "Also, publication-quality figures are generated for the log-normal distribution and the weighted candidate selection curve.\n"
                     "Use --no_fig to disable figure generation.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--genome", required=True, help="Input genome FASTA file.")
-    parser.add_argument("--rate", type=float, default=1e-4, help="Rate of TE deletion per generation per disrupted gene weight.")
-    parser.add_argument("--generations", type=int, default=1, help="Number of generations to simulate.")
     parser.add_argument("--bed", required=True, help="Existing BED file with TE/gene coordinates.")
     parser.add_argument("--output", required=True, help="Output prefix (for .bed and .fasta).")
+    parser.add_argument("--rate", type=float, default=1e-4, help="Rate of TE deletion per generation per disrupted gene weight.")
+    parser.add_argument("--generations", type=int, default=1, help="Number of generations to simulate.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
-    parser.add_argument("--soloLTR_freq", type=float, default=0, help="Percentage of INTACT_LTR excisions to perform partially (e.g., 10 for 10%).")
-    parser.add_argument("--sigma", type=float, default=1.0, help="Sigma for log-normal distribution of disrupted_gene_weight (used if gene_selection.tsv is not present).")
-    parser.add_argument("--k", type=float, default=1.0, help="Decay rate for weighted excision selection based on sequence length.")
+    parser.add_argument("--soloLTR_freq", type=float, default=0, help="Percent of INTACT_LTR excisions to perform partially.")
+    parser.add_argument("--sigma", type=float, default=1.0, help="Sigma for log-normal distribution of gene weights.")
+    parser.add_argument("--k", type=float, default=1.0, help="Decay rate for weighted excision selection.")
     parser.add_argument("--no_fig", action="store_true", help="Disable generating PDF figures.")
-    # New argument: fixed excision rate. When provided, ignore --rate, --generations, gene weights, and selection coefficient.
-    parser.add_argument("--fix_ex", type=float, help="If provided, use this fixed excision rate to calculate the number of TE excisions as: fix_ex * genome_size * generations.")
-    # New argument: selection coefficient for gene-disrupting TEs.
-    parser.add_argument("--sel_coeff", type=float, default=0.0, help="Selection coefficient to weight excision of gene-disrupting TEs.")
-    # New arguments for chromatin bias in rate mode.
-    parser.add_argument("--euch_het_buffer", type=int, default=0,
-                        help="Buffer (in bp) around gene features to be considered euchromatin. Only interpreted in rate mode.")
-    parser.add_argument("--euch_het_bias", type=float, default=1.0,
-                        help="Bias factor to increase probability of TE excision in euchromatin. Only interpreted in rate mode.")
-    # New argument for multiprocessing: max number of chromosomes processed in parallel.
-    parser.add_argument("-m", type=int, default=1, help="Maximum number of chromosomes to process in parallel.")
+    parser.add_argument("--fix_ex", type=float, help="Fixed excision rate: fix_ex * genome_size * generations.")
+    parser.add_argument("--sel_coeff", type=float, default=0.0, help="Selection coefficient for gene-disrupting TEs.")
+    parser.add_argument("--euch_het_buffer", type=int, default=0, help="Buffer (bp) around genes for euchromatin.")
+    parser.add_argument("--euch_het_bias", type=float, default=1.0, help="Bias factor for euchromatic excision.")
+    parser.add_argument("-m", "--max-chrom", type=int, default=1, help="Max number of chromosomes to process in parallel.")
     args = parser.parse_args()
 
     random.seed(args.seed)
     np.random.seed(args.seed)
 
-    print("Parsing genome FASTA...")
+    # Load data
     genome_records = parse_fasta(args.genome)
-    # Calculate genome_size: total number of bases in the genome.
     genome_size = sum(len(rec.seq) for rec in genome_records.values())
-    print(f"Genome size (total bases): {genome_size}")
-
-    print("Parsing BED file...")
     entries = parse_bed(args.bed)
 
-    # Extract unique geneIDs (feature_IDs beginning with 'gene') from the BED entries.
+    # Gene weights
     unique_genes = {e.feature_id for e in entries if e.feature_id.startswith("gene")}
-    gene_sel_file = "./gene_selection.tsv"
     gene_weights = {}
-    if os.path.exists(gene_sel_file):
-        print(f"Loading gene selection weights from {gene_sel_file} ...")
-        with open(gene_sel_file) as f:
+    sel_file = "./gene_selection.tsv"
+    if os.path.exists(sel_file):
+        with open(sel_file) as f:
             for line in f:
-                parts = line.strip().split("\t")
-                if len(parts) == 2:
-                    gene_weights[parts[0]] = float(parts[1])
+                g, w = line.strip().split("\t")
+                gene_weights[g] = float(w)
     else:
-        # Only generate synthetic gene weights if fixed excision rate is not used
         if args.fix_ex is None:
-            print(f"{gene_sel_file} not found. Generating synthetic gene selection weights ...")
             mu = args.sigma ** 2
-            # Use sorted list of unique genes to ensure deterministic ordering.
-            for gene in sorted(unique_genes):
-                gene_weights[gene] = random.lognormvariate(mu, args.sigma)
-            with open(gene_sel_file, "w") as f:
-                for gene, weight in gene_weights.items():
-                    f.write(f"{gene}\t{weight:.4f}\n")
-            print(f"Synthetic gene selection weights written to {gene_sel_file}")
-        else:
-            print("Fixed excision rate provided (--fix_ex), so gene weights generation is bypassed.")
+            for g in sorted(unique_genes):
+                gene_weights[g] = random.lognormvariate(mu, args.sigma)
+            with open(sel_file, "w") as f:
+                for g, w in gene_weights.items():
+                    f.write(f"{g}\t{w:.4f}\n")
 
-    # Optionally generate log-normal distribution figure.
+    # Figures
     if not args.no_fig and args.fix_ex is None:
         plot_lognormal(args.sigma, "lognormal_distribution.pdf")
 
-    print("Classifying BED entries...")
+    # Classification and nested groups
     entries, nest_groups = classify_entries(entries)
 
-    # For plotting the weighted candidate selection curve, determine Lmax from eligible entries.
-    eligible_entries = [e for e in entries if e.subtype in ["NON_NEST_GROUP_TE", "CUT_PAIR_TE_1", "CUT_PAIR_TE_2",
-                                                           "NEST_TE_IN_TE", "NEST_TE_IN_GENE"]]
-    if eligible_entries:
+    # Weighted candidate curve
+    eligible_entries = [e for e in entries if e.subtype in [
+        "NON_NEST_GROUP_TE", "CUT_PAIR_TE_1", "CUT_PAIR_TE_2",
+        "NEST_TE_IN_TE", "NEST_TE_IN_GENE"
+    ]]
+    if eligible_entries and not args.no_fig:
         Lmax = max(e.length() for e in eligible_entries)
-        if not args.no_fig:
-            plot_weighted_candidate_curve(args.k, Lmax, "weighted_candidate_selection.pdf")
-    else:
-        print("No eligible entries for weighted candidate selection curve plot.")
+        plot_weighted_candidate_curve(args.k, Lmax, "weighted_candidate_selection.pdf")
 
-    # Determine the number of excisions.
+    # Total excision count
     if args.fix_ex is not None:
         lambda_val = args.fix_ex * genome_size * args.generations
         excision_count = np.random.poisson(lambda_val)
-        print(f"Using fixed excision rate: {args.fix_ex}")
-        print(f"Lambda for Poisson (fix_ex mode): {lambda_val:.4f}")
-        print(f"Calculated number of TE excisions: {excision_count}")
     else:
         excision_count = calculate_excision_count(entries, args.rate, args.generations, gene_weights)
-    
-    # Build euchromatin intervals if in rate mode and a buffer is specified.
+
+    print(f"Calculated number of TE excisions: {excision_count}")
+
+    # Chromatin intervals
     euch_intervals = None
     if args.fix_ex is None and args.euch_het_buffer > 0:
         euch_intervals = build_euchromatin_intervals(entries, args.euch_het_buffer)
-    
-    removals = parallel_select_removals(
-        entries=entries,
-        nest_groups=nest_groups,
-        rate=args.rate,
-        generations=args.generations,
-        gene_weights=gene_weights,
-        sel_coeff=args.sel_coeff,
-        euch_intervals=euch_intervals,
-        euch_het_bias=args.euch_het_bias,
-        seed=args.seed,
-        k=args.k,
-        max_proc=args.m,
-        fix_ex=args.fix_ex,
-        genome_size=genome_size
-    )
-    # Print removal events in a sorted order for determinism.
-    print("Selected removal events:")
-    for e in sorted(removals, key=lambda x: (x.chrom, x.start, x.end, x.lineno)):
-        print(f" - {e.chrom}:{e.start}-{e.end}, {e.feature_id}, subtype: {e.subtype}, length: {e.length()}")
 
-    print("Simulating excisions and updating coordinates...")
-    updated_genome, updated_bed = simulate_excision(genome_records, entries, nest_groups, removals, args.soloLTR_freq, args.m, args.seed)
+    # Decide parallel vs sequential
+    chroms = sorted(genome_records.keys())
+    if args.max_chrom > 1 and len(chroms) > 1:
+        # Split entries and groups by chromosome
+        entries_by_chrom = defaultdict(list)
+        for e in entries:
+            entries_by_chrom[e.chrom].append(e)
+        nest_by_chrom = defaultdict(dict)
+        for gid, grp in nest_groups.items():
+            c = grp[0].chrom
+            nest_by_chrom[c][gid] = grp
 
-    # Failsafe: Consolidate adjacent gene entries that share the same feature_ID.
-    updated_bed = fail_safe_consolidation(updated_bed)
+        # Count eligible per chrom
+        elig_counts = {c: sum(1 for e in entries_by_chrom[c] if e.subtype in [
+            "NON_NEST_GROUP_TE", "CUT_PAIR_TE_1", "CUT_PAIR_TE_2",
+            "NEST_TE_IN_TE", "NEST_TE_IN_GENE"
+        ]) for c in chroms}
+        total_elig = sum(elig_counts.values()) or 1
 
+        # Allocate per-chrom excisions
+        exact = {c: excision_count * elig_counts[c] / total_elig for c in chroms}
+        floors = {c: math.floor(exact[c]) for c in chroms}
+        rem = excision_count - sum(floors.values())
+        fracs = sorted(chroms, key=lambda c: exact[c] - floors[c], reverse=True)
+        exc_per_chrom = floors.copy()
+        for c in fracs[:rem]:
+            exc_per_chrom[c] += 1
+
+        # Prepare tasks
+        tasks = []
+        for idx, c in enumerate(chroms):
+            tasks.append((
+                c,
+                entries_by_chrom[c],
+                genome_records[c],
+                nest_by_chrom.get(c, {}),
+                exc_per_chrom[c],
+                args.seed + idx,
+                args.k,
+                gene_weights,
+                args.generations,
+                args.sel_coeff,
+                euch_intervals,
+                args.euch_het_bias,
+                args.soloLTR_freq
+            ))
+
+        # Run in parallel
+        updated_genome = {}
+        updated_entries = []
+        with concurrent.futures.ProcessPoolExecutor(max_workers=args.max_chrom) as exe:
+            for ug, ue in exe.map(process_chrom, tasks):
+                updated_genome.update(ug)
+                updated_entries.extend(ue)
+    else:
+        # Single-threaded path
+        removals = select_removals(
+            entries, nest_groups, excision_count, args.seed,
+            args.k, gene_weights, args.generations, args.sel_coeff,
+            euch_intervals=euch_intervals, euch_het_bias=args.euch_het_bias
+        )
+        random.seed(args.seed + 1)
+        updated_genome, updated_entries = simulate_excision(
+            genome_records, entries, nest_groups, removals, args.soloLTR_freq
+        )
+
+    # Failsafe consolidation and output
+    final_bed = fail_safe_consolidation(updated_entries)
     write_fasta(updated_genome, args.output)
-    write_bed(updated_bed, args.output)
+    write_bed(final_bed, args.output)
 
 if __name__ == "__main__":
     main()
