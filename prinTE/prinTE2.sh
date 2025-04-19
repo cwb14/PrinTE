@@ -60,14 +60,6 @@ TOOL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 BIN_DIR="${TOOL_DIR}/bin"
 UTIL_DIR="${TOOL_DIR}/util"
 
-# --- Log file names ---
-LOG="pipeline.log"
-ERR="pipeline.error"
-echo "Pipeline started at $(date)" > "$LOG"
-echo "Pipeline started at $(date)" > "$ERR"
-# --- Modification (1): Log the command used to run the script ---
-echo "Command: $0 $@" >> "$LOG"
-
 # --- Temporary files array (for unzipped inputs) ---
 temp_files=()
 cleanup() {
@@ -160,6 +152,26 @@ Example:
   $(basename "$0") -st 1000 -ge 3000
 EOF
 }
+
+#—-----------------------------------------
+# if no args or any of -h, --h, -help, --help, print help and exit
+if [[ $# -eq 0 \
+   || "$1" == "-h"  \
+   || "$1" == "--h" \
+   || "$1" == "-help" \
+   || "$1" == "--help" ]]; then
+  print_help
+  exit 0
+fi
+#—-----------------------------------------
+
+# --- Log file names ---
+LOG="pipeline.log"
+ERR="pipeline.error"
+echo "Pipeline started at $(date)" > "$LOG"
+echo "Pipeline started at $(date)" > "$ERR"
+# --- Modification (1): Log the command used to run the script ---
+echo "Command: $0 $@" >> "$LOG"
 
 # --- Parse command-line options ---
 # Initialize flags and new parameters with defaults.
@@ -395,6 +407,19 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# (C) Extract only intact TEs into a cleaned library
+echo "=== Extracting intact TEs to lib_clean.fa ===" | tee -a "$LOG"
+cmd="python ${BIN_DIR}/extract_intact_TEs.py --lib lib.fa --out_fasta lib_clean.fa"
+echo "Running: $cmd" | tee -a "$LOG"
+eval $cmd >> "$LOG" 2>> "$ERR"
+if [ $? -ne 0 ]; then
+    echo "Error running extract_intact_TEs.py" | tee -a "$ERR"
+    exit 1
+fi
+
+# Now use lib_clean.fa for all downstream insertions
+clean_lib="lib_clean.fa"
+
 ###############################################################################
 # Phase 1: Burn-in Genome Generation (only if no external BED/FASTA provided)
 ###############################################################################
@@ -416,7 +441,7 @@ if [[ "$skip_burnin" -eq 0 ]]; then
     fi
 
     # (1b) Insert TEs into the synthetic genome using the parallel version.
-    cmd="python ${BIN_DIR}/shared_ltr_inserter_parallel.py -genome backbone.fa -TE lib.fa"
+    cmd="python ${BIN_DIR}/shared_ltr_inserter_parallel.py -genome backbone.fa -TE ${clean_lib}"
     if [[ -n "$TE_percent" ]]; then
         cmd+=" -p ${TE_percent}"
     else
@@ -464,6 +489,9 @@ fi
 seed_list=($(python -c "import random; random.seed(${seed}); print(' '.join([str(random.randint(1,10000)) for _ in range(${iterations})]))"))
 echo "Seed list for Phase 2 iterations: ${seed_list[@]}" | tee -a "$LOG"
 
+# Initialize prev_lib for first generation
+prev_lib="lib_clean.fa"
+
 for (( i=start_iter; i<=iterations; i++ )); do
   # Calculate the true generation number for file naming.
   current_gen=$(( i * step ))
@@ -502,7 +530,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
   # (2b) Insert new TEs (allowing for nesting) using the parallel nest inserter.
   # Now using nest_inserter_parallel2.py and adding --disable_genes if specified.
   nest_prefix="gen${current_gen}_nest"
-  cmd="python ${BIN_DIR}/nest_inserter_parallel2.py --genome ${mut_prefix}.fa --TE lib.fa --generations ${step} --bed ${prev_bed} --output ${nest_prefix} --seed ${current_seed} --rate ${insert_rate} ${extra_fix_in} --TE_ratio ${TE_ratio} -bf burnin.stat --birth_rate ${birth_rate}"
+  cmd="python ${BIN_DIR}/nest_inserter_parallel2.py --genome ${mut_prefix}.fa --TE ${prev_lib} --generations ${step} --bed ${prev_bed} --output ${nest_prefix} --seed ${current_seed} --rate ${insert_rate} ${extra_fix_in} --TE_ratio ${TE_ratio} -bf burnin.stat --birth_rate ${birth_rate}"
   cmd+=" --euch_het_bias ${euch_bias_insert} --euch_het_buffer ${euch_buffer} -m ${threads}"
   if [[ $disable_genes -eq 1 ]]; then
     cmd+=" --disable_genes"
@@ -532,6 +560,27 @@ for (( i=start_iter; i<=iterations; i++ )); do
     echo "Removing temporary files for generation ${current_gen}" | tee -a "$LOG"
     rm -f "${mut_prefix}.fa" "${nest_prefix}.bed" "${nest_prefix}.fasta"
   fi
+  
+  # (2d) Build the new per‑gen TE library
+  echo "=== Extracting intact TEs for generation ${current_gen} into lib file ===" | tee -a "$LOG"
+  cmd="python ${BIN_DIR}/extract_intact_TEs.py \
+    --genome gen${current_gen}_final.fasta \
+    --bed    gen${current_gen}_final.bed \
+    --out_fasta gen${current_gen}_final.lib"
+  echo "Running: $cmd" | tee -a "$LOG"
+  eval $cmd >> "$LOG" 2>> "$ERR"
+  if [ $? -ne 0 ]; then
+      echo "Error running extract_intact_TEs.py for generation ${current_gen}" | tee -a "$ERR"
+      exit 1
+  fi
+
+  # clean up the *previous* lib file unless the user wants to keep temps
+  if [[ "$keep_temps" -ne 1 && "$prev_lib" != "lib_clean.fa" ]]; then
+    rm -f "$prev_lib"
+  fi
+
+  # point to the newly built library for the next iteration
+  prev_lib="gen${current_gen}_final.lib"
 
 done
 
