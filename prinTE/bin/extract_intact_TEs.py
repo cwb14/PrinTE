@@ -1,54 +1,88 @@
 #!/usr/bin/env python3
 
+
 # Extracts an updated TE library from bed and fasta. 
 # Non-LTRs are extracted directly.
 # LTR-RTs are modified so that the 3' LTR matches the 5' LTR.
 # Script works well, but some minor confusion when seq_divergence.py has a tough time identifying exact LTR lengths (probably doesnt matter).
 # To resolve, I can consider pre-processing TE library such that the 5' and 3' LTRs are forced to be exactly identical and exact specified length. # I added library mode to do this.
-# Need to incorporate this into the pipeline so that TEs are not drawn from the ancestral library every generation. 
+# Our length based deletions leads to pereferential loss of long elements. I added '--weight_by' to offset this. The fasta provided here is the base TE library. 
 
+"""
+extract_te_with_weighted_sampling.py
 
+Extracts TE sequences from a genome (--bed + --genome) or processes a TE library (--lib),
+with optional length-weighted resampling to match a guide distribution.
+
+Usage:
+  Genome mode:
+    extract_te_with_weighted_sampling.py --bed file1.bed file2.bed --genome genome.fa \
+        --out_fasta out.fa [--weight_by guide.fa] [--plot_kde_comparison]
+  Library mode:
+    extract_te_with_weighted_sampling.py --lib te_library.fa --out_fasta out.fa
+
+Options:
+  -h, --help            Show this help message and exit
+  --h, -help            Show this help message and exit (aliases)
+  --bed BED [BED ...]   One or more BED files specifying TE coordinates (genome mode)
+  --genome FASTA        Reference genome FASTA (required with --bed)
+  --lib FASTA           TE library FASTA to correct LTR ends (library mode)
+  --out_fasta FILE      Output FASTA path (required)
+  --weight_by FASTA     Guide FASTA whose length distribution is targeted
+  --plot_kde_comparison Save KDE comparison plot as <out_basename>_kde_comparison.pdf
+
+Functions:
+  parse_line           Parse a BED line into fields
+  parse_attributes     Split NAME field into feature_id and attributes
+  extract_TE_info      Decode feature_id into (name, class, superfamily, ltr_len)
+  process_bed_file     Classify BED records into intact/fragmented TEs & genes
+  load_genome          Load genome FASTA into a dict
+  extract_intact_TEs   Extract and LTR-fix intact TE sequences
+  process_library_fasta  Fix LTR ends in an existing library FASTA
+  write_fasta          Write sequences to FASTA with line-wrapping
+  weighted_resample    KDE-based importance sampling & optional plotting
+  main                 Entry point: parse args and dispatch modes
+"""
 import argparse
 import os
+import sys
+import numpy as np
+from scipy.stats import gaussian_kde
+import matplotlib.pyplot as plt
 from Bio import SeqIO
 from Bio.Seq import Seq
 
 def parse_line(line):
-    """Parse a BED line into its columns."""
+    """
+    Parse a BED line into its 6 mandatory columns.
+    Returns a dict or None if invalid.
+    """
     parts = line.strip().split("\t")
     if len(parts) < 6:
         return None
     chrom, start, end, name, tsd, strand = parts[:6]
-    return {
-        'chrom': chrom,
-        'start': start,
-        'end': end,
-        'name': name,
-        'tsd': tsd,
-        'strand': strand
-    }
+    return {'chrom': chrom, 'start': start, 'end': end, 'name': name,
+            'tsd': tsd, 'strand': strand}
+
 
 def parse_attributes(name):
     """
-    Split the NAME into feature_ID and additional attributes.
-    If no semicolon is present, feature_ID is the entire name.
+    Split the NAME field into feature_id before ';' and list of additional attrs.
     """
     if ";" in name:
         parts = name.split(";")
-        feature_id = parts[0]
-        additional = parts[1:]
-    else:
-        feature_id = name
-        additional = []
-    return feature_id, additional
+        return parts[0], parts[1:]
+    return name, []
+
 
 def extract_TE_info(feature_id):
     """
-    Extract TE information from feature_id.
-    Expected format for LTRs: TE_name#LTR/TE_superfamily~LTRlen:X 
-    For non-LTRs, any content after "~" is ignored.
-    Returns:
-      te_name, te_class, te_superfamily, ltr_len (int or None)
+    From a feature_id like "TE#LTR/Super~LTRlen:100", extract:
+      - te_name (before '#')
+      - te_class (e.g., 'LTR')
+      - te_superfamily
+      - ltr_len (int) or None
+    Returns (te_name, te_class, te_superfamily, ltr_len).
     """
     try:
         te_name, rest = feature_id.split("#", 1)
@@ -58,14 +92,15 @@ def extract_TE_info(feature_id):
             te_superfamily, ltr_info = remainder.split("~", 1)
             if ltr_info.startswith("LTRlen:"):
                 try:
-                    ltr_len = int(ltr_info[len("LTRlen:"):])
+                    ltr_len = int(ltr_info.split(':', 1)[1])
                 except ValueError:
                     ltr_len = None
         else:
-            te_superfamily = remainder.split("~")[0] if "~" in remainder else remainder
+            te_superfamily = remainder.split("~")[0]
         return te_name, te_class, te_superfamily, ltr_len
     except Exception:
         return None, None, None, None
+
 
 def process_bed_file(bed_file):
     """
@@ -83,15 +118,12 @@ def process_bed_file(bed_file):
             rec = parse_line(line)
             if not rec:
                 continue
-            feature_id, additional = parse_attributes(rec['name'])
-            rec.update({
-                'feature_id': feature_id,
-                'additional': additional,
-                'category': None
-            })
+            fid, attrs = parse_attributes(rec['name'])
+            rec.update({'feature_id': fid, 'additional': attrs,
+                        'category': None})
             records.append(rec)
 
-    # 1st pass: gene vs TE candidates
+    # Initial classification
     for rec in records:
         fid, add = rec['feature_id'], rec['additional']
         if fid.startswith("gene"):
@@ -104,33 +136,38 @@ def process_bed_file(bed_file):
             else:
                 rec['category'] = "Potential intact TE"
 
-    # rule (3): pair up potential intact TEs by TSD & strand & name‐prefix
+    # Pair potential intact TEs to reclassify as fragmented if needed
     for i, rec in enumerate(records):
-        if rec['category']=="Potential intact TE" and rec['additional']:
-            for j in range(max(0, i-100), min(len(records), i+101)):
-                if i==j: continue
-                other = records[j]
-                if other['feature_id'].startswith("gene"): continue
-                if (other['tsd']==rec['tsd'] and
-                    other['strand']==rec['strand'] and
-                    (rec['name'].startswith(other['name']) or
-                     other['name'].startswith(rec['name']))):
-                    rec['category']="Fragmented TE"
-                    break
+        if rec['category'] != "Potential intact TE":
+            continue
+        for j in range(max(0, i - 100), min(len(records), i + 101)):
+            if i == j:
+                continue
+            other = records[j]
+            if other['feature_id'].startswith("gene"):
+                continue
+            if (other['tsd'] == rec['tsd'] and
+                other['strand'] == rec['strand'] and
+                (rec['name'].startswith(other['name']) or
+                 other['name'].startswith(rec['name']))):
+                rec['category'] = "Fragmented TE"
+                break
 
-    # finalize intact TEs
+    # Finalize intact TEs
     for rec in records:
-        if rec['category']=="Potential intact TE":
-            rec['category']="Intact TE"
+        if rec['category'] == "Potential intact TE":
+            rec['category'] = "Intact TE"
 
     return records
 
+
 def load_genome(genome_fasta):
-    """Load genome FASTA into a dict of SeqRecords."""
+    """Load genome FASTA into dict {seqid: Seq}."""
     genome = {}
     for rec in SeqIO.parse(genome_fasta, "fasta"):
         genome[rec.id] = rec.seq
     return genome
+
 
 def extract_intact_TEs(records, genome):
     """
@@ -154,25 +191,23 @@ def extract_intact_TEs(records, genome):
     """
     out = []
     for rec in records:
-        if rec['category']!="Intact TE":
+        if rec['category'] != "Intact TE":
             continue
-        chrom = rec['chrom']
-        start, end = int(rec['start']), int(rec['end'])
-        if chrom not in genome:
+        seq = str(genome.get(rec['chrom'], "")[int(rec['start']):int(rec['end'])])
+        if not seq:
             continue
-        seq = str(genome[chrom][start:end])
-        if rec['strand']=="-":
+        if rec['strand'] == "-":
             seq = str(Seq(seq).reverse_complement())
 
         _, te_class, _, ltr_len = extract_TE_info(rec['feature_id'])
-        if te_class=="LTR" and ltr_len and len(seq)>=2*ltr_len:
+        if te_class == "LTR" and ltr_len and len(seq) >= 2 * ltr_len:
             five = seq[:ltr_len]
-            internal = seq[ltr_len:len(seq)-ltr_len]
+            internal = seq[ltr_len:-ltr_len]
             seq = five + internal + five
 
-        header = rec['name']
-        out.append((header, seq))
+        out.append((rec['name'], seq))
     return out
+
 
 def process_library_fasta(lib_fasta):
     """
@@ -181,16 +216,16 @@ def process_library_fasta(lib_fasta):
     """
     out = []
     for rec in SeqIO.parse(lib_fasta, "fasta"):
-        header = rec.description    # full header line, no leading '>'
+        header = rec.description
         seq = str(rec.seq)
-        feature_id, _ = parse_attributes(header)
-        _, te_class, _, ltr_len = extract_TE_info(feature_id)
-        if te_class=="LTR" and ltr_len and len(seq)>=2*ltr_len:
+        _, te_class, _, ltr_len = extract_TE_info(header.split()[0])
+        if te_class == "LTR" and ltr_len and len(seq) >= 2 * ltr_len:
             five = seq[:ltr_len]
-            internal = seq[ltr_len:len(seq)-ltr_len]
+            internal = seq[ltr_len:-ltr_len]
             seq = five + internal + five
         out.append((header, seq))
     return out
+
 
 def write_fasta(entries, out_file):
     """Write (header, seq) pairs to FASTA, wrapping at 60 bp."""
@@ -200,41 +235,104 @@ def write_fasta(entries, out_file):
             for i in range(0, len(seq), 60):
                 f.write(seq[i:i+60] + "\n")
 
+
+def weighted_resample(entries, guide_fasta, out_base, plot=False, seed=42):
+    """
+    Perform KDE-based importance sampling:
+      1. Estimate density of TE lengths and guide lengths (Scott's rule).
+      2. Compute weights = density_guide / density_te.
+      3. Resample with replacement by normalized weights.
+      4. Optional: plot KDE comparison to PDF.
+    """
+    te_lengths = np.array([len(seq) for (_, seq) in entries])
+    guide_lengths = np.array([len(r.seq) for r in SeqIO.parse(guide_fasta, "fasta")])
+
+    kde_te = gaussian_kde(te_lengths, bw_method='scott')
+    kde_guide = gaussian_kde(guide_lengths, bw_method='scott')
+
+    dens_te = kde_te(te_lengths)
+    dens_guide = kde_guide(te_lengths)
+    weights = dens_guide / (dens_te + 1e-8)
+    probs = weights / np.sum(weights)
+
+    np.random.seed(seed)
+    idx = np.random.choice(len(entries), size=len(entries), replace=True, p=probs)
+    resampled = [entries[i] for i in idx]
+
+    print(f"Raw sequences: {len(entries)}; Resampled: {len(resampled)}", flush=True)
+
+    if plot:
+        sampled = np.array([len(seq) for (_, seq) in resampled])
+        x = np.linspace(min(te_lengths.min(), guide_lengths.min()),
+                        max(te_lengths.max(), guide_lengths.max()), 1000)
+        plt.figure()
+        plt.plot(x, kde_te(x), label='Original TE')
+        plt.plot(x, kde_guide(x), label='Guide')
+        plt.plot(x, gaussian_kde(sampled, bw_method='scott')(x), label='Resampled')
+        plt.xlabel('Sequence length')
+        plt.ylabel('Density')
+        plt.legend()
+        pdf = f"{out_base}_kde_comparison.pdf"
+        plt.savefig(pdf)
+        plt.close()
+        print(f"KDE plot saved to {pdf}", flush=True)
+
+    return resampled
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Two modes: genome mode (--bed + --genome) extracts and fixes LTRs from genome+BED; "
-                    "library mode (--lib) fixes LTRs in a supplied TE library FASTA."
-                    "For TEs with TE_class = LTR, special extraction is applied based on LTR length. "
-                    "Genome mode extracts intact TEs from BED files using a genome FASTA. "
-                    "Sequences on the minus strand are reverse complemented. "
-                    "The FASTA header is taken from the BED NAME field."
+        description="Extract TE sequences (genome or library mode) with optional length-weighted sampling",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  Genome mode, no weighting:
+    script.py --bed my.bed --genome genome.fa --out_fasta te.fa
+  Genome mode, weight by guide:
+    script.py --bed a.bed b.bed --genome gen.fa --weight_by guide.fa --out_fasta out.fa --plot_kde_comparison
+  Library mode:
+    script.py --lib lib.fa --out_fasta fixed_lib.fa
+"""
     )
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--lib", help="Library‐mode: input TE library FASTA")
-    mode.add_argument("--bed", nargs="+", help="Genome‐mode: input BED file(s)")
-    parser.add_argument("--genome", help="Genome FASTA (required with --bed)")
-    parser.add_argument("--out_fasta", required=True, help="Output FASTA")
+    # Help aliases
+    parser.add_argument('--h', '-help', action='help', help='Show this help message and exit')
+
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--lib', help='Library-mode input FASTA')
+    group.add_argument('--bed', nargs='+', help='Genome-mode input BED file(s)')
+
+    parser.add_argument('--genome', help='Genome FASTA (required with --bed)')
+    parser.add_argument('--out_fasta', required=True, help='Output FASTA path')
+    parser.add_argument('--weight_by', help='Guide FASTA for length-weighted sampling')
+    parser.add_argument('--plot_kde_comparison', action='store_true',
+                        help='Save KDE comparison plot to PDF')
+
     args = parser.parse_args()
 
+    # Dispatch modes
     if args.lib:
         entries = process_library_fasta(args.lib)
-        write_fasta(entries, args.out_fasta)
-        print(f"Processed {len(entries)} library entries → {args.out_fasta}", flush=True)
-
     else:
-        # genome mode
         if not args.genome:
-            parser.error("--genome is required when using --bed")
+            parser.error('--genome is required when using --bed')
         genome = load_genome(args.genome)
-        all_entries = []
+        recs, entries = [], []
         for b in args.bed:
-            recs = process_bed_file(b)
-            all_entries.extend(extract_intact_TEs(recs, genome))
-        if not all_entries:
-            print("No intact TE entries found.", flush=True)
-        else:
-            write_fasta(all_entries, args.out_fasta)
-            print(f"Extracted {len(all_entries)} intact TE entries → {args.out_fasta}", flush=True)
+            recs.extend(process_bed_file(b))
+        entries = extract_intact_TEs(recs, genome)
 
-if __name__ == "__main__":
+        if not entries:
+            print('No intact TE entries found.', file=sys.stderr)
+            sys.exit(1)
+
+        if args.weight_by:
+            base = os.path.splitext(os.path.basename(args.out_fasta))[0]
+            entries = weighted_resample(entries, args.weight_by,
+                                        out_base=base,
+                                        plot=args.plot_kde_comparison)
+
+    write_fasta(entries, args.out_fasta)
+    print(f"Processed {len(entries)} entries → {args.out_fasta}", flush=True)
+
+if __name__ == '__main__':
     main()
