@@ -29,6 +29,7 @@ Options:
   --lib FASTA           TE library FASTA to correct LTR ends (library mode)
   --out_fasta FILE      Output FASTA path (required)
   --weight_by FASTA     Guide FASTA whose length distribution is targeted
+  --duplication_mode    Retain all original sequences and duplicate additional copies according to importance weights (only with --weight_by)
   --plot_kde_comparison Save KDE comparison plot as <out_basename>_kde_comparison.pdf
 
 Functions:
@@ -236,15 +237,13 @@ def write_fasta(entries, out_file):
                 f.write(seq[i:i+60] + "\n")
 
 
-def weighted_resample(entries, guide_fasta, out_base, plot=False, seed=42):
+def weighted_resample(entries, guide_fasta, out_base, plot=False, seed=42, duplication_mode=False):
     """
-    Perform KDE-based importance sampling with minimal duplication:
+    Perform KDE-based importance sampling:
       1. Estimate density of TE lengths and guide lengths (Scott's rule).
       2. Compute weights = density_guide / density_te.
-      3. Sort entries by weight descending.
-      4. Select top unique sequences (no duplicates), then fill remaining slots
-         with weighted sampling allowing minimal repetition.
-      5. Optional: plot KDE comparison to PDF.
+      3. Resample with replacement by normalized weights.
+      4. Optional: plot KDE comparison to PDF.
     """
     te_lengths = np.array([len(seq) for (_, seq) in entries])
     guide_lengths = np.array([len(r.seq) for r in SeqIO.parse(guide_fasta, "fasta")])
@@ -255,39 +254,32 @@ def weighted_resample(entries, guide_fasta, out_base, plot=False, seed=42):
     dens_te = kde_te(te_lengths)
     dens_guide = kde_guide(te_lengths)
     weights = dens_guide / (dens_te + 1e-8)
-    probs = weights / np.sum(weights)
 
-    np.random.seed(seed)
-
-    # Sort entries by highest probability (importance)
-    sorted_indices = np.argsort(probs)[::-1]
-    unique_entries = []
-    seen_headers = set()
-
-    # First fill with high-importance, non-duplicate sequences
-    for i in sorted_indices:
-        header, seq = entries[i]
-        if header not in seen_headers:
-            unique_entries.append((header, seq))
-            seen_headers.add(header)
-        if len(unique_entries) >= len(entries):
-            break
-
-    # Fill remaining by sampling (allowing some duplication)
-    remaining = len(entries) - len(unique_entries)
-    if remaining > 0:
-        idx = np.random.choice(len(entries), size=remaining, replace=True, p=probs)
-        sampled = [entries[i] for i in idx]
-        final_entries = unique_entries + sampled
+    if duplication_mode:
+        # Determine duplication counts: scale by mean weight
+        mean_w = np.mean(weights)
+        counts = np.maximum(1, np.rint(weights / mean_w).astype(int))
+        duplicated = []
+        for idx, count in enumerate(counts):
+            duplicated.extend([entries[idx]] * count)
+        orig = len(entries)
+        dup_total = len(duplicated) - orig
+        print(f"Original sequences: {orig}")
+        print(f"Duplicated sequences: {dup_total}")
+        print(f"Total sequences after duplication: {len(duplicated)}", flush=True)
+        resampled = duplicated
     else:
-        final_entries = unique_entries[:len(entries)]
-
-    print(f"Raw sequences: {len(entries)}; Unique selected: {len(unique_entries)}; Final total: {len(final_entries)}", flush=True)
+        probs = weights / np.sum(weights)
+        np.random.seed(seed)
+        idx = np.random.choice(len(entries), size=len(entries), replace=True, p=probs)
+        resampled = [entries[i] for i in idx]
+        print(f"Raw sequences: {len(entries)}; Resampled: {len(resampled)}", flush=True)
 
     if plot:
-        sampled_lengths = np.array([len(seq) for (_, seq) in final_entries])
-        x = np.linspace(min(te_lengths.min(), guide_lengths.min()),
-                        max(te_lengths.max(), guide_lengths.max()), 1000)
+        sampled_lengths = np.array([len(seq) for (_, seq) in resampled])
+        x = np.linspace(
+            min(te_lengths.min(), guide_lengths.min()),
+            max(te_lengths.max(), guide_lengths.max()), 1000)
         plt.figure()
         plt.plot(x, kde_te(x), label='Original TE')
         plt.plot(x, kde_guide(x), label='Guide')
@@ -300,23 +292,13 @@ def weighted_resample(entries, guide_fasta, out_base, plot=False, seed=42):
         plt.close()
         print(f"KDE plot saved to {pdf}", flush=True)
 
-    return final_entries
+    return resampled
 
 def main():
     parser = argparse.ArgumentParser(
         description="Extract TE sequences (genome or library mode) with optional length-weighted sampling",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  Genome mode, no weighting:
-    script.py --bed my.bed --genome genome.fa --out_fasta te.fa
-  Genome mode, weight by guide:
-    script.py --bed a.bed b.bed --genome gen.fa --weight_by guide.fa --out_fasta out.fa --plot_kde_comparison
-  Library mode:
-    script.py --lib lib.fa --out_fasta fixed_lib.fa
-"""
     )
-    # Help aliases
     parser.add_argument('--h', '-help', action='help', help='Show this help message and exit')
 
     group = parser.add_mutually_exclusive_group(required=True)
@@ -326,19 +308,20 @@ Examples:
     parser.add_argument('--genome', help='Genome FASTA (required with --bed)')
     parser.add_argument('--out_fasta', required=True, help='Output FASTA path')
     parser.add_argument('--weight_by', help='Guide FASTA for length-weighted sampling')
+    parser.add_argument('--duplication_mode', action='store_true',
+                        help='Retain all original sequences and duplicate additional copies according to importance weights (only with --weight_by)')
     parser.add_argument('--plot_kde_comparison', action='store_true',
                         help='Save KDE comparison plot to PDF')
 
     args = parser.parse_args()
 
-    # Dispatch modes
     if args.lib:
         entries = process_library_fasta(args.lib)
     else:
         if not args.genome:
             parser.error('--genome is required when using --bed')
         genome = load_genome(args.genome)
-        recs, entries = [], []
+        recs = []
         for b in args.bed:
             recs.extend(process_bed_file(b))
         entries = extract_intact_TEs(recs, genome)
@@ -349,9 +332,13 @@ Examples:
 
         if args.weight_by:
             base = os.path.splitext(os.path.basename(args.out_fasta))[0]
-            entries = weighted_resample(entries, args.weight_by,
-                                        out_base=base,
-                                        plot=args.plot_kde_comparison)
+            entries = weighted_resample(
+                entries,
+                args.weight_by,
+                out_base=base,
+                plot=args.plot_kde_comparison,
+                duplication_mode=args.duplication_mode
+            )
 
     write_fasta(entries, args.out_fasta)
     print(f"Processed {len(entries)} entries → {args.out_fasta}", flush=True)
