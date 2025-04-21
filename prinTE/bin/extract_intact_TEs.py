@@ -238,11 +238,13 @@ def write_fasta(entries, out_file):
 
 def weighted_resample(entries, guide_fasta, out_base, plot=False, seed=42):
     """
-    Perform KDE-based importance sampling:
+    Perform KDE-based importance sampling with minimal duplication:
       1. Estimate density of TE lengths and guide lengths (Scott's rule).
       2. Compute weights = density_guide / density_te.
-      3. Resample with replacement by normalized weights.
-      4. Optional: plot KDE comparison to PDF.
+      3. Sort entries by weight descending.
+      4. Select top unique sequences (no duplicates), then fill remaining slots
+         with weighted sampling allowing minimal repetition.
+      5. Optional: plot KDE comparison to PDF.
     """
     te_lengths = np.array([len(seq) for (_, seq) in entries])
     guide_lengths = np.array([len(r.seq) for r in SeqIO.parse(guide_fasta, "fasta")])
@@ -256,19 +258,40 @@ def weighted_resample(entries, guide_fasta, out_base, plot=False, seed=42):
     probs = weights / np.sum(weights)
 
     np.random.seed(seed)
-    idx = np.random.choice(len(entries), size=len(entries), replace=True, p=probs)
-    resampled = [entries[i] for i in idx]
 
-    print(f"Raw sequences: {len(entries)}; Resampled: {len(resampled)}", flush=True)
+    # Sort entries by highest probability (importance)
+    sorted_indices = np.argsort(probs)[::-1]
+    unique_entries = []
+    seen_headers = set()
+
+    # First fill with high-importance, non-duplicate sequences
+    for i in sorted_indices:
+        header, seq = entries[i]
+        if header not in seen_headers:
+            unique_entries.append((header, seq))
+            seen_headers.add(header)
+        if len(unique_entries) >= len(entries):
+            break
+
+    # Fill remaining by sampling (allowing some duplication)
+    remaining = len(entries) - len(unique_entries)
+    if remaining > 0:
+        idx = np.random.choice(len(entries), size=remaining, replace=True, p=probs)
+        sampled = [entries[i] for i in idx]
+        final_entries = unique_entries + sampled
+    else:
+        final_entries = unique_entries[:len(entries)]
+
+    print(f"Raw sequences: {len(entries)}; Unique selected: {len(unique_entries)}; Final total: {len(final_entries)}", flush=True)
 
     if plot:
-        sampled = np.array([len(seq) for (_, seq) in resampled])
+        sampled_lengths = np.array([len(seq) for (_, seq) in final_entries])
         x = np.linspace(min(te_lengths.min(), guide_lengths.min()),
                         max(te_lengths.max(), guide_lengths.max()), 1000)
         plt.figure()
         plt.plot(x, kde_te(x), label='Original TE')
         plt.plot(x, kde_guide(x), label='Guide')
-        plt.plot(x, gaussian_kde(sampled, bw_method='scott')(x), label='Resampled')
+        plt.plot(x, gaussian_kde(sampled_lengths, bw_method='scott')(x), label='Resampled')
         plt.xlabel('Sequence length')
         plt.ylabel('Density')
         plt.legend()
@@ -277,8 +300,7 @@ def weighted_resample(entries, guide_fasta, out_base, plot=False, seed=42):
         plt.close()
         print(f"KDE plot saved to {pdf}", flush=True)
 
-    return resampled
-
+    return final_entries
 
 def main():
     parser = argparse.ArgumentParser(
