@@ -17,28 +17,31 @@
 #  (2) New flag --keep_temps (or -kt):
 #      When provided, temporary files are kept. Otherwise, they are removed after each loop.
 #
-#  (3) New user-friendly parameters --euch-bias and --euch-buffer to control insertion bias.
+#  (3) New user-friendly parameters --chromatin_bias_insert and --chromatin_buffer
+#      to control insertion bias. (Replaces old -w/--euch-bias and -j/--euch-buffer.)
 #
-#  (4) New option --model (and shorthand -md) for per-generation post-processing
+#  (4) New flag -cbd, --chromatin_bias_delete to specify the deletion bias for TE excision.
+#
+#  (5) New option --model (and shorthand -md) for per-generation post-processing
 #      DNA mutation model for LTR dating (options: raw, K2P, JC69; default: K2P).
 #
-#  (5) New options -tk/--TE_mut_k and -tmx/--TE_mut_Mmax replace the old TE_mut_in parameter.
+#  (6) New options -tk/--TE_mut_k and -tmx/--TE_mut_Mmax replace the old TE_mut_in parameter.
 #
-#  (6) New parallel versions of internal scripts:
+#  (7) New parallel versions of internal scripts:
 #         - Use 'shared_ltr_inserter_parallel.py' instead of 'shared_ltr_inserter.py'
-#         - Use 'nest_inserter_parallel2.py' instead of 'nest_inserter_parallel.py', which now adds a '-m' parameter for threads.
+#         - Use 'nest_inserter_parallel.py' instead of 'nest_inserter_parallel.py', which now adds a '-m' parameter for threads.
 #           Also accepts the new optional flag --disable_genes (-dg) to disable insertion into genes.
 #
-#  (7) New flag -bo, --burnin_only:
+#  (8) New flag -bo, --burnin_only:
 #      When activated, the script will run the burn-in phase only and then exit.
 #      In this case, --generation_end and --step are not required.
 #
-#  (8) File naming: The output files from Phase 2 now have names
+#  (9) File naming: The output files from Phase 2 now have names
 #      reflecting the true generation simulated.
 #
-#  (9) New option --ex_LTR (or -ex):
-#      When provided, it passes '-exclude_no_hits' to LTR_fasta_header_appender.py,
-#      excluding LTR sequences without an identified domain.
+#  (10) Updated TE excision: Use "TE_exciser_parallel.py" (instead of TE_exciser2.py)
+#       which supports parallel execution with -m, and accepts extra parameters:
+#         --euch_het_buffer ${euch_buffer} and --euch_het_bias ${euch_bias_excise}.
 #
 # Directories:
 #   TOOL_DIR: Directory containing this script (assumed to be TESS/prinTE)
@@ -56,14 +59,6 @@
 TOOL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 BIN_DIR="${TOOL_DIR}/bin"
 UTIL_DIR="${TOOL_DIR}/util"
-
-# --- Log file names ---
-LOG="pipeline.log"
-ERR="pipeline.error"
-echo "Pipeline started at $(date)" > "$LOG"
-echo "Pipeline started at $(date)" > "$ERR"
-# --- Modification (1): Log the command used to run the script ---
-echo "Command: $0 $@" >> "$LOG"
 
 # --- Temporary files array (for unzipped inputs) ---
 temp_files=()
@@ -107,63 +102,84 @@ Usage: $(basename "$0") [options]
 
 Options:
 ############### REQUIRED (for full pipeline) ###############
-  -ge, --generation_end   Number of generations to simulate (REQUIRED unless --burnin_only is used; must be an exact multiple of step)
-  -st, --step             Generation step size (number of generations per loop; REQUIRED unless --burnin_only is used)
+  -ge, --generation_end      Number of generations to simulate (REQUIRED unless --burnin_only is used; must be an exact multiple of step)
+  -st, --step                Generation step size (number of generations per loop; REQUIRED unless --burnin_only is used)
 
 ############### BURN-IN ###############
-  -c,  --cds              Path to CDS file (default: ${TOOL_DIR}/TAIR10.cds.fa)
-  -N,  --cds_num          Number of CDS sequences to insert. (Mutually exclusive with --cds_percent)
-  -P,  --cds_percent      Percent of the genome that should be CDS. (Mutually exclusive with --cds_num)
-  -n,  --TE_num           Number of TE insertions in burn‐in (default: 2000) (Mutually exclusive with --TE_percent)
-  -p,  --TE_percent       Percent of the genome that should be TEs in the burn‐in (Mutually exclusive with --TE_num)
-  -cn, --chr_number       Number of chromosomes (default: 4)
-  -sz, --size             Genome size in kb, Mb, or Gb (default: 400Mb)
-  # The old option -tm, --TE_mut_in is replaced by two new options below:
-  -tk, --TE_mut_k             Slope of exponential decay for TE mutation (default: 10)
-  -tmx, --TE_mut_Mmax          X-limit for exponential decay function (default: 20)
+  -c,  --cds                 Path to CDS file (default: ${TOOL_DIR}/TAIR10.cds.fa)
+  -N,  --cds_num             Number of CDS sequences to insert. (Mutually exclusive with --cds_percent)
+  -P,  --cds_percent         Percent of the genome that should be CDS. (Mutually exclusive with --cds_num)
+  -n,  --TE_num              Number of TE insertions in burn‐in (default: 2000) (Mutually exclusive with --TE_percent)
+  -p,  --TE_percent          Percent of the genome that should be TEs in the burn‐in (Mutually exclusive with --TE_num)
+  -cn, --chr_number          Number of chromosomes (default: 4)
+  -sz, --size                Genome size in kb, Mb, or Gb (default: 400Mb)
+  -tk, --TE_mut_k            Slope of exponential decay for TE mutation (default: 10)
+  -tmx, --TE_mut_Mmax         X-limit for exponential decay function (default: 20)
+  -bo, --burnin_only         Run burn-in phase only and then exit.
+  -i,  --TE_lib              TE library file (default: ${TOOL_DIR}/combined_curated_TE_lib_ATOSZM_selected.fasta)
+  -m,  --mutation_rate       DNA Mutation rate (default: 1.3e-8)
 
 ########## FIXED TE INDEL RATE ##########
-  -F,  --fix              Fixed insertion and deletion numbers, comma-separated. Format: insertion,deletion (e.g., 1e-9,1e-9)
+  -F,  --fix                 Fixed insertion and deletion numbers, comma-separated. Format: insertion,deletion (e.g., 1e-9,1e-9)
+  -dg, --disable_genes       Disable insertion into genes (only effective if -F/--fix is provided)
 
 ######### VARIABLE TE INDEL RATE #########  
-  -ir, --insert_rate      TE insertion rate (default: 1e-8)
-  -dr, --delete_rate      TE deletion rate (default: 1e-7)  
-  -br, --birth_rate       TE birth rate (default: 1e-3)
-  -sc, --sigma            Selection coefficient for gene insertions (default: 1.0)  
-  -sf, --sel_coeff        Selection coefficient for TE excision (variable-rate only; default: 0)
-                          0 = neutral; 0.1 = 2× bias; 1 = 11× bias.             
-  
+  -ir, --insert_rate         TE insertion rate (default: 1e-8)
+  -dr, --delete_rate         TE deletion rate (default: 1e-7)  
+  -br, --birth_rate          TE birth rate (default: 1e-3)
+  -sc, --sigma               Selection coefficient for gene insertions (default: 1.0)  
+  -sf, --sel_coeff           Selection coefficient for TE excision (variable-rate only; default: 0)
+                             0 = neutral; 0.1 = 2× bias; 1 = 11× bias.
+  -cbi, --chromatin_bias_insert   Chromatin bias for TE insertion (default: 1.0)
+  -cbd, --chromatin_bias_delete   Chromatin bias for TE deletion (default: 1.0)
+  -cb,  --chromatin_buffer         Interval upstream/downstream used for chromatin bias (default: 10000)
+
 ########## GENERAL USE ##########                 
-  -s,  --seed             Random seed (default: 42)
-  -i,  --TE_lib           TE library file (default: ${TOOL_DIR}/combined_curated_TE_lib_ATOSZM_selected.fasta)
-  -m,  --mutation_rate    DNA Mutation rate (default: 1.3e-8)
-  -r,  --TE_ratio         TE ratio file (default: ${TOOL_DIR}/ratios.tsv)
-  -t,  --threads          Number of threads (default: 4)
-  -sr, --solo_rate        Percent chance to convert an intact TE to soloLTR (default: 95)
-  -k,  --k                TE length decay slope for TE excision (default: 10)
-  -b,  --bed              Input BED file for starting generation (skip burn-in; requires --fasta)
-  -f,  --fasta            Input FASTA file for starting generation (skip burn-in; requires --bed)
-  -x,  --continue         Resume simulation from the last completed generation.
-  --keep_temps, -kt       Keep temporary files (default: remove them after each loop)
-  -w,  --euch-bias        Weight of bias toward euchromatin (default: 1.0; disabled)
-  -j,  --euch-buffer      Interval upstream/downstream of genes considered euchromatin (default: 10000)
-  --model, -md           DNA mutation model for LTR dating (choose from: raw, K2P, JC69; default: K2P)
-  -bo, --burnin_only      Run burn-in phase only and then exit.
-  -ex, --ex_LTR          Exclude LTR sequences without a domain hit (passed as '-exclude_no_hits' to LTR_fasta_header_appender.py)
-  -dg, --disable_genes   Disable insertion into genes (only effective if -F/--fix is provided)
-  -h,  --help             Display this help message and exit
+  -s,  --seed                Random seed (default: 42)
+  -r,  --TE_ratio            TE ratio file (default: ${TOOL_DIR}/ratios.tsv)
+  -t,  --threads             Number of threads (default: 4)
+  -sr, --solo_rate           Percent chance to convert an intact TE to soloLTR (default: 95)
+  -k,  --k                   TE length decay slope for TE excision (default: 10)
+  -b,  --bed                 Input BED file for starting generation (skip burn-in; requires --fasta)
+  -f,  --fasta               Input FASTA file for starting generation (skip burn-in; requires --bed)
+  -x,  --continue            Resume simulation from the last completed generation.
+  -kt, --keep_temps          Keep temporary files (default: remove them after each loop)
+  -md, --model               DNA mutation model for LTR dating (choose from: raw, K2P, JC69; default: K2P)
+  -ex, --ex_LTR              Exclude LTR sequences without a domain hit (passed as '-exclude_no_hits' to LTR_fasta_header_appender.py)
+  -h,  --help                Display this help message and exit
 
 Example:
   $(basename "$0") -st 1000 -ge 3000
 EOF
 }
 
+#—-----------------------------------------
+# if no args or any of -h, --h, -help, --help, print help and exit
+if [[ $# -eq 0 \
+   || "$1" == "-h"  \
+   || "$1" == "--h" \
+   || "$1" == "-help" \
+   || "$1" == "--help" ]]; then
+  print_help
+  exit 0
+fi
+#—-----------------------------------------
+
+# --- Log file names ---
+LOG="pipeline.log"
+ERR="pipeline.error"
+echo "Pipeline started at $(date)" > "$LOG"
+echo "Pipeline started at $(date)" > "$ERR"
+# --- Modification (1): Log the command used to run the script ---
+echo "Command: $0 $@" >> "$LOG"
+
 # --- Parse command-line options ---
 # Initialize flags and new parameters with defaults.
 cont_flag=0
 keep_temps=0
 burnin_only=0
-euch_bias=1.0
+euch_bias_insert=1.0
+euch_bias_excise=1.0
 euch_buffer=10000
 model="K2P"
 ex_ltr=0
@@ -248,14 +264,14 @@ while [[ $# -gt 0 ]]; do
     --keep_temps|-kt)
       keep_temps=1
       shift;;
-    -w|--euch-bias)
-      euch_bias="$2"
+    -cbi|--chromatin_bias_insert)
+      euch_bias_insert="$2"
       shift; shift;;
-    -j|--euch-buffer)
+    -cb|--chromatin_buffer)
       euch_buffer="$2"
       shift; shift;;
-    --model|-md)
-      model="$2"
+    -cbd|--chromatin_bias_delete)
+      euch_bias_excise="$2"
       shift; shift;;
     -sc|--sigma)
       sigma="$2"
@@ -391,6 +407,19 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# (C) Extract only intact TEs into a cleaned library
+echo "=== Extracting intact TEs to lib_clean.fa ===" | tee -a "$LOG"
+cmd="python ${BIN_DIR}/extract_intact_TEs.py --lib lib.fa --out_fasta lib_clean.fa"
+echo "Running: $cmd" | tee -a "$LOG"
+eval $cmd >> "$LOG" 2>> "$ERR"
+if [ $? -ne 0 ]; then
+    echo "Error running extract_intact_TEs.py" | tee -a "$ERR"
+    exit 1
+fi
+
+# Now use lib_clean.fa for all downstream insertions
+clean_lib="lib_clean.fa"
+
 ###############################################################################
 # Phase 1: Burn-in Genome Generation (only if no external BED/FASTA provided)
 ###############################################################################
@@ -412,7 +441,7 @@ if [[ "$skip_burnin" -eq 0 ]]; then
     fi
 
     # (1b) Insert TEs into the synthetic genome using the parallel version.
-    cmd="python ${BIN_DIR}/shared_ltr_inserter_parallel.py -genome backbone.fa -TE lib.fa"
+    cmd="python ${BIN_DIR}/shared_ltr_inserter_parallel.py -genome backbone.fa -TE ${clean_lib}"
     if [[ -n "$TE_percent" ]]; then
         cmd+=" -p ${TE_percent}"
     else
@@ -460,6 +489,9 @@ fi
 seed_list=($(python -c "import random; random.seed(${seed}); print(' '.join([str(random.randint(1,10000)) for _ in range(${iterations})]))"))
 echo "Seed list for Phase 2 iterations: ${seed_list[@]}" | tee -a "$LOG"
 
+# Initialize prev_lib for first generation
+prev_lib="lib_clean.fa"
+
 for (( i=start_iter; i<=iterations; i++ )); do
   # Calculate the true generation number for file naming.
   current_gen=$(( i * step ))
@@ -496,29 +528,30 @@ for (( i=start_iter; i<=iterations; i++ )); do
   fi
 
   # (2b) Insert new TEs (allowing for nesting) using the parallel nest inserter.
-  # Now using nest_inserter_parallel2.py and adding --disable_genes if specified.
+  # Now using nest_inserter_parallel.py and adding --disable_genes if specified.
   nest_prefix="gen${current_gen}_nest"
-  cmd="python ${BIN_DIR}/nest_inserter_parallel2.py --genome ${mut_prefix}.fa --TE lib.fa --generations ${step} --bed ${prev_bed} --output ${nest_prefix} --seed ${current_seed} --rate ${insert_rate} ${extra_fix_in} --TE_ratio ${TE_ratio} -bf burnin.stat --birth_rate ${birth_rate}"
-  cmd+=" --euch_het_bias ${euch_bias} --euch_het_buffer ${euch_buffer} -m ${threads}"
+  cmd="python ${BIN_DIR}/nest_inserter_parallel.py --genome ${mut_prefix}.fa --TE ${prev_lib} --generations ${step} --bed ${prev_bed} --output ${nest_prefix} --seed ${current_seed} --rate ${insert_rate} ${extra_fix_in} --TE_ratio ${TE_ratio} -bf burnin.stat --birth_rate ${birth_rate}"
+  cmd+=" --euch_het_bias ${euch_bias_insert} --euch_het_buffer ${euch_buffer} -m ${threads}"
   if [[ $disable_genes -eq 1 ]]; then
     cmd+=" --disable_genes"
   fi
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
   if [ $? -ne 0 ]; then
-    echo "Error running nest_inserter_parallel2.py for generation ${current_gen}" | tee -a "$ERR"
+    echo "Error running nest_inserter_parallel.py for generation ${current_gen}" | tee -a "$ERR"
     exit 1
   fi
 
-  # (2c) Purge some TEs and convert intact TEs to soloLTRs using TE_exciser.py.
-  cmd="python ${BIN_DIR}/TE_exciser2.py --genome ${nest_prefix}.fasta --bed ${nest_prefix}.bed --rate ${delete_rate} --generations ${step} --soloLTR_freq ${solo_rate} ${extra_fix_ex} --output gen${current_gen}_final --seed ${current_seed} --sigma ${sigma} --k ${k} --sel_coeff ${sel_coeff}"
+  # (2c) Purge some TEs and convert intact TEs to soloLTRs using TE excision.
+  # Updated to use TE_exciser_parallel.py with new parameters.
+  cmd="python ${BIN_DIR}/TE_exciser_parallel.py --genome ${nest_prefix}.fasta --bed ${nest_prefix}.bed --rate ${delete_rate} --generations ${step} --soloLTR_freq ${solo_rate} ${extra_fix_ex} --output gen${current_gen}_final --seed ${current_seed} --sigma ${sigma} --k ${k} --sel_coeff ${sel_coeff} -m ${threads} --euch_het_buffer ${euch_buffer} --euch_het_bias ${euch_bias_excise}"
   if [ $i -ne 1 ]; then
     cmd+=" --no_fig"
   fi
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
   if [ $? -ne 0 ]; then
-    echo "Error running TE_exciser.py for generation ${current_gen}" | tee -a "$ERR"
+    echo "Error running TE_exciser_parallel.py for generation ${current_gen}" | tee -a "$ERR"
     exit 1
   fi
 
@@ -527,6 +560,37 @@ for (( i=start_iter; i<=iterations; i++ )); do
     echo "Removing temporary files for generation ${current_gen}" | tee -a "$LOG"
     rm -f "${mut_prefix}.fa" "${nest_prefix}.bed" "${nest_prefix}.fasta"
   fi
+  
+  # (2d) Build the new per‑gen TE library
+  echo "=== Extracting intact TEs for generation ${current_gen} into lib file ===" | tee -a "$LOG"
+  cmd="python ${BIN_DIR}/extract_intact_TEs.py \
+    --genome gen${current_gen}_final.fasta \
+    --bed    gen${current_gen}_final.bed \
+    --out_fasta gen${current_gen}_final.lib"
+  echo "Running: $cmd" | tee -a "$LOG"
+  eval $cmd >> "$LOG" 2>> "$ERR"
+  if [ $? -ne 0 ]; then
+      echo "Error running extract_intact_TEs.py for generation ${current_gen}" | tee -a "$ERR"
+      exit 1
+  fi
+
+  # (2e) Update pipeline report
+  echo "=== Step 2e: Updating insertion/deletion pipeline report ===" | tee -a "$LOG"
+  cmd="python ${UTIL_DIR}/log_to_report.py -in ${LOG} -out pipeline.report"
+  echo "Running: $cmd" | tee -a "$LOG"
+  eval $cmd >> "$LOG" 2>> "$ERR"
+  if [ $? -ne 0 ]; then
+      echo "Error running log_to_report.py" | tee -a "$ERR"
+      exit 1
+  fi
+
+  # clean up the *previous* lib file unless the user wants to keep temps
+  if [[ "$keep_temps" -ne 1 && "$prev_lib" != "lib_clean.fa" ]]; then
+    rm -f "$prev_lib"
+  fi
+
+  # point to the newly built library for the next iteration
+  prev_lib="gen${current_gen}_final.lib"
 
 done
 

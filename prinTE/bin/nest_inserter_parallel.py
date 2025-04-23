@@ -15,9 +15,7 @@ Example usage:
       -b 1e-2 \
       -bf burn_in.txt \
       --TE_ratio TE_ratio.txt \
-      --euch_het_buffer 1000 \
-      --euch_het_bias 1.1 \
-      -m 4
+      --disable_genes
 """
 
 import argparse
@@ -25,6 +23,7 @@ import random
 import re
 import sys
 import multiprocessing
+import numpy as np  # New import for Poisson simulation
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -50,11 +49,13 @@ def parse_args():
     parser.add_argument("--TE_ratio", dest="TE_ratio_file",
                         help="File with TE category ratios. Format: <te_class> <te_superfamily> <non-normalized ratio> per line.")
     parser.add_argument("--euch_het_buffer", type=int, default=None,
-                        help="Buffer (in bp) around gene features to be considered euchromatin.")
+                        help="Buffer (in bp) around gene features to be considered euchromatin. Only interpreted in rate mode.")
     parser.add_argument("--euch_het_bias", type=float, default=None,
-                        help="Bias factor to increase probability of TE insertion in euchromatin.")
+                        help="Bias factor to increase probability of TE insertion in euchromatin. Only interpreted in rate mode.")
     parser.add_argument("-m", "--max_processes", type=int, default=1,
                         help="Number of chromosomes to process simultaneously. Default=1")
+    parser.add_argument("--disable_genes", action="store_true",
+                        help="Disable insertion into genes (only effective if --fix_in is provided).")
     return parser.parse_args()
 
 def read_fasta(fasta_path):
@@ -359,6 +360,18 @@ def choose_weighted_position(chrom_length, intervals):
     # Fallback (should not happen)
     return random.randint(0, chrom_length)
 
+def is_in_gene(position, features):
+    """
+    Check if the given position falls within any gene region in features.
+    A feature is considered a gene if 'gene' is in its first name field.
+    """
+    for feat in features:
+        feature_id = feat['name'].split(';')[0]
+        if "gene" in feature_id.lower():
+            if feat['start'] <= position < feat['end']:
+                return True
+    return False
+
 # --- End of new helper functions ---
 
 def process_chromosome(args_tuple):
@@ -367,24 +380,36 @@ def process_chromosome(args_tuple):
     This function is designed to be run in parallel for each chromosome.
     It applies insertion events sequentially on the chromosome’s sequence and features.
     """
-    (chrom, seq_list, features, events, te_raw, bias_intervals, global_seed) = args_tuple
+    (chrom, seq_list, features, events, te_raw, bias_intervals, global_seed, disable_genes) = args_tuple
     # Compute a deterministic seed using the global seed and the chromosome name.
-    # (Using the sum of ordinal values for characters in the chromosome name.)
     chrom_seed = (global_seed if global_seed is not None else 0) + sum(ord(c) for c in chrom)
     random.seed(chrom_seed)
     nested_count = 0
     non_nested_count = 0
+    chrom_length = len(seq_list)
     # Process each insertion event assigned to this chromosome.
     for event in events:
         te_class_target, te_superfamily_target = event
-        chrom_length = len(seq_list)
         if chrom_length == 0:
             continue
         # Choose insertion position: if bias is active and intervals exist, pick weighted by euchromatin bias.
+        # If disable_genes is active, re-sample if the candidate falls within a gene.
         if bias_intervals:
-            insertion_pos = choose_weighted_position(chrom_length, bias_intervals)
+            candidate = choose_weighted_position(chrom_length, bias_intervals)
         else:
-            insertion_pos = random.randint(0, chrom_length)
+            candidate = random.randint(0, chrom_length)
+        if disable_genes:
+            attempt = 0
+            max_attempts = 1000
+            while is_in_gene(candidate, features) and attempt < max_attempts:
+                if bias_intervals:
+                    candidate = choose_weighted_position(chrom_length, bias_intervals)
+                else:
+                    candidate = random.randint(0, chrom_length)
+                attempt += 1
+            # If a gene-free position was not found after many attempts, proceed with the candidate.
+        insertion_pos = candidate
+
         te_header, te_seq = pick_random_TE_by_category(te_raw, te_class_target, te_superfamily_target)
         te_class, te_superfamily = extract_te_info(te_header)
         tsd_length = get_tsd_length(te_class, te_superfamily)
@@ -465,14 +490,22 @@ def process_chromosome(args_tuple):
             nested_count += 1
         else:
             non_nested_count += 1
+        chrom_length = len(seq_list)  # update chromosome length after insertion
 
     # Return the updated sequence, features, and counts for this chromosome.
     return (chrom, seq_list, features, nested_count, non_nested_count)
 
 def main():
     args = parse_args()
+
+    # In fix_in mode, simply ignore the euchromatin/heterochromatin bias parameters if provided.
+    if args.fix_in is not None:
+        if args.euch_het_buffer is not None or args.euch_het_bias is not None:
+            print("Warning: --euch_het_buffer and --euch_het_bias are ignored in fix_in mode.")
+
     if args.seed is not None:
         random.seed(args.seed)
+        np.random.seed(args.seed)  # Ensure numpy randomness is reproducible
 
     print("Reading genome FASTA ...")
     genome_raw = read_fasta(args.genome)
@@ -497,16 +530,20 @@ def main():
     for key, count in intact_distribution.items():
         print(f"  {key[0]}/{key[1]}: {count}")
 
-    # Determine total TE insertions to perform.
+    # --- Calculate total TE insertions using a Poisson distribution ---
     if args.fix_in is not None:
-        total_insertions = int(args.fix_in * genome_size * args.generations)
+        lambda_value = args.fix_in * genome_size * args.generations
+        total_insertions = np.random.poisson(lambda_value)
         print(f"Using fixed insertion rate: {args.fix_in} per base per generation")
-        print(f"Calculated total TE insertions to perform: {total_insertions}")
+        print(f"Lambda (expected insertions): {lambda_value}")
+        print(f"Simulated total TE insertions to perform: {total_insertions}")
     else:
-        total_insertions = int(args.rate * intact_TE_count * args.generations)
+        lambda_value = args.rate * intact_TE_count * args.generations
+        total_insertions = np.random.poisson(lambda_value)
         print(f"Rate (per intact TE per generation): {args.rate}")
         print(f"Generations: {args.generations}")
-        print(f"Total TE insertions to perform: {total_insertions}")
+        print(f"Lambda (expected insertions): {lambda_value}")
+        print(f"Simulated total TE insertions to perform: {total_insertions}")
 
     # Build insertion events.
     if args.fix_in is not None:
@@ -613,8 +650,8 @@ def main():
 
     random.shuffle(insertion_events)
 
-    # --- Pre-calculate insertion position intervals if euchromatin bias is in effect ---
-    use_bias = (args.euch_het_buffer is not None and args.euch_het_bias is not None)
+    # --- Pre-calculate insertion position intervals if euchromatin bias is in effect (only in rate mode) ---
+    use_bias = (args.fix_in is None and args.euch_het_buffer is not None and args.euch_het_bias is not None)
     bias_intervals_all = None
     if use_bias:
         print("Computing euchromatin/heterochromatin intervals based on gene features and buffer ...")
@@ -638,6 +675,9 @@ def main():
         else:
             features_by_chrom[feat['chrom']] = [feat]
 
+    # Determine if disable_genes should be active (only if fix_in is provided).
+    disable_genes_flag = args.disable_genes if args.fix_in is not None else False
+
     # Prepare arguments for parallel processing.
     tasks = []
     for chrom in chroms:
@@ -647,7 +687,7 @@ def main():
         bias_intervals = None
         if use_bias and chrom in bias_intervals_all:
             bias_intervals = bias_intervals_all[chrom]
-        tasks.append((chrom, seq_list, feats, events, te_raw, bias_intervals, args.seed))
+        tasks.append((chrom, seq_list, feats, events, te_raw, bias_intervals, args.seed, disable_genes_flag))
 
     print(f"Processing {len(chroms)} chromosomes using up to {args.max_processes} processes...")
     if args.max_processes > 1:
