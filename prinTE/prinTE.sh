@@ -566,6 +566,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
   cmd="python ${BIN_DIR}/extract_intact_TEs.py \
     --genome gen${current_gen}_final.fasta \
     --bed    gen${current_gen}_final.bed \
+    --weight_by lib_clean.fa --duplication_mode --plot_kde_comparison \ # Temporarily: output generational lib size update. 
     --out_fasta gen${current_gen}_final.lib"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
