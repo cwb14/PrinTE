@@ -237,55 +237,92 @@ def write_fasta(entries, out_file):
                 f.write(seq[i:i+60] + "\n")
 
 
-def weighted_resample(entries, guide_fasta, out_base, plot=False, seed=42, duplication_mode=False):
+def weighted_resample(entries, guide_fasta, out_base, *,
+                      plot=False, seed=42,
+                      duplication_mode=False):
     """
-    Perform KDE-based importance sampling:
-      1. Estimate density of TE lengths and guide lengths (Scott's rule).
-      2. Compute weights = density_guide / density_te.
-      3. Resample with replacement by normalized weights.
-      4. Optional: plot KDE comparison to PDF.
+    KDE-based importance resampling that minimises the number of unique
+    records that are excluded when --duplication_mode is *not* requested.
+
+    * If --duplication_mode is given we keep the original behaviour
+      (retain all originals + add extra copies).
+    * Otherwise we:
+        1. Convert KDE weights -> expected copy counts.
+        2. Give each record floor(expected) copies.
+        3. Hand out the still-unassigned copies by a single weighted
+           draw **without replacement** using the fractional parts.
     """
-    te_lengths = np.array([len(seq) for (_, seq) in entries])
-    guide_lengths = np.array([len(r.seq) for r in SeqIO.parse(guide_fasta, "fasta")])
+    import math
+    rng = np.random.default_rng(seed)
 
-    kde_te = gaussian_kde(te_lengths, bw_method='scott')
-    kde_guide = gaussian_kde(guide_lengths, bw_method='scott')
+    # ----------  KDE densities & importance weights  ----------
+    te_lengths   = np.fromiter((len(seq) for _, seq in entries), dtype=float)
+    guide_lengths = np.fromiter((len(r.seq) for r in SeqIO.parse(guide_fasta, "fasta")),
+                                dtype=float)
 
-    dens_te = kde_te(te_lengths)
-    dens_guide = kde_guide(te_lengths)
-    weights = dens_guide / (dens_te + 1e-8)
+    kde_te    = gaussian_kde(te_lengths,    bw_method="scott")
+    kde_guide = gaussian_kde(guide_lengths, bw_method="scott")
 
+    dens_te     = kde_te(te_lengths)
+    dens_guide  = kde_guide(te_lengths)
+    weights     = dens_guide / (dens_te + 1e-8)          # importance weights
+
+    # ------------------------------------------------------------------
+    #  --duplication_mode : keep the original behaviour (all originals +
+    #                       extra copies proportional to weight)
+    # ------------------------------------------------------------------
     if duplication_mode:
-        # Determine duplication counts: scale by mean weight
-        mean_w = np.mean(weights)
-        counts = np.maximum(1, np.rint(weights / mean_w).astype(int))
-        duplicated = []
-        for idx, count in enumerate(counts):
-            duplicated.extend([entries[idx]] * count)
-        orig = len(entries)
-        dup_total = len(duplicated) - orig
-        print(f"Original sequences: {orig}")
-        print(f"Duplicated sequences: {dup_total}")
-        print(f"Total sequences after duplication: {len(duplicated)}", flush=True)
-        resampled = duplicated
-    else:
-        probs = weights / np.sum(weights)
-        np.random.seed(seed)
-        idx = np.random.choice(len(entries), size=len(entries), replace=True, p=probs)
-        resampled = [entries[i] for i in idx]
-        print(f"Raw sequences: {len(entries)}; Resampled: {len(resampled)}", flush=True)
+        mean_w      = weights.mean()
+        dup_counts  = np.maximum(1, np.rint(weights / mean_w).astype(int))
+        resampled   = [entry
+                       for idx, cnt in enumerate(dup_counts)
+                       for entry in [entries[idx]] * cnt]
 
+        print(f"Original sequences : {len(entries)}")
+        print(f"Duplicated copies  : {resampled.__len__() - len(entries)}")
+        print(f"Total sequences    : {len(resampled)}", flush=True)
+
+    # ------------------------------------------------------------------
+    #  default : minimise exclusions, allow duplicates only when floor(ci) ≥ 2
+    # ------------------------------------------------------------------
+    else:
+        n = len(entries)
+        probs        = weights / weights.sum()
+        exp_counts   = probs * n                   # expected copies (may be <1 or >1)
+        base_counts  = np.floor(exp_counts).astype(int)
+        remaining    = n - base_counts.sum()      # slots that still need to be filled
+        if remaining:                             # distribute the residual slots
+            residual = exp_counts - base_counts
+            # If all residuals are 0 (rare edge-case), fall back to uniform draw
+            residual_prob = residual / residual.sum() if residual.sum() else \
+                            np.full_like(residual, 1 / len(residual))
+            extra_idx = rng.choice(len(entries), size=remaining,
+                                   replace=False, p=residual_prob)
+            base_counts[extra_idx] += 1
+
+        # Build the final sample list
+        resampled = [entry
+                     for idx, cnt in enumerate(base_counts)
+                     for entry in [entries[idx]] * cnt]
+
+        lost      = (base_counts == 0).sum()
+        dups      = (base_counts > 1).sum()
+        print(f"Total sequences   : {n}")
+        print(f"Unique lost       : {lost}")
+        print(f"Entries duplicated: {dups}", flush=True)
+
+    # ----------  Optional KDE comparison plot  ----------
     if plot:
-        sampled_lengths = np.array([len(seq) for (_, seq) in resampled])
-        x = np.linspace(
-            min(te_lengths.min(), guide_lengths.min()),
-            max(te_lengths.max(), guide_lengths.max()), 1000)
+        sampled_lengths = np.fromiter((len(seq) for _, seq in resampled), dtype=float)
+        x = np.linspace(min(te_lengths.min(), guide_lengths.min()),
+                        max(te_lengths.max(), guide_lengths.max()), 1000)
+
         plt.figure()
-        plt.plot(x, kde_te(x), label='Original TE')
-        plt.plot(x, kde_guide(x), label='Guide')
-        plt.plot(x, gaussian_kde(sampled_lengths, bw_method='scott')(x), label='Resampled')
-        plt.xlabel('Sequence length')
-        plt.ylabel('Density')
+        plt.plot(x, kde_te(x),                       label="Original TE")
+        plt.plot(x, kde_guide(x),                    label="Guide")
+        plt.plot(x, gaussian_kde(sampled_lengths)(x), label="Resampled")
+        plt.xlabel("Sequence length")
+        plt.ylabel("Density")
         plt.legend()
         pdf = f"{out_base}_kde_comparison.pdf"
         plt.savefig(pdf)
