@@ -206,7 +206,8 @@ def extract_intact_TEs(records, genome):
             internal = seq[ltr_len:-ltr_len]
             seq = five + internal + five
 
-        out.append((rec['name'], seq))
+#       out.append((rec['name'], seq))
+        out.append((rec['feature_id'], seq))
     return out
 
 
@@ -216,17 +217,22 @@ def process_library_fasta(lib_fasta):
     fix LTR entries by copying 5' LTR to 3' end.
     """
     out = []
+#   for rec in SeqIO.parse(lib_fasta, "fasta"):
+#       header = rec.description
     for rec in SeqIO.parse(lib_fasta, "fasta"):
-        header = rec.description
+        # pull only the first token of the header, then strip any ";"-attrs
+        name = rec.description.split()[0]
+        feature_id, _ = parse_attributes(name)
         seq = str(rec.seq)
-        _, te_class, _, ltr_len = extract_TE_info(header.split()[0])
+#       _, te_class, _, ltr_len = extract_TE_info(header.split()[0])
+        _, te_class, _, ltr_len = extract_TE_info(feature_id)
         if te_class == "LTR" and ltr_len and len(seq) >= 2 * ltr_len:
             five = seq[:ltr_len]
             internal = seq[ltr_len:-ltr_len]
             seq = five + internal + five
-        out.append((header, seq))
+#       out.append((header, seq))
+        out.append((feature_id, seq))
     return out
-
 
 def write_fasta(entries, out_file):
     """Write (header, seq) pairs to FASTA, wrapping at 60 bp."""
