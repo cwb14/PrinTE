@@ -519,13 +519,33 @@ for (( i=start_iter; i<=iterations; i++ )); do
 
   # (2a) Mutate the genome.
   mut_prefix="gen${current_gen}_mut"
-  cmd="${BIN_DIR}/ltr_mutator -fasta ${prev_genome} -rate ${mutation_rate} -generations ${step} -mode 0 -threads ${threads} -seed ${current_seed} -out_prefix ${mut_prefix}"
+
+  # choose mode and bed based on whether this is the first iteration
+  if [ $i -eq 1 ]; then
+    mode=2
+  else
+    mode=3
+  fi
+
+  cmd="${BIN_DIR}/ltr_mutator \
+    -fasta ${prev_genome} \
+    -bed   ${prev_bed} \
+    -rate ${mutation_rate} \
+    -generations ${step} \
+    -mode ${mode} \
+    -threads ${threads} \
+    -seed ${current_seed} \
+    -out_prefix ${mut_prefix}"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
   if [ $? -ne 0 ]; then
     echo "Error running ltr_mutator for generation ${current_gen}" | tee -a "$ERR"
     exit 1
   fi
+
+  # strip out column 7 from the .bed in-place
+  tmp="${prev_bed}.tmp"
+  cut -f1-6 "${prev_bed}" > "$tmp" && mv "$tmp" "${prev_bed}"
 
   # (2b) Insert new TEs (allowing for nesting) using the parallel nest inserter.
   # Now using nest_inserter_parallel.py and adding --disable_genes if specified.
@@ -687,7 +707,7 @@ for iter in "${selected[@]}"; do
 done
 
 # Run ltr_dens.py once after per-generation analyses.
-cmd="python ${BIN_DIR}/ltr_dens.py --model ${model} --output all_LTR_density.pdf --miu ${mutation_rate}"
+cmd="python ${BIN_DIR}/ltr_dens.py --model ${model} --output all_LTR_density.pdf --miu ${mutation_rate} --gradient"
 echo "Running: $cmd" | tee -a "$LOG"
 eval $cmd
 

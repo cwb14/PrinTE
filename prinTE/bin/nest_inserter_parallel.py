@@ -170,9 +170,17 @@ def parse_bed(bed_path):
 def write_bed(features, out_bed):
     with open(out_bed, 'w') as f:
         for feat in features:
-            # Write TSD in the 5th column and strand in the 6th column.
-            f.write(f"{feat['chrom']}\t{feat['start']}\t{feat['end']}\t"
-                    f"{feat['name']}\t{feat['tsd']}\t{feat['strand']}\n")
+            # if this feature was just inserted, append a 7th column "new_TE"
+            new_tag = '\tnew_TE' if feat.get('new', False) else ''
+            f.write(
+                f"{feat['chrom']}\t"
+                f"{feat['start']}\t"
+                f"{feat['end']}\t"
+                f"{feat['name']}\t"
+                f"{feat['tsd']}\t"
+                f"{feat['strand']}"
+                f"{new_tag}\n"
+            )
 
 def pick_random_TE(te_dict):
     headers = list(te_dict.keys())
@@ -442,6 +450,8 @@ def process_chromosome(args_tuple):
             'strand': strand,
             'tsd':   tsd_string if tsd_length > 0 else 'NA',
         }
+
+        new_te_feature['new'] = True
 
         updated_features = []
         nesting_happened = False

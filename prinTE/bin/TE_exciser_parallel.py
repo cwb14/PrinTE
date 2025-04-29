@@ -60,7 +60,8 @@ import concurrent.futures
 # =============================================================================
 
 class BedEntry:
-    def __init__(self, chrom, start, end, name, strand, tsd, lineno):
+    def __init__(self, chrom, start, end, name, strand, tsd, lineno, tag=None):
+
         self.chrom = chrom
         self.start = int(start)
         self.end = int(end)
@@ -68,13 +69,24 @@ class BedEntry:
         self.strand = strand
         self.tsd = tsd
         self.lineno = lineno
+        self.tag = tag
         self.group = None
         self.subtype = None
         self.feature_id = name.split(';')[0]
         self.supp = name.split(';')[1:] if ';' in name else []
 
+#   def __str__(self):
+#       return "\t".join([self.chrom, str(self.start), str(self.end), self.name, self.strand, self.tsd])
     def __str__(self):
-        return "\t".join([self.chrom, str(self.start), str(self.end), self.name, self.strand, self.tsd])
+        fields = [self.chrom,
+                  str(self.start),
+                  str(self.end),
+                  self.name,
+                  self.strand,
+                  self.tsd]
+        if self.tag is not None:
+            fields.append(self.tag)
+        return "\t".join(fields)
 
     def length(self):
         return self.end - self.start
@@ -88,8 +100,12 @@ def parse_bed(bed_file):
                 continue
             fields = line.split("\t")
             if len(fields) < 6:
-                sys.exit(f"Error: Line {lineno+1} in BED file does not have 6 columns.")
-            entries.append(BedEntry(fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], lineno))
+                sys.exit(f"Error: Line {lineno+1} in BED file does not have at least 6 columns.")
+            # grab optional 7th column as tag
+            tag = fields[6] if len(fields) > 6 else None
+            entries.append(
+                BedEntry(fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], lineno, tag=tag)
+            )
     return entries
 
 def parse_fasta(fasta_file):
@@ -400,27 +416,31 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
     
     # Process nest groups.
     for gid, group in nest_groups.items():
-        # determine if this is a TE‐only nest group
         is_te_group = group[0].subtype.startswith("CUT_PAIR_TE")
-        # only consolidate when middle was removed AND (if TE group) neither flank was removed
-        if gid in nest_middle_removed and (
-            not is_te_group or
-            (group[0] not in to_remove and group[2] not in to_remove)
-        ):
+        can_consolidate = (
+            gid in nest_middle_removed
+            and (not is_te_group or (group[0] not in to_remove and group[2] not in to_remove))
+            # **tag test**: only if both flanks agree (both have tag, or both None)
+            and (group[0].tag == group[2].tag)
+        )
+        if can_consolidate:
             rem_len = group[1].length()
             chrom = group[1].chrom
-            removals_by_chrom[chrom].append( (group[1].start, group[1].end, rem_len) )
-            print(f"Excision (nest group consolidation): Group {gid} - Removing middle element {group[1].chrom}:{group[1].start}-{group[1].end} (length {rem_len})")
+            removals_by_chrom[chrom].append((group[1].start, group[1].end, rem_len))
+            print(f"Excision (nest group consolidation): Group {gid} …")
             new_start = group[0].start
             new_end = group[2].end - rem_len
-            # Use the feature_ID from the flanking entry, ignoring supplemental info.
-            new_name = group[0].feature_id  
+            new_name = group[0].feature_id
             new_strand = group[0].strand
             new_tsd = group[0].tsd
-            new_entry = BedEntry(chrom, new_start, new_end, new_name, new_strand, new_tsd, -1)
+            # carry over the common tag
+            new_tag = group[0].tag
+            new_entry = BedEntry(chrom, new_start, new_end, new_name,
+                                 new_strand, new_tsd, -1, tag=new_tag)
             new_entry.subtype = "CONSOLIDATED_NEST"
             new_entries.append(new_entry)
         else:
+            # either not eligible or tags disagree → process each member individually
             for e in group:
                 if e in to_remove:
                     if id(e) in partial_info:
@@ -443,6 +463,7 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
                         print(f"Full excision in nest group {gid}: {e.chrom}:{e.start}-{e.end} (removed {rem_len} bases)")
                 else:
                     new_entries.append(e)
+                    
     # Process non-group entries.
     for e in entries:
         if e.group is None:

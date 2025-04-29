@@ -17,22 +17,18 @@ def parse_arguments():
                         help="Mutation rate (used in the plot title and for time conversion).")
     parser.add_argument("--output", default="density_plot.pdf",
                         help="Output PDF file name.")
-    parser.add_argument("--gradiant", action="store_true",
-                        help="If provided, color lines using a gradient (lower generations darker, higher lighter).")
+    parser.add_argument("--gradient", action="store_true",
+                        help="If provided, color lines using a distinctive gradient.")
     parser.add_argument("--xmax", type=float, default=None,
                         help="Manually set the upper x-axis limit.")
     return parser.parse_args()
 
 def find_files():
-    # Find all files matching the pattern gen[int]_LTR.tsv.
     pattern = "gen[0-9]*_LTR.tsv"
     files = glob.glob(pattern)
-    
-    # Check for burnin_LTR.tsv (representing generation 0)
     burnin_file = "burnin_LTR.tsv"
     if os.path.exists(burnin_file):
         files.append(burnin_file)
-    
     if not files:
         raise FileNotFoundError("No files found matching pattern 'gen[int]_LTR.tsv' or 'burnin_LTR.tsv'")
     return files
@@ -67,62 +63,51 @@ def load_data(files, model):
 def create_density_plot(data, miu, model, output, use_gradient=False, manual_xmax=None):
     plt.figure(figsize=(10, 6))
     ax = plt.gca()
-    
-    # Determine x-axis limit: use manual limit if provided, else 10% above maximum.
+
     if manual_xmax is not None:
         x_max = manual_xmax
     else:
         max_distance = data['distance'].max()
         x_max = max_distance * 1.1 if max_distance > 0 else 1
     ax.set_xlim(0, x_max)
-    
-    # Get unique sources.
+
     sources = data['source'].unique()
-    
-    # Create a mapping from source to generation number for sorting.
+
     source_to_gen = {}
     for s in sources:
         try:
-            # Remove "Generation" and extra spaces, then convert to int.
             gen = int(s.replace("Generation", "").strip())
         except ValueError:
             gen = float('inf')
         source_to_gen[s] = gen
-    
+
     if use_gradient:
-        # Sort sources by generation number.
         sorted_sources = sorted(sources, key=lambda s: source_to_gen[s])
-        # Create a gradient from dark to light using a colormap.
-        # Here we use np.linspace to get values between 0.3 (dark) and 0.7 (light).
-        cmap = plt.cm.viridis
-        colors = {s: cmap(val) for s, val in zip(sorted_sources, np.linspace(0.3, 0.7, len(sorted_sources)))}
+        # Use a distinctive color palette
+        cmap = plt.cm.plasma
+        colors = {s: cmap(val) for s, val in zip(sorted_sources, np.linspace(0.15, 0.85, len(sorted_sources)))}
     else:
-        # Use the standard husl palette.
         palette = sns.color_palette("husl", len(sources))
         colors = {s: palette[i] for i, s in enumerate(sources)}
-    
-    # Plot density curves.
+
     for source in sources:
         subset = data[data['source'] == source]
         sns.kdeplot(subset['distance'], label=source, color=colors[source],
                     fill=False, clip=(0, x_max), warn_singular=False)
-    
+
     plt.xlabel(f"{model} genetic distance")
     plt.ylabel("Density")
-    
-    # Create secondary x-axis converting genetic distance to time (MYA).
+
     def forward(x):
         return (x / miu) / 1e6
     def inverse(x):
         return x * miu * 1e6
-    
+
     secax = ax.secondary_xaxis('top', functions=(forward, inverse))
     secax.set_xlabel("Time (MYA)")
-    
+
     plt.title(f"Density Plot for {model} distances\nMutation Rate (miu) = {miu}")
-    
-    # Sort legend entries numerically by generation.
-    # Create sorted legend entries with colored squares
+
     legend_items = []
     for s in sorted(sources, key=lambda s: source_to_gen[s]):
         try:
@@ -131,7 +116,7 @@ def create_density_plot(data, miu, model, output, use_gradient=False, manual_xma
             gen_label = s
         legend_items.append(Patch(facecolor=colors[s], edgecolor='black', label=gen_label))
 
-    ax.legend(handles=legend_items, title="Generation")    
+    ax.legend(handles=legend_items, title="Generation")
     plt.tight_layout()
     plt.savefig(output, dpi=300)
     print(f"Plot saved to {output}")
@@ -141,7 +126,7 @@ def main():
     files = find_files()
     data = load_data(files, args.model)
     create_density_plot(data, args.miu, args.model, args.output,
-                        use_gradient=args.gradiant, manual_xmax=args.xmax)
+                        use_gradient=args.gradient, manual_xmax=args.xmax)
 
 if __name__ == "__main__":
     main()
