@@ -79,7 +79,9 @@ def process_bed_file(bed_file):
                 record['category'] = "Fragmented gene"
         else:
             # TE candidate
-            if "_SOLO" in record['feature_id']:
+            if "_FRAG" in record['feature_id']:
+                record['category'] = "Fragmented TE"
+            elif "_SOLO" in record['feature_id']:
                 record['category'] = "SoloLTR"
             else:
                 if record['additional'] and "CUT_BY" in record['additional'][0]:

@@ -217,7 +217,8 @@ def count_intact_TE_count(features):
     intact_flags = [True] * n
     for i, feat in enumerate(features):
         feature_id = feat['name'].split(';')[0]
-        if 'gene' in feature_id.lower():
+#       if 'gene' in feature_id.lower():
+        if 'gene' in feature_id.lower() or "_FRAG" in feature_id:
             intact_flags[i] = False
     for i, feat in enumerate(features):
         feature_id = feat['name'].split(';')[0]
@@ -254,7 +255,8 @@ def get_intact_TE_distribution(features):
     intact_flags = [True] * n
     for i, feat in enumerate(features):
         feature_id = feat['name'].split(';')[0]
-        if 'gene' in feature_id.lower():
+#       if 'gene' in feature_id.lower():
+        if 'gene' in feature_id.lower() or "_FRAG" in feature_id:
             intact_flags[i] = False
     for i, feat in enumerate(features):
         feature_id = feat['name'].split(';')[0]

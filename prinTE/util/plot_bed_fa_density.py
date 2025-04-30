@@ -57,6 +57,8 @@ def classify_bed_records(lines):
         else:
             if "_SOLO" in fid:
                 rec['category'] = "SoloLTR"
+            elif "_FRAG" in fid:
+                rec['category'] = "Fragmented TE"
             elif add and "CUT_BY" in add[0]:
                 rec['category'] = "Fragmented TE"
             else:

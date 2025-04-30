@@ -264,13 +264,15 @@ def select_removals(entries, nest_groups, num_excision, seed, k, gene_weights, g
     if not eligible:
         return set()
     
-    # Determine Lmax among eligible entries.
-    Lmax = max(e.length() for e in eligible)
-    
-    # Pre-calculate weights for each eligible candidate.
+    # Determine L95 (95th percentile) among eligible entries to mitigate long‐outliers
+    lengths = [e.length() for e in eligible]
+    L95 = float(np.percentile(lengths, 95))
+
+    # Pre-calculate weights for each eligible candidate, clamping lengths > L95 to L95
     weights = {}
     for e in eligible:
-        base_weight = math.exp(-k * (1 - (e.length() / Lmax)))
+        L_eff = min(e.length(), L95)
+        base_weight = math.exp(-k * (1 - (L_eff / L95)))
         # Apply chromatin state bias if euch_intervals is provided.
         if euch_intervals is not None:
             # Use the midpoint of the TE candidate.
@@ -396,7 +398,8 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
     partial_info = {}
     for e in sorted_removals:
         if e.subtype in ["NEST_TE_IN_TE", "NON_NEST_GROUP_TE"]:
-            if ("LTRlen" in e.feature_id) and ("_SOLO" not in e.feature_id):
+#           if ("LTRlen" in e.feature_id) and ("_SOLO" not in e.feature_id):
+            if ("LTRlen" in e.feature_id) and ("_SOLO" not in e.feature_id) and ("_FRAG" not in e.feature_id):
                 if not qualifies_as_intact_ltr(e, entries):
                     continue
                 m = re.search(r"LTRlen:(\d+)", e.feature_id)
@@ -603,13 +606,14 @@ def plot_lognormal(sigma, outname):
     plt.close()
     print(f"Log-normal distribution figure saved as {outname}")
 
-def plot_weighted_candidate_curve(k, Lmax, outname):
+def plot_weighted_candidate_curve(k, L95, outname):
     """
-    Plot weighted candidate selection curve.
-    The weight is defined as: weight = exp( - k * (1 - (L / Lmax)) ) for L in [0, Lmax].
+    Plot weighted candidate selection curve using the 95th‐percentile length (L95).
+    Weight = exp( - k * (1 - (min(L, L95) / L95)) ) for L in [0, L95],
+    and any L > L95 is treated as L95.
     """
-    L = np.linspace(0, Lmax, 500)
-    weight = np.exp(-k * (1 - (L / Lmax)))
+    L = np.linspace(0, L95, 500)
+    weight = np.exp(-k * (1 - (L / L95)))
     plt.figure(figsize=(6,4))
     plt.plot(L, weight, lw=2)
     plt.xlabel("Feature Length (L)")
@@ -737,8 +741,9 @@ def main():
         "NEST_TE_IN_TE", "NEST_TE_IN_GENE"
     ]]
     if eligible_entries and not args.no_fig:
-        Lmax = max(e.length() for e in eligible_entries)
-        plot_weighted_candidate_curve(args.k, Lmax, "weighted_candidate_selection.pdf")
+        lengths = [e.length() for e in eligible_entries]
+        L95 = float(np.percentile(lengths, 95))
+        plot_weighted_candidate_curve(args.k, L95, "weighted_candidate_selection.pdf")
 
     # Total excision count
     if args.fix_ex is not None:

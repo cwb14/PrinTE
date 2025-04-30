@@ -53,6 +53,11 @@ def process_bed_file(bed_file):
             if not record:
                 continue
             feature_id, additional = parse_attributes(record['name'])
+
+            # Exclude fragments
+            if "_FRAG" in feature_id:
+                continue
+
             _, te_class, te_superfamily = extract_TE_info(feature_id)
 
             # Count SoloLTRs

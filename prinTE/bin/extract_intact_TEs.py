@@ -130,7 +130,9 @@ def process_bed_file(bed_file):
         if fid.startswith("gene"):
             rec['category'] = "Intact gene" if not add else "Fragmented gene"
         else:
-            if "_SOLO" in fid:
+            if "_FRAG" in fid:
+                rec['category'] = "Fragmented TE"
+            elif "_SOLO" in fid:
                 rec['category'] = "SoloLTR"
             elif add and "CUT_BY" in add[0]:
                 rec['category'] = "Fragmented TE"

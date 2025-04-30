@@ -45,10 +45,13 @@ def process_bed_file(bed_file):
             if not record:
                 continue
             feature_id, additional = parse_attributes(record['name'])
+
             if feature_id.startswith("gene"):
                 category = "Intact gene" if not additional else "Fragmented gene"
             elif "_SOLO" in feature_id:
                 category = "SoloLTR"
+            elif "_FRAG" in feature_id:
+                category = "Fragmented TE"
             else:
                 category = "Fragmented TE" if additional and "CUT_BY" in additional[0] else "Intact TE"
 

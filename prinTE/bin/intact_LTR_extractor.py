@@ -93,11 +93,12 @@ def process_bed_file(bed_file):
             # TE candidate
             if "_SOLO" in record['feature_id']:
                 record['category'] = "SoloLTR"
+            elif "_FRAG" in record['feature_id']:
+                record['category'] = "Fragmented TE"
+            elif record['additional'] and "CUT_BY" in record['additional'][0]:
+                record['category'] = "Fragmented TE"
             else:
-                if record['additional'] and "CUT_BY" in record['additional'][0]:
-                    record['category'] = "Fragmented TE"
-                else:
-                    record['category'] = "Potential intact TE"
+                record['category'] = "Potential intact TE"
 
     # Rule (3): For potential intact TEs with at least one additional attribute,
     # check within +/- 100 lines for another TE with the same TSD and strand and

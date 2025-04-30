@@ -89,6 +89,8 @@ def process_bed_file(bed_file):
             # TE candidate
             if "_SOLO" in record['feature_id']:
                 record['category'] = "SoloLTR"
+            elif "_FRAG" in record['feature_id']:
+                record['category'] = "Fragmented TE"
             else:
                 if record['additional'] and "CUT_BY" in record['additional'][0]:
                     record['category'] = "Fragmented TE"
@@ -200,4 +202,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
