@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-
 # Extracts an updated TE library from bed and fasta. 
 # Non-LTRs are extracted directly.
 # LTR-RTs are modified so that the 3' LTR matches the 5' LTR.
@@ -17,9 +16,9 @@ with optional length-weighted resampling to match a guide distribution.
 Usage:
   Genome mode:
     extract_te_with_weighted_sampling.py --bed file1.bed file2.bed --genome genome.fa \
-        --out_fasta out.fa [--weight_by guide.fa] [--plot_kde_comparison]
+        --out_fasta out.fa [--weight_by guide.fa] [--plot_kde_comparison] [--exclude_missing_ltr_len]
   Library mode:
-    extract_te_with_weighted_sampling.py --lib te_library.fa --out_fasta out.fa
+    extract_te_with_weighted_sampling.py --lib te_library.fa --out_fasta out.fa [--exclude_missing_ltr_len]
 
 Options:
   -h, --help            Show this help message and exit
@@ -31,6 +30,7 @@ Options:
   --weight_by FASTA     Guide FASTA whose length distribution is targeted
   --duplication_mode    Retain all original sequences and duplicate additional copies according to importance weights (only with --weight_by)
   --plot_kde_comparison Save KDE comparison plot as <out_basename>_kde_comparison.pdf
+  --exclude_missing_ltr_len  Exclude intact LTR elements that are missing LTR length info (~LTRlen) from output
 
 Functions:
   parse_line           Parse a BED line into fields
@@ -357,9 +357,12 @@ def main():
                         help='Retain all original sequences and duplicate additional copies according to importance weights (only with --weight_by)')
     parser.add_argument('--plot_kde_comparison', action='store_true',
                         help='Save KDE comparison plot to PDF')
+    parser.add_argument('--exclude_missing_ltr_len', action='store_true',
+                        help='Exclude intact LTR elements missing LTR length info (~LTRlen)')
 
     args = parser.parse_args()
 
+    # Determine entries based on mode
     if args.lib:
         entries = process_library_fasta(args.lib)
     else:
@@ -375,15 +378,26 @@ def main():
             print('No intact TE entries found.', file=sys.stderr)
             sys.exit(1)
 
-        if args.weight_by:
-            base = os.path.splitext(os.path.basename(args.out_fasta))[0]
-            entries = weighted_resample(
-                entries,
-                args.weight_by,
-                out_base=base,
-                plot=args.plot_kde_comparison,
-                duplication_mode=args.duplication_mode
-            )
+    # Optional: filter out intact LTRs missing length info
+    if args.exclude_missing_ltr_len:
+        filtered = []
+        for header, seq in entries:
+            _, te_class, _, ltr_len = extract_TE_info(header)
+            if te_class == 'LTR' and ltr_len is None:
+                continue
+            filtered.append((header, seq))
+        entries = filtered
+
+    # Genome-mode: weighted resampling
+    if not args.lib and args.weight_by:
+        base = os.path.splitext(os.path.basename(args.out_fasta))[0]
+        entries = weighted_resample(
+            entries,
+            args.weight_by,
+            out_base=base,
+            plot=args.plot_kde_comparison,
+            duplication_mode=args.duplication_mode
+        )
 
     write_fasta(entries, args.out_fasta)
     print(f"Processed {len(entries)} entries → {args.out_fasta}", flush=True)
