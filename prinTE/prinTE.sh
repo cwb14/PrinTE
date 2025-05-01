@@ -134,7 +134,8 @@ Options:
   -cbd, --chromatin_bias_delete   Chromatin bias for TE deletion (default: 1.0)
   -cb,  --chromatin_buffer         Interval upstream/downstream used for chromatin bias (default: 10000)
 
-########## GENERAL USE ##########                 
+########## GENERAL USE ##########
+  -mgs, --max_size           Maximum genome size allowed before breaking loop in bytes (e.g., 100M, 1G)             
   -s,  --seed                Random seed (default: 42)
   -r,  --TE_ratio            TE ratio file (default: ${TOOL_DIR}/ratios.tsv)
   -t,  --threads             Number of threads (default: 4)
@@ -291,6 +292,9 @@ while [[ $# -gt 0 ]]; do
     -dg|--disable_genes)
       disable_genes=1
       shift;;
+    -mgs|--max_size)
+      max_size="$2"
+      shift; shift;;
     -sf|--sel_coeff)
       sel_coeff="$2"
       shift; shift;;
@@ -320,6 +324,7 @@ delete_rate="${delete_rate:-1e-7}"
 solo_rate="${solo_rate:-95}"
 k="${k:-10}"
 sigma="${sigma:-1.0}"
+max_size="${max_size:-}" # If not set, remains empty
 
 # --- Validate mutually exclusive CDS options ---
 if [[ -n "$cds_num" && -n "$cds_percent" ]]; then
@@ -460,6 +465,27 @@ fi
 ###############################################################################
 # Phase 2: Looping Generations
 ###############################################################################
+
+
+if [[ -n "$max_size" ]]; then
+  raw="$max_size"
+  unit="${raw: -1}"              # last character: M, G, or digit
+  num="${raw%[MGmg]}"            # strip a possible M/G
+  case "$unit" in
+    [Mm]) max_bytes=$(( num * 1024 * 1024 )) ;;
+    [Gg]) max_bytes=$(( num * 1024 * 1024 * 1024 )) ;;
+    *)    # assume bytes if purely numeric
+      if [[ "$raw" =~ ^[0-9]+$ ]]; then
+        max_bytes=$raw
+      else
+        echo "Error: invalid format for --max_size: $raw" | tee -a "$ERR"
+        exit 1
+      fi
+      ;;
+  esac
+  echo "Max genome size set to $raw → $max_bytes bytes" | tee -a "$LOG"
+fi
+
 echo "=== Phase 2: Looping Generations ===" | tee -a "$LOG"
 
 # Calculate the total number of iterations.
@@ -492,6 +518,7 @@ echo "Seed list for Phase 2 iterations: ${seed_list[@]}" | tee -a "$LOG"
 # Initialize prev_lib for first generation
 prev_lib="lib_clean.fa"
 
+last_gen_done=0
 for (( i=start_iter; i<=iterations; i++ )); do
   # Calculate the true generation number for file naming.
   current_gen=$(( i * step ))
@@ -612,6 +639,24 @@ for (( i=start_iter; i<=iterations; i++ )); do
 
   # point to the newly built library for the next iteration
   prev_lib="gen${current_gen}_final.lib"
+  
+  # record that we successfully reached this generation
+  last_gen_done=$current_gen
+  
+  # Check if max_size is exceeded. 
+  if [[ -n "$max_size" ]]; then
+    fasta="gen${current_gen}_final.fasta"
+    if [[ -f "$fasta" ]]; then
+      actual_bytes=$(stat -c%s "$fasta")
+      if (( actual_bytes > max_bytes )); then
+        echo "Maximum genome size exceeded: $actual_bytes bytes > $max_bytes bytes" | tee -a "$LOG"
+        echo "Stopping at generation ${current_gen}." | tee -a "$LOG"
+        break
+      fi
+    else
+      echo "Warning: expected output '$fasta' not found." | tee -a "$ERR"
+    fi
+  fi
 
 done
 
@@ -666,8 +711,10 @@ eval $cmd
 ###############################################################################
 echo "=== Per-Generation Post-Processing ===" | tee -a "$LOG"
 
-# Determine the total number of final generation files (iterations)
-total_gens=$iterations
+# Determine how many generations we actually ran
+# (i.e. highest_gen / step)
+# total_gens=$iterations
+total_gens=$(( last_gen_done / step ))
 
 # Choose at most 4 evenly distributed generations.
 selected=()
