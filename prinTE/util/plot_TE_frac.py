@@ -3,6 +3,7 @@ import argparse
 import os
 import re
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 def parse_line(line):
     parts = line.strip().split("\t")
@@ -139,13 +140,13 @@ def main():
 
     plt.figure(figsize=(8, 6))
 
-    # ⬇ Add vertical grid lines *before* plotting to keep them in the background
+    # Add vertical grid lines *before* plotting to keep them in the background
     if args.vert_grid:
         for idx, x in enumerate(x_vals):
             if idx % args.vert_grid == 0 and idx != 0:
                 plt.axvline(x=x, color='gray', linestyle='--', linewidth=0.7, zorder=1)
 
-    # ⬇ Plot the data on top of grid
+    # Plot the data on top of grid
     if len(feature_keys) > 1:
         stack_arrays = [stacked_data[key] for key in feature_keys]
         for stack in stack_arrays:
@@ -166,6 +167,56 @@ def main():
     plt.tight_layout()
     plt.savefig(args.out_prefix + ".pdf")
     plt.close()
+
+    # Generate pie charts per generation
+    pie_output = args.out_prefix + "_pies.pdf"
+    plot_pie_charts(generation_data, feature_keys, pie_output)
+
+def plot_pie_charts(generation_data, feature_keys, out_pdf):
+    non_te_label = "Non-TE"
+    
+    # ─── build a consistent color map ───
+    cmap = plt.get_cmap('tab10')
+    color_map = {label: cmap(i) for i, label in enumerate(feature_keys)}
+    color_map[non_te_label] = "gray"  # fixed color for Non-TE
+
+    with PdfPages(out_pdf) as pdf:
+        for gen_num, file_base, overall_percent, per_feature in generation_data:
+            fig, ax = plt.subplots(figsize=(6, 6))
+
+            labels = []
+            sizes = []
+            for key in feature_keys:
+                pct = per_feature.get(key, 0)
+                if pct > 0:
+                    labels.append(key)
+                    sizes.append(pct)
+
+            total_feat = sum(sizes)
+            remaining = 100.0 - total_feat
+            if remaining > 0:
+                labels.append(non_te_label)
+                sizes.append(remaining)
+
+            if not sizes:
+                continue
+
+            # consistent slice coloring
+            slice_colors = [color_map[label] for label in labels]
+
+            wedges, _ = ax.pie(
+                sizes,
+                startangle=90,
+                counterclock=False,
+                colors=slice_colors
+            )
+
+            ax.set_title(f"{file_base} (Generation {gen_num})")
+            ax.legend(wedges, labels, title="Features", loc="center left", bbox_to_anchor=(1, 0.5))
+
+            pdf.savefig(fig, bbox_inches='tight')
+            plt.close(fig)
+
 
 if __name__ == "__main__":
     main()
