@@ -4,7 +4,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Tool Paths
-RANDSEQGEN_DIR="$SCRIPT_DIR/RandSeqGen"
+RANDSEQINSERT_DIR="$SCRIPT_DIR/RandSeqInsert"
 LTR_SIMULATOR_DIR="$SCRIPT_DIR/LTR_simulator"
 TEGENOMESIMULATOR_DIR="$SCRIPT_DIR/TEgenomeSimulator"
 
@@ -33,7 +33,7 @@ Usage:   $0 <command> [options]
 
 Commands:
 
-     RandSeqGen             Simulate TIR insertion
+     RandSeqInsert          Simulate TIR insertion
      LTR_simulator          Simulate LTR mutation, insertion, and evolution
      TEgenomeSimulator      Simulate TE mutation, insertion, and tracking
 
@@ -134,11 +134,11 @@ COMMAND="$1"
 shift
 
 case "$COMMAND" in
-    RandSeqGen)
-        if [ ! -d "$RANDSEQGEN_DIR" ]; then
-            error "RandSeqGen directory not found: $RANDSEQGEN_DIR"
+    RandSeqInsert)
+        if [ ! -d "$RANDSEQINSERT_DIR" ]; then
+            error "RandSeqInsert directory not found: $RANDSEQINSERT_DIR"
         fi
-        python "$RANDSEQGEN_DIR/RandSeqGen.py" "$@"
+        python "$RANDSEQINSERT_DIR/RandSeqInsert.py" "$@"
         ;;
     LTR_simulator)
         if [ ! -d "$LTR_SIMULATOR_DIR" ]; then
