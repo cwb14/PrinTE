@@ -41,7 +41,7 @@ DEFAULT_OUTPUT_DIR_ABS_PATH = os.path.join(os.getcwd(), DEFAULT_OUTPUT_DIR_REL_P
 
 
 def load_sequences(path_list: Optional[List[str]], len_limit: Optional[int] = None,
-                   flag_filter_n: bool = False) -> Optional[List[str]]:
+                   flag_filter_n: bool = False) -> Optional[Tuple[List[str], List[str]]]:
     """
     Load donor sequences from donor library files.
     Only loads sequences that meet the length criteria into memory.
@@ -53,19 +53,28 @@ def load_sequences(path_list: Optional[List[str]], len_limit: Optional[int] = No
         flag_filter_n: Flag to filter out sequences containing N
 
     Returns:
-        Optional[List[str]]: List of donor sequences as strings, or None if no donor paths provided
+        Optional[Tuple[List[str], List[str]]]: Tuple of (sequences, sequence_ids) as strings, or None if no donor paths provided
     """
     if not path_list:
         return None
 
     donor_sequences: List[str] = []
+    donor_ids: List[str] = []
+    
     for file_path in path_list:
-        donor_sequences.extend([str(record.seq.upper()) for record in SeqIO.parse(file_path, "fasta") if
-                              (len(record) <= len_limit if len_limit else True) and
-                              ("N" not in record.seq.upper() if flag_filter_n else True)])
+        for record in SeqIO.parse(file_path, "fasta"):
+            # Check length and N filter criteria
+            if (len(record) <= len_limit if len_limit else True) and \
+               ("N" not in record.seq.upper() if flag_filter_n else True):
+                donor_sequences.append(str(record.seq.upper()))
+                donor_ids.append(record.id)
 
-    donor_sequences.sort(key=len)
-    return donor_sequences
+    # Sort by length, keeping sequences and IDs synchronized
+    sorted_lengths = [len(seq) for seq in donor_sequences]
+    sorted_lengths, donor_sequences, donor_ids = sort_multiple_lists(
+        sorted_lengths, donor_sequences, donor_ids)
+    
+    return donor_sequences, donor_ids
 
 def _find_donor_lib_abs_path_list(path: Optional[str]) -> Optional[List[str]]:
     """
@@ -111,7 +120,7 @@ def _find_donor_lib_abs_path_list(path: Optional[str]) -> Optional[List[str]]:
 
 def _load_multiple_donor_libs(path_list: List[str], weight_list: Optional[List[float]] = None,
                             len_limit: Optional[int] = None,
-                            flag_filter_n: bool = False) -> Optional[Tuple[List[str], List[int], List[float]]]:
+                            flag_filter_n: bool = False) -> Optional[Tuple[List[str], List[str], List[int], List[float]]]:
     """
     Load multiple donor libraries by combining their sequences.
 
@@ -124,6 +133,7 @@ def _load_multiple_donor_libs(path_list: List[str], weight_list: Optional[List[f
     Returns:
         Tuple containing:
             - Combined list of donor sequences from all libraries
+            - Combined list of donor sequence IDs from all libraries
             - List of lengths of donor sequences
             - List of weights for each donor sequence
     """
@@ -131,29 +141,32 @@ def _load_multiple_donor_libs(path_list: List[str], weight_list: Optional[List[f
         return None
 
     all_donor_sequence_list: List[str] = []
+    all_donor_id_list: List[str] = []
     all_donor_len_list: List[int] = []
     all_donor_weight_list: List[float] = []
 
     for lib_path, weight in zip(path_list, weight_list or [None] * len(path_list)):
         single_donor_lib_abs_path_list = _find_donor_lib_abs_path_list(lib_path)
         if single_donor_lib_abs_path_list:
-            single_donor_lib_sequences = load_sequences(single_donor_lib_abs_path_list, len_limit, flag_filter_n)
-            if single_donor_lib_sequences:
+            single_donor_lib_result = load_sequences(single_donor_lib_abs_path_list, len_limit, flag_filter_n)
+            if single_donor_lib_result:
+                single_donor_lib_sequences, single_donor_lib_ids = single_donor_lib_result
                 all_donor_sequence_list.extend(single_donor_lib_sequences)
+                all_donor_id_list.extend(single_donor_lib_ids)
                 all_donor_len_list.extend([len(seq) for seq in single_donor_lib_sequences])
                 if weight:
                     len_single_donor_lib_sequences = len(single_donor_lib_sequences)
                     all_donor_weight_list.extend([weight / len_single_donor_lib_sequences] * len_single_donor_lib_sequences)
 
-    # Sort by length
-    all_donor_len_list, all_donor_sequence_list, all_donor_weight_list = sort_multiple_lists(
-        all_donor_len_list, all_donor_sequence_list, all_donor_weight_list)
+    # Sort by length, keeping all lists synchronized
+    all_donor_len_list, all_donor_sequence_list, all_donor_id_list, all_donor_weight_list = sort_multiple_lists(
+        all_donor_len_list, all_donor_sequence_list, all_donor_id_list, all_donor_weight_list)
 
     # Uniform weights by default: If no weight provided, set all weights to 1
     if not weight_list:
         all_donor_weight_list = [1] * len(all_donor_sequence_list)
 
-    return all_donor_sequence_list, all_donor_len_list, all_donor_weight_list
+    return all_donor_sequence_list, all_donor_id_list, all_donor_len_list, all_donor_weight_list
 
 # ======================================================================================================================
 # Main Sequence Generator Class
@@ -219,7 +232,7 @@ class SeqGenerator:
             if not donor_lib_data or not donor_lib_data[0]:
                 raise ValueError("No valid donor sequences loaded. Check if donor files exist and contain valid sequences.")
             # Assign donor sequences and weights, ignore lengths as they're not needed
-            self.donor_sequences, _, self.donor_weights = donor_lib_data
+            self.donor_sequences, self.donor_ids, _, self.donor_weights = donor_lib_data
             # Normalize weights if they were provided
             if donor_lib_weight and sum(self.donor_weights) > 0:
                 weight_sum = sum(self.donor_weights)
@@ -263,11 +276,11 @@ class SeqGenerator:
 
         Args:
             batch_num: Batch number (starting from 1)
+            seed: Optional seed for this batch
 
         Returns:
             float: Time taken to process this batch (seconds)
         """
-
         if not self.input:
             return None
 
@@ -284,12 +297,14 @@ class SeqGenerator:
         all_sequences = []
         all_donors = [] if self.flag_track else None
         all_reconstructed_donors = [] if self.flag_track else None
+        all_seq_trees = []
 
         with mp.Pool(self.processors) as pool:
             results = pool.imap_unordered(self._imap_worker_process_single_sequence, mp_args_gen, chunksize=1)
 
-            for i, (processed_seq, donors, reconstructed) in enumerate(results, 1):
+            for i, (processed_seq, donors, reconstructed, seq_tree) in enumerate(results, 1):
                 all_sequences.append(processed_seq)
+                all_seq_trees.append((processed_seq.id, seq_tree))
                 if self.flag_track:
                     if donors:
                         all_donors.extend(donors)
@@ -301,7 +316,7 @@ class SeqGenerator:
 
         os.makedirs(self.output_dir_path, exist_ok=True)
         print(f"Output directory: {self.output_dir_path}")
-        self.__save_batch_results(self.output_dir_path, all_sequences, all_donors, all_reconstructed_donors, batch_num)
+        self.__save_batch_results(self.output_dir_path, all_sequences, all_donors, all_reconstructed_donors, batch_num, all_seq_trees)
 
         return time.time() - batch_start_time
 
@@ -310,7 +325,7 @@ class SeqGenerator:
             return self.__process_single_sequence(*args)
         return self.__process_single_sequence(args)
 
-    def __process_single_sequence(self, idx_or_record, seed = None) -> Tuple[SeqRecord, Optional[List[SeqRecord]], Optional[List[SeqRecord]]]:
+    def __process_single_sequence(self, idx_or_record, seed = None) -> Tuple[SeqRecord, Optional[List[SeqRecord]], Optional[List[SeqRecord]], Optional['SequenceTree']]:
         """
         Process a single sequence with random insertions, potentially over multiple iterations.
 
@@ -322,6 +337,7 @@ class SeqGenerator:
                 - The processed sequence
                 - Used donors (if tracking enabled)
                 - Reconstructed donors (if tracking enabled)
+                - The SequenceTree object
         """
         # If idx_or_record is an integer, retrieve the sequence record
         # If it's already a SeqRecord, use it directly
@@ -333,7 +349,7 @@ class SeqGenerator:
         # Check if there are donor sequences to insert
         if not self.insertion or not self.donor_sequences:
             # If no insertions requested or no donor sequences available, return the original sequence
-            return seq_record, None, None
+            return seq_record, None, None, None
 
         # Create a new sequence tree for this sequence
         seq_tree = SequenceTree(str(seq_record.seq), 0)
@@ -357,14 +373,20 @@ class SeqGenerator:
             # Generate insertion positions and donor sequences
             # Use 1-based positions (1 to total_length+1)
             insert_positions = random.choices(range(1, total_length + 2), k=self.insertion)
-            selected_donors = random.choices(self.donor_sequences, weights=self.donor_weights, k=self.insertion)
+            
+            # Select donor indices to ensure sequence and ID correspondence
+            selected_donor_indices = random.choices(range(len(self.donor_sequences)), weights=self.donor_weights, k=self.insertion)
+            selected_donors = [self.donor_sequences[i] for i in selected_donor_indices]
+            selected_donor_ids = [self.donor_ids[i] for i in selected_donor_indices]
 
             # Sort positions in descending order to maintain position integrity during insertion
-            insert_positions, selected_donors = sort_multiple_lists(insert_positions, selected_donors, reverse=True)
+            # Also sort donor sequences and IDs accordingly
+            insert_positions, selected_donors, selected_donor_ids = sort_multiple_lists(
+                insert_positions, selected_donors, selected_donor_ids, reverse=True)
 
-            # Insert donors into the tree
-            for pos, donor_seq in zip(insert_positions, selected_donors):
-                seq_tree.insert(pos, donor_seq, None, self.tsd_length, self.flag_recursive, self.flag_debug)
+            # Insert donors into the tree with their real IDs
+            for pos, donor_seq, donor_id in zip(insert_positions, selected_donors, selected_donor_ids):
+                seq_tree.insert(pos, donor_seq, donor_id, self.tsd_length, self.flag_recursive, self.flag_debug)
 
         # Collect donor sequences once after all iterations if tracking is enabled
         if self.flag_track:
@@ -398,13 +420,14 @@ class SeqGenerator:
 
             print(f"Generated tree and graph visualizations for {seq_record.id}")
 
-        # If debug mode is enabled, print the nesting graph details
+        # If debug mode is enabled, print the tree structure details
         if self.flag_debug:
-            print(f"\n[DEBUG] Nesting graph information for {seq_record.id}:")
-            print(str(seq_tree.event_journal))
-            print("[DEBUG] End of nesting graph information\n")
+            print(f"\n[DEBUG] Tree structure information for {seq_record.id}:")
+            print(f"Total length: {len(str(seq_tree))}")
+            print(f"Node count: {len(seq_tree.collect_active_nodes())}")
+            print("[DEBUG] End of tree structure information\n")
 
-        return new_seq_record, all_used_donors, all_reconstructed_donors
+        return new_seq_record, all_used_donors, all_reconstructed_donors, seq_tree
 
     def execute(self):
         """
@@ -435,10 +458,68 @@ class SeqGenerator:
         print(f"\nAll batches completed in {total_elapsed_time:.2g} seconds")
         print(f"Results saved to \"{os.path.abspath(self.output_dir_path)}\"")
 
+    def _generate_bed_records_for_all_donors(self, chrom: str, seq_tree: 'SequenceTree') -> List[str]:
+        """
+        Generate BED format records for all donor insertions.
+        Uses tree structure directly to calculate positions and get TSD from nodes.
+        
+        Args:
+            chrom: Chromosome/sequence ID
+            seq_tree: SequenceTree object containing insertion information
+            
+        Returns:
+            List[str]: List of BED format records
+        """
+        bed_records = []
+        
+        def _collect_donors_with_positions(node, current_pos=0):
+            """Traverse tree and collect donor nodes with their positions."""
+            if not node:
+                return current_pos
+            
+            # Process left subtree
+            left_end_pos = _collect_donors_with_positions(node.left, current_pos)
+            
+            # Process current node
+            node_start_pos = left_end_pos
+            if node.is_donor:
+                # Calculate clean sequence position (excluding TSD)
+                clean_start = node_start_pos + len(node.tsd_5)
+                clean_length = node.length
+                
+                # Skip empty donors
+                if clean_length > 0:
+                    clean_end = clean_start + clean_length
+                    
+                    # Get TSD sequence for BED (use 5' TSD, or "NA" if none)
+                    tsd_seq = node.tsd_5 or "NA"
+                    
+                    # Build name field
+                    name_parts = []
+                    if node.donor_id:
+                        name_parts.append(node.donor_id)
+                    else:
+                        name_parts.append(f"donor_{node.uid}")
+                    
+                    # Join name parts with semicolons
+                    name = ";".join(name_parts)
+                    
+                    # Create BED record: chrom start end name tsd strand
+                    bed_record = f"{chrom}\t{clean_start}\t{clean_end}\t{name}\t{tsd_seq}\t+"
+                    bed_records.append(bed_record)
+            
+            # Process right subtree
+            right_end_pos = _collect_donors_with_positions(node.right, node_start_pos + node.length + node.get_tsd_length())
+            
+            return right_end_pos
+        
+        _collect_donors_with_positions(seq_tree.root)
+        return bed_records
+
     def __save_batch_results(self, output_dir: str, sequences: List[SeqRecord], 
                              donors: Optional[List[SeqRecord]], 
                              reconstructed_donors: Optional[List[SeqRecord]],
-                             batch_num: int = 1):
+                             batch_num: int = 1, seq_trees: List[Tuple[str, 'SequenceTree']] = None):
         """
         Save the batch results to output files.
 
@@ -448,6 +529,7 @@ class SeqGenerator:
             donors: List of donor records to save if tracking is enabled
             reconstructed_donors: List of reconstructed donor records
             batch_num: The batch number (1-based index)
+            seq_trees: List of tuples containing sequence ID and SequenceTree object
         """
         if not sequences:
             print("No sequences to save")
@@ -459,9 +541,10 @@ class SeqGenerator:
         print(f"Saving {len(sequences)} processed sequences")
         output_dict = {f"sequences{suffix}.fa": sequences}
 
-        if self.flag_track and donors:
-            print(f"Saving {len(donors)} donor sequence records")
-            output_dict[f"used_donors{suffix}.fa"] = donors
+        if self.flag_track:
+            if donors:
+                print(f"Saving {len(donors)} donor sequence records")
+                output_dict[f"used_donors{suffix}.fa"] = donors
 
             if reconstructed_donors:
                 # Group by reconstruction type
@@ -475,6 +558,23 @@ class SeqGenerator:
                 if clean_recs:
                     print(f"Saving {len(clean_recs)} clean reconstructed donor records")
                     output_dict[f"clean_reconstructed_donors{suffix}.fa"] = clean_recs
+
+        # Generate BED file if tracking is enabled and we have seq_trees
+        if self.flag_track and seq_trees:
+            bed_records = []
+            for seq_id, seq_tree in seq_trees:
+                if seq_tree:
+                    bed_records.extend(self._generate_bed_records_for_all_donors(seq_id, seq_tree))
+            
+            if bed_records:
+                bed_filename = f"donors{suffix}.bed"
+                bed_filepath = os.path.join(output_dir, bed_filename)
+                print(f"Saving {len(bed_records)} BED records to {bed_filename}")
+                with open(bed_filepath, "w") as bed_file:
+                    # Write track header
+                    bed_file.write(f'track name="RandSeqInsert_Donors" description="Transposon insertions generated by RandSeqInsert" itemRgb="On"\n')
+                    for record in bed_records:
+                        bed_file.write(record + "\n")
 
         save_multi_fasta_from_dict(output_dict, output_dir)
 

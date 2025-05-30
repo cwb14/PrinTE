@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Tianyu (Sky) Lu (tianyu@lu.fm)
 
 from typing import Dict, List, Tuple, Set, Optional, Any, NamedTuple
 from Bio.SeqRecord import SeqRecord
@@ -22,10 +23,29 @@ class InsertionEvent(NamedTuple):
         return f"Event#{self.event_id}: Donor({self.donor_uid}) → Target({self.target_uid}) → [L({self.left_uid}), R({self.right_uid})]{tsd_str}"
 
 
-class SequenceEventJournal:
+class NestingEventJournal:
     """
-    Event sourcing architecture for sequence insertion events.
-    Records all sequence insertion events and supports sequence reconstruction from event history.
+    Event sourcing architecture for nested sequence insertion events.
+    
+    Important Note: This journal does NOT record all insertion events. It only records 
+    insertion events where a donor sequence is inserted INTO another donor sequence 
+    (nested insertions). Regular insertions of donor sequences into non-donor acceptor 
+    sequences are NOT recorded in this journal.
+    i.e.
+    Records only Donor → Donor insertions (nested insertions). 
+    Does NOT record Donor → Acceptor insertions (simple insertions).
+    
+    Specifically:
+    - Records: Donor → Donor insertions (creates nested structure requiring reconstruction)
+    - Does NOT record: Donor → Acceptor insertions (simple insertions, no nesting involved)
+    
+    This selective recording is by design, as the journal's primary purpose is to:
+    1. Track nested insertion relationships between donor sequences
+    2. Support reconstruction of donor sequences that have been split by other insertions
+    3. Enable proper handling of complex transposon insertion scenarios
+    4. Maintain event history for sequences that require multi-level reconstruction
+    
+    The journal supports sequence reconstruction from event history for nested cases.
     """
     def __init__(self, tree_ref):
         """
@@ -42,7 +62,7 @@ class SequenceEventJournal:
     def __str__(self) -> str:
         """String representation for debugging"""
         lines = ["=" * 32,
-                 "SequenceEventJournal Information",
+                 "NestingEventJournal Information",
                  "=" * 32,
                  f"\nEvent count: {len(self.events)}"]
 
@@ -61,17 +81,20 @@ class SequenceEventJournal:
                          left_uid: int, right_uid: int, 
                          tsd_info: Dict[str, Any] = None) -> InsertionEvent:
         """
-        Record an insertion event.
+        Record an insertion event where a donor sequence is inserted into another donor sequence.
+        
+        Note: This method is only called when the target node is also a donor sequence.
+        Regular insertions into non-donor acceptor sequences are not recorded in this journal.
 
         Args:
             donor_uid: Inserted donor node UID
-            target_uid: Target node UID being inserted into
-            left_uid: Left fragment UID after splitting
-            right_uid: Right fragment UID after splitting
+            target_uid: Target node UID being inserted into (must be a donor)
+            left_uid: Left fragment UID after splitting the target
+            right_uid: Right fragment UID after splitting the target
             tsd_info: TSD information (optional)
 
         Returns:
-            InsertionEvent: The recorded event
+            InsertionEvent: The recorded event representing the nested insertion
         """
         # Create new event
         event = InsertionEvent(
@@ -383,12 +406,12 @@ class SequenceEventJournal:
 
     def get_reconstructed_donor_uids(self, active_nodes: List = None) -> Set[int]:
         """
-        Get all donor UIDs that need reconstruction from active nodes.
+        Get all donor UIDs that need reconstruction.
         These are donors that have been split by other donors.
 
         Args:
             active_nodes: Optional list of active nodes from in-order traversal.
-                          If provided, only considers donors from these nodes.
+                          Not used in this corrected implementation.
 
         Returns:
             Set[int]: Set of UIDs of donors to reconstruct
@@ -398,20 +421,11 @@ class SequenceEventJournal:
         for event in self.events:
             # If a node is a target and it's a donor (not the root node)
             if event.target_uid != self.tree_ref.root.uid:
-                # Check if this target is a donor
-                is_donor = False
-                
-                # If active nodes are provided, check if the target is in active nodes and is a donor
-                if active_nodes is not None:
-                    for node in active_nodes:
-                        if node.uid == event.target_uid and node.is_donor:
-                            is_donor = True
-                            break
-                # Otherwise use general is_donor check
-                else:
-                    is_donor = self.is_donor(event.target_uid)
-                
-                if is_donor:
+                # Check if this target is a donor using the general is_donor check
+                # Note: We don't check active_nodes here because targets that need
+                # reconstruction are precisely the nodes that are NOT in active nodes
+                # anymore (they were replaced during insertion)
+                if self.is_donor(event.target_uid):
                     reconstructed_uids.add(event.target_uid)
         
         return reconstructed_uids
@@ -434,51 +448,86 @@ class SequenceEventJournal:
         # Get all donors that need reconstruction
         reconstructed_uids = self.get_reconstructed_donor_uids(active_nodes)
         
+        # Calculate absolute positions for position-based naming
+        abs_position_map = self._calculate_absolute_positions()
+        
         for uid in reconstructed_uids:
             # Reconstruct sequence
             reconstruct_result = self.reconstruct(uid, seq_id)
             if not reconstruct_result:
                 continue
             
-            # Find TSD information for this donor
+            # Get the node to access donor_id
+            node = self.tree_ref.node_dict.get(uid)
+            if not node:
+                continue
+            
+            # Find the insertion event for this donor to get its position and TSD info
+            insertion_event = None
             tsd_5 = ""
             tsd_3 = ""
             for event in self.events:
-                if event.donor_uid == uid and event.tsd_info:
-                    tsd_info = event.tsd_info
-                    tsd_5 = tsd_info.get('tsd_5', '')
-                    tsd_3 = tsd_info.get('tsd_3', '')
+                if event.donor_uid == uid:
+                    insertion_event = event
+                    if event.tsd_info:
+                        tsd_info = event.tsd_info
+                        tsd_5 = tsd_info.get('tsd_5', '')
+                        tsd_3 = tsd_info.get('tsd_3', '')
                     break
             
+            if not insertion_event:
+                continue
+                
             # Remove TSD from full reconstruction
             full_seq = reconstruct_result['full']
+            full_donor_length = len(full_seq)
             if tsd_5 and full_seq.startswith(tsd_5):
                 full_seq = full_seq[len(tsd_5):]
+                full_donor_length -= len(tsd_5)
             if tsd_3 and full_seq.endswith(tsd_3):
                 full_seq = full_seq[:-len(tsd_3)]
+                full_donor_length -= len(tsd_3)
             
-            # Create full reconstruction record with TSD removed
-            full_id = f"{seq_id}_reconstructed_{uid}"
-            full_rec = create_sequence_record(full_seq, full_id)
-            full_rec.annotations["reconstruction_type"] = "full"
-            full_rec.annotations["original_uid"] = uid
+            # Skip if donor has zero length after TSD removal
+            if full_donor_length > 0:
+                # For reconstructed sequences, use UID-based naming with reconstructed prefix
+                # since they may not exactly match final sequence coordinates
+                full_id = f"{seq_id}_reconstructed_{uid}-+-{full_donor_length}"
+                if node.donor_id:
+                    full_id += f"-{node.donor_id}"
+                    
+                full_rec = create_sequence_record(full_seq, full_id)
+                full_rec.annotations["reconstruction_type"] = "full"
+                full_rec.annotations["original_uid"] = uid
+                if node.donor_id:
+                    full_rec.annotations["donor_id"] = node.donor_id
+                
+                reconstructed_records.append(full_rec)
             
             # Remove TSD from clean reconstruction
             clean_seq = reconstruct_result['clean']
+            clean_donor_length = len(clean_seq)
             if tsd_5 and clean_seq.startswith(tsd_5):
                 clean_seq = clean_seq[len(tsd_5):]
+                clean_donor_length -= len(tsd_5)
             if tsd_3 and clean_seq.endswith(tsd_3):
                 clean_seq = clean_seq[:-len(tsd_3)]
+                clean_donor_length -= len(tsd_3)
             
-            # Create clean reconstruction record with TSD removed
-            clean_id = f"{seq_id}_clean_reconstructed_{uid}"
-            clean_rec = create_sequence_record(clean_seq, clean_id)
-            clean_rec.annotations["reconstruction_type"] = "clean"
-            clean_rec.annotations["original_uid"] = uid
-            
-            # Add to result list
-            reconstructed_records.append(full_rec)
-            reconstructed_records.append(clean_rec)
+            # Skip if donor has zero length after TSD removal
+            if clean_donor_length > 0:
+                # For reconstructed sequences, use UID-based naming with clean_reconstructed prefix
+                clean_id = f"{seq_id}_clean_reconstructed_{uid}-+-{clean_donor_length}"
+                if node.donor_id:
+                    clean_id += f"-{node.donor_id}"
+                    
+                clean_rec = create_sequence_record(clean_seq, clean_id)
+                clean_rec.annotations["reconstruction_type"] = "clean"
+                clean_rec.annotations["original_uid"] = uid
+                if node.donor_id:
+                    clean_rec.annotations["donor_id"] = node.donor_id
+                
+                reconstructed_records.append(clean_rec)
         
         return reconstructed_records
 
@@ -567,10 +616,10 @@ class SequenceEventJournal:
             str: Graphviz DOT format string
         """
         if not self.tree_ref.root:
-            return "digraph SequenceEventJournal { }"
+            return "digraph NestingEventJournal { }"
         
         # Initialize DOT header
-        dot_str = ["digraph SequenceEventJournal {",
+        dot_str = ["digraph NestingEventJournal {",
                   "  bgcolor=\"#FFFFFF\";",
                   "  node [fontcolor=\"#000000\", shape=box, style=filled];",
                   "  edge [fontcolor=\"#000000\", penwidth=2.0];",
@@ -622,7 +671,7 @@ class SequenceEventJournal:
                 node_type = "Node"
                 fill_color = "lightgreen"
             
-            # Create node label
+            # Create node label, never add donor id to the label as it is too long
             label = f"{node_type}\\nUID: {uid}\\nLen: {len(node.data)}"
             
             # Add node to graph

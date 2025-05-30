@@ -2,170 +2,243 @@
 
 [![license](https://img.shields.io/github/license/lutianyu2001/RandSeqInsert.svg)](https://github.com/lutianyu2001/RandSeqInsert/blob/master/LICENSE)
 
-RandSeqInsert is a high-performance Python tool for inserting random DNA segments from reference libraries into existing sequences. It allows for customizable insertion of references with precise control over insertion parameters.
+RandSeqInsert is a high-performance Python tool for simulating transposable element insertions in genomic sequences. Built around an AVL tree-based algorithm with event sourcing architecture, it enables precise modeling of complex nested insertions and provides comprehensive sequence reconstruction capabilities.
 
 ## Table of Contents
 
 - [Features](#features)
 - [Prerequisites](#prerequisites)
+- [Installation](#installation)
 - [Usage](#usage)
+- [Core Features](#core-features)
 - [Examples](#examples)
-- [Output Format](#output-format)
-- [Modes](#modes)
+- [Output Formats](#output-formats)
+- [Advanced Features](#advanced-features)
 - [Performance](#performance)
 - [License](#license)
 
 ## Features
 
-- Insert reference sequences from libraries into existing DNA sequences
-- Control insertion frequency and distribution
-- Multi-processing support for efficient sequence processing
-- Support for various sequence length formats (number, kb, mb)
-- Tracking of inserted references (optional)
+- **AVL Tree-Based Architecture**: Efficient O(log n) insertion operations with automatic tree balancing
+- **Event Sourcing System**: Selective tracking of nested insertion events for complex scenario reconstruction
+- **Target Site Duplication (TSD) Modeling**: Biologically accurate TSD generation with configurable mutations
+- **Nested Insertion Support**: Simulation of donor-to-donor insertions with fragment tracking
+- **Sequence Reconstruction**: Three reconstruction modes (full, clean, event history)
+- **Dual Visualization**: Tree structure and event graph visualizations in Graphviz DOT format
+- **Multiple Output Formats**: FASTA, BED, and specialized reconstruction files
+- **High-Performance Processing**: Multi-core support with memory-efficient operations
+- **Flexible Donor Libraries**: Support for custom and built-in transposon libraries
 
 ## Prerequisites
-- Python >=3.8
+
+- Python ≥3.8
 - BioPython
+- NumPy
+- (Optional) Graphviz for visualization rendering
+
+## Installation
+
+```bash
+git clone https://github.com/lutianyu2001/RandSeqInsert.git
+cd RandSeqInsert
+pip install -r requirements.txt
+```
 
 ## Usage
 
 ```bash
-python RandSeqInsert.py [-h] [-v] -i INPUT -ins INSERTION [-it ITERATION] [-b BATCH] [-p PROCESSOR] [-o OUTPUT] [-r REFERENCE] [-w WEIGHT] [--track] [--filter_n] [--verbose]
+python RandSeqInsert.py [-h] [-v] -i INPUT -is INSERTION [-it ITERATION] [-b BATCH] 
+                        [-p PROCESSORS] [-o OUTPUT] [-d DONOR [DONOR ...]] 
+                        [-w WEIGHT [WEIGHT ...]] [-l LIMIT] [--seed SEED]
+                        [--tsd TSD_LENGTH] [--track] [--visual] [--recursive] 
+                        [--filter_n] [--debug]
 ```
 
-### Program Information
+### Core Arguments
 
-- `-h, --help`
-    - Show help message and exit
-- `-v, --version`
-    - Show version information and exit
-
-### Arguments
-
-- `-i, --input`
-    - Path to input sequence file
-- `-is, --insertion`
-    - Number of insertions to perform in each sequence
-
+- `-i, --input` **[Required]**
+    - Input sequence file in FASTA format
+- `-is, --insert` **[Required]**
+    - Number of insertions per sequence (supports 1k, 1m notation)
 - `-it, --iteration` (default: 1)
-    - Number of iterations to process each sequence
-
+    - Number of insertion iterations per sequence
 - `-b, --batch` (default: 1)
-    - Number of batches to process
-
-- `-p, --processor` (default: available cores - 2)
-    - Number of processor cores to use
-
+    - Number of independent result files to generate
+- `-p, --processors` (default: CPU cores - 2)
+    - Number of processors for parallel processing
 - `-o, --output` (default: "RandSeqInsert-Result")
     - Output directory path
 
-- `-r, --reference`
-    - Path to reference library directory
-    - Can be specified multiple times for different libraries
-    - Built-in reference libraries options:
-        - `TIR`: Use built-in TIR reference library
+### Donor Library Arguments
 
-- `-w, --weight` (default: equal weights)
-    - Weight for each reference library
-    - Must match number of reference libraries
+- `-d, --donor` **[Required]**
+    - Donor sequence library file(s) or directory paths
+    - Multiple libraries supported
+    - Built-in libraries: `TIR/rice`, `TIR/maize`
+- `-w, --weight`
+    - Weights for donor libraries (must match number of libraries)
+- `-l, --limit`
+    - Maximum donor sequence length to load
 
+### Feature Flags
+
+- `--tsd TSD_LENGTH`
+    - Enable Target Site Duplication with specified length
 - `--track`
-    - Enable tracking of inserted references
-
+    - Track and save used donor sequences with reconstruction
+- `--visual`
+    - Generate Graphviz DOT files for tree and event visualization
+- `--recursive`
+    - Use recursive insertion method (default: iterative)
 - `--filter_n`
-    - Avoid using reference sequences with N
+    - Filter out donor sequences containing N bases
+- `--debug`
+    - Enable debug mode with detailed information
+- `--seed SEED`
+    - Random seed for reproducible results
+
+## Core Features
+
+### AVL Tree Architecture
+
+RandSeqInsert uses a balanced binary tree structure for efficient sequence manipulation:
+- **O(log n) insertion complexity** maintaining performance for large sequences
+- **Automatic balancing** through tree rotations
+- **Memory efficient** with node-based sequence representation
+
+### Event Sourcing for Nested Insertions
+
+Advanced tracking system for complex insertion scenarios:
+- **Selective recording** of only nested (donor-to-donor) insertions
+- **Complete reconstruction** of fragmented donor sequences
+- **Event history** preservation for temporal analysis
+
+### Target Site Duplication (TSD) Modeling
+
+Biologically accurate simulation of insertion signatures:
+- **Configurable TSD length** based on transposon type
+- **Independent 5' and 3' mutations** with SNP and InDel support
+- **Realistic mutation rates** for authentic simulation
 
 ## Examples
 
-### Basic Usage
+### Basic Insertion Simulation
 
-```sh
-# Insert 10 references from the built-in TIR/maize library into sequences in input.fa
-python RandSeqInsert.py -i input.fa -is 10 -r lib/TIR/maize
+```bash
+# Insert 100 TIR elements into genome sequences
+python RandSeqInsert.py -i genome.fa -is 100 -d TIR/maize
 ```
 
-#### Track References
+### Complex Nested Insertion with TSD
 
-```sh
-# Enable tracking of inserted references
-python RandSeqInsert.py -i input.fa -is 10 -r lib/TIR/maize --track --tsd 3
+```bash
+# Simulate nested insertions with TSD and tracking
+python RandSeqInsert.py -i genome.fa -is 50 -it 3 \
+  -d TIR/maize -d TIR/rice -w 0.7 -w 0.3 \
+  --tsd 9 --track --visual
 ```
 
-```sh
-# Enable tracking of inserted references
-python RandSeqInsert.py -i test_all_dna_nt_5kb.fa -is 10 -r lib/TIR/maize --track --tsd 3 --visual
+### Multiple Iterations and Batches
+
+```bash
+# Generate 5 independent datasets with multiple iterations
+python RandSeqInsert.py -i genome.fa -is 20 -it 5 -b 5 \
+  -d custom_library.fa --track --seed 12345
 ```
 
-### Advanced Examples
+### Benchmarking Setup
 
-#### Multiple Reference Libraries with Weights
-
-```sh
-# Insert 10 references per sequence using two libraries with different weights
-python RandSeqInsert.py -i input.fa -is 10 -it 10 -r lib/TIR/maize -w 0.8 -r lib/TIR/rice -w 0.2 --track
+```bash
+# Create ground truth dataset for annotation tool benchmarking
+python RandSeqInsert.py -i reference.fa -is 1000 \
+  -d comprehensive_TE_lib.fa --tsd 5 --track --visual \
+  --filter_n --debug -o benchmark_dataset
 ```
 
-#### Multiple Iterations
+### Large-Scale Simulation
 
-```sh
-# Process each sequence 3 times with 10 insertions each time
-python RandSeqInsert.py -i input.fa -is 10 -it 3 -r lib/TIR/maize
+```bash
+# High-throughput simulation with multi-processing
+python RandSeqInsert.py -i large_genome.fa -is 5k -it 2 -b 10 \
+  -p 16 -d TIR/maize -d TIR/rice -w 0.6 -w 0.4 \
+  --tsd 7 --track --recursive
 ```
 
-#### Filter References with N
+## Output Formats
 
-```sh
-# Filter out reference sequences containing N
-python RandSeqInsert.py -i input.fa -is 10 -r lib/TIR/maize --filter_n
+### Primary Outputs
+
+- **`sequences_batch_X.fa`**: Modified sequences with insertions
+- **`used_donors_batch_X.fa`**: Active donor sequences (if `--track` enabled)
+- **`reconstructed_donors_batch_X.fa`**: Full reconstructed sequences
+- **`clean_reconstructed_donors_batch_X.fa`**: Clean reconstructed sequences
+- **`donors_batch_X.bed`**: BED format annotation with insertion coordinates
+
+### Visualization Outputs (with `--visual`)
+
+- **`visualization/seqid_tree_visual.dot`**: Sequence tree structure
+- **`visualization/seqid_event_visual.dot`**: Insertion event relationships
+
+### BED File Format
+
+```
+chr1    1000    1500    donor_123;TIR_element    ATCG    +
+chr1    2000    2300    donor_456;LTR_element    GCTA    +
 ```
 
-#### Multiple Batches with Multi-processing
+Columns: chromosome, start, end, name, TSD_sequence, strand
 
-```sh
-# Process in 5 batches using 8 processor cores
-python RandSeqInsert.py -i input.fa -is 10 -b 5 -p 8 -r lib/TIR/maize
-```
+## Advanced Features
 
-#### Comprehensive Example
+### Sequence Reconstruction Modes
 
-```sh
-# Complex example with multiple libraries, tracking, and verbose output
-python RandSeqInsert.py -i input.fa -is 20 -it 2 -b 3 -p 12 -o custom_output \
-  -r lib/TIR/maize -w 0.6 -r lib/TIR/rice -w 0.4 \
-  --track --filter_n
-```
+1. **Full Reconstruction**: Complete sequences including all nested content
+2. **Clean Reconstruction**: Original donor sequences with nested elements removed  
+3. **Event History**: Step-by-step sequence states through insertion events
 
-## Output Format
+### Event Sourcing Architecture
 
-The program generates FASTA files in the specified output directory:
-- Format: `sequences_batch_X.fa` where X is the batch number
-- If tracking is enabled: `references_batch_X.fa` with details of inserted references
-- Each sequence retains its original ID with additional metadata
+- **Selective tracking** reduces memory overhead
+- **Complete reconstruction** of complex nested scenarios
+- **Temporal analysis** capabilities for evolutionary studies
 
-### Tracking Output Format
+### Dual Visualization System
 
-When `--track` is enabled, a separate file is generated with details about each inserted reference:
-- Position in the original sequence
-- Source reference library
-- Reference sequence ID
-- Length of the inserted reference
+- **Tree Visualization**: Hierarchical structure with position annotations
+- **Event Graph**: Temporal relationships and nesting patterns
+- **Interactive exploration** of complex insertion scenarios
 
-## Modes
+### Performance Optimizations
 
-### Standard Mode
-
-Inserts reference sequences at random positions in the input sequences
-
-### Tracking Mode
-
-Same as Standard Mode but with additional tracking of inserted references
+- **Multi-core processing** for large-scale simulations
+- **Memory-efficient** tree-based operations
+- **Incremental balancing** maintains performance
+- **Chunked processing** for very large sequences
 
 ## Performance
 
-- Parallel processing for efficient sequence processing
-- Binary search optimization for reference sequence selection
-- Minimal disk I/O with in-memory processing
+### Complexity
+- **Insertion**: O(log n) per operation
+- **Balancing**: Automatic with O(log n) overhead
+- **Memory**: Linear with sequence length plus tree structure
 
-## License
+### Benchmarks
 
-[TODO]
+### Scalability
+
+## Use Cases
+
+### Method Development
+- **Benchmarking** TE annotation tools
+- **Ground truth generation** with known insertion histories
+- **Algorithm validation** for structural variant detection
+
+### Evolutionary Studies
+- **Genome size evolution** modeling
+- **TE accumulation** simulation over time
+- **Nested insertion** impact analysis
+
+### Population Genomics
+- **Pan-genome** TE variation modeling
+- **Insertion polymorphism** simulation
+- **Population-specific** TE landscapes

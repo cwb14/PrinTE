@@ -6,6 +6,7 @@ from typing import Tuple, List, Dict, Optional, Set, Union, Iterable, Any
 from Bio.SeqRecord import SeqRecord
 
 from utils import create_sequence_record, generate_TSD
+from nestingeventjournal import NestingEventJournal
 
 
 class SequenceNode:
@@ -13,28 +14,49 @@ class SequenceNode:
     Node in a sequence tree structure, used for efficient sequence insertion operations.
     Implemented as an AVL tree to maintain balance during insertions.
     """
-    def __init__(self, data: str, is_donor: bool = False, donor_id: str = None, uid: int = None):
+    def __init__(self, data: str, is_donor: bool = False, donor_id: str = None, uid: int = None,
+                 tsd_5: str = "", tsd_3: str = ""):
         """
         Initialize a sequence node.
 
         Args:
-            data (str): The sequence string
+            data (str): The sequence string (without TSD)
             is_donor (bool): Whether this node contains a donor sequence
             donor_id (str): Identifier for the donor sequence (if is_donor is True)
             uid (int): Unique identifier for this node
+            tsd_5 (str): 5' TSD sequence
+            tsd_3 (str): 3' TSD sequence
         """
         self.data = data
         self.length = len(data)
         self.is_donor = is_donor
         self.donor_id = donor_id
+        self.tsd_5 = tsd_5
+        self.tsd_3 = tsd_3
         self.left = None
         self.right = None
         self.uid = uid
 
-        # Total length of the subtree for efficient traversal
-        self.total_length = self.length
+        # Total length of the subtree for efficient traversal (including TSD)
+        self.total_length = self.length + len(tsd_5) + len(tsd_3)
         # Height of the node for AVL balancing
         self.height = 1
+
+    def get_full_sequence(self) -> str:
+        """Get the full sequence including TSD."""
+        return self.tsd_5 + self.data + self.tsd_3
+
+    def get_clean_sequence(self) -> str:
+        """Get the clean sequence without TSD."""
+        return self.data
+
+    def has_tsd(self) -> bool:
+        """Check if this node has TSD."""
+        return bool(self.tsd_5 or self.tsd_3)
+
+    def get_tsd_length(self) -> int:
+        """Get total TSD length."""
+        return len(self.tsd_5) + len(self.tsd_3)
 
     def __iter__(self):
         """
@@ -54,12 +76,12 @@ class SequenceNode:
 
     def __str__(self) -> str:
         """
-        Convert the tree to a string by in-order traversal.
+        Convert the tree to a string by in-order traversal, including TSD.
 
         Returns:
-            str: The concatenated sequence
+            str: The concatenated sequence with TSD
         """
-        return "".join([node.data for node in self])
+        return "".join([node.get_full_sequence() for node in self])
 
     def update_height(self):
         """
@@ -71,14 +93,11 @@ class SequenceNode:
 
     def update_total_length(self):
         """
-        Update the total length of this subtree.
-
-        This method recalculates the total length of the subtree rooted at this node
-        by summing the lengths of the left subtree, the current node, and the right subtree.
+        Update the total length of this subtree (including TSD).
         """
         left_length = self.left.total_length if self.left else 0
         right_length = self.right.total_length if self.right else 0
-        self.total_length = left_length + self.length + right_length
+        self.total_length = left_length + self.length + len(self.tsd_5) + len(self.tsd_3) + right_length
 
     def update(self):
         self.update_height()
@@ -194,10 +213,9 @@ class SequenceTree:
 
         # Create the root node
         self.root = self._create_node(initial_seq, False)
-
-        # Create event journal
-        from sequenceeventjournal import SequenceEventJournal
-        self.event_journal = SequenceEventJournal(self)
+        
+        # Create event journal for tracking insertion events
+        self.event_journal = NestingEventJournal(self)
 
     def __str__(self) -> str:
         """
@@ -232,21 +250,24 @@ class SequenceTree:
         elif uid not in self.available_uids:
             self.available_uids.append(uid)
 
-    def _create_node(self, data: str, is_donor: bool = False, donor_id: str = None, uid: int = None) -> SequenceNode:
+    def _create_node(self, data: str, is_donor: bool = False, donor_id: str = None, uid: int = None,
+                     tsd_5: str = "", tsd_3: str = "") -> SequenceNode:
         """
         Create a new SequenceNode with a unique UID.
 
         Args:
-            data (str): Sequence data
+            data (str): Sequence data (without TSD)
             is_donor (bool): Whether this node contains a donor sequence
             donor_id (str): Donor ID for tracking and visualization
             uid (int): Preset UID, if provided
+            tsd_5 (str): 5' TSD sequence
+            tsd_3 (str): 3' TSD sequence
 
         Returns:
             SequenceNode: The newly created node
         """
         uid = uid or self._get_next_uid()
-        node = SequenceNode(data, is_donor, donor_id, uid)
+        node = SequenceNode(data, is_donor, donor_id, uid, tsd_5, tsd_3)
         self.node_dict[uid] = node
         return node
 
@@ -283,7 +304,7 @@ class SequenceTree:
         Args:
             node (SequenceNode): Current root node
             abs_position (int): Absolute position in the tree to insert at (0-based)
-            donor_seq (str): Donor sequence to insert
+            donor_seq (str): Donor sequence to insert (clean, without TSD)
             donor_id (str): Identifier for the donor sequence
             tsd_length (int): Length of Target Site Duplication (TSD) to generate
             debug (bool): Enable debug output
@@ -291,85 +312,139 @@ class SequenceTree:
         Returns:
             SequenceNode: New root node after insertion
         """
-        # Skip insertion if donor sequence is empty
         if not donor_seq:
             return node
 
         current = node
         parent_stack = []
-        path_directions = []  # Record the path direction from root to current node ('left' or 'right')
-
-        # Create donor node UID
+        path_directions = []
         donor_node_uid = self._get_next_uid()
 
-        # Iteratively find insertion position
         while True:
             node_start = current.left.total_length if current.left else 0
-            node_end = node_start + current.length
+            node_end = node_start + current.length + current.get_tsd_length()
 
-            # Case 1: Position is in the current node's left subtree
+            # Case 1: Left subtree
             if abs_position <= node_start:
                 if current.left:
-                    # Record parent node and direction for backtracking
                     parent_stack.append(current)
                     path_directions.append('left')
                     current = current.left
                 else:
-                    # Create new left child node - use preset UID
-                    donor_node = self._create_node(donor_seq, True, donor_id, donor_node_uid)
+                    # Boundary insertion at left - extract TSD from current node
+                    tsd_5 = tsd_3 = ""
+                    if tsd_length > 0:
+                        # Extract TSD from beginning of current node's full sequence
+                        full_seq = current.get_full_sequence()
+                        tsd_source = full_seq[:tsd_length] if tsd_length <= len(full_seq) else full_seq
+                        tsd_5, tsd_3 = generate_TSD(tsd_source, len(tsd_source))
+                        
+                        # Remove TSD from current node
+                        tsd_5_len = len(current.tsd_5)
+                        if tsd_length <= tsd_5_len:
+                            # TSD entirely from 5' TSD
+                            current.tsd_5 = current.tsd_5[tsd_length:]
+                        elif tsd_length <= tsd_5_len + current.length:
+                            # TSD spans 5' TSD and data
+                            data_trim = tsd_length - tsd_5_len
+                            current.tsd_5 = ""
+                            current.data = current.data[data_trim:]
+                            current.length = len(current.data)
+                        else:
+                            # TSD spans entire node content (rare case)
+                            tsd_3_trim = tsd_length - tsd_5_len - current.length
+                            current.tsd_5 = ""
+                            current.data = ""
+                            current.length = 0
+                            current.tsd_3 = current.tsd_3[tsd_3_trim:] if tsd_3_trim < len(current.tsd_3) else ""
+                    
+                    # Create donor with TSD
+                    donor_node = self._create_node(donor_seq, True, donor_id, donor_node_uid, tsd_5, tsd_3)
                     current.left = donor_node
-                    
-                    
                     current.update()
                     break
 
-            # Case 2: Position is inside the current node
+            # Case 2: Inside current node (considering TSD)
             elif node_start < abs_position < node_end:
-                # Calculate relative position
+                # Calculate position within node's full sequence
                 rel_pos = abs_position - node_start
-                left_data = current.data[:rel_pos]
-                right_data = current.data[rel_pos:]
-
-                # Handle TSD generation
+                full_seq = current.get_full_sequence()
+                
+                # Determine where the split occurs
+                tsd_5_len = len(current.tsd_5)
+                data_len = current.length
+                
+                # Generate TSD for insertion
                 tsd_5 = tsd_3 = ""
                 if tsd_length > 0:
-                    # Extract source TSD sequence from the original sequence
-                    source_tsd_seq = right_data[:min(tsd_length, len(right_data))]
+                    if rel_pos < len(full_seq):
+                        source_seq = full_seq[rel_pos:rel_pos + tsd_length]
+                        tsd_5, tsd_3 = generate_TSD(source_seq, tsd_length)
 
-                    # Generate TSD sequences (potentially with mutations)
-                    tsd_5, tsd_3 = generate_TSD(source_tsd_seq, tsd_length)
-
-                    # Remove source TSD from right_data as it will be duplicated
-                    if len(source_tsd_seq) > 0:
-                        right_data = right_data[len(source_tsd_seq):]
+                if rel_pos <= tsd_5_len:
+                    # Split in 5' TSD
+                    left_tsd5 = current.tsd_5[:rel_pos]
+                    right_tsd5 = current.tsd_5[rel_pos:]
                     
-                    # Add TSD sequences to the donor sequence
-                    donor_seq = tsd_5 + donor_seq + tsd_3
+                    left_node_uid = self._get_next_uid()
+                    right_node_uid = self._get_next_uid()
+                    
+                    new_left = self._create_node("", current.is_donor, current.donor_id, left_node_uid, left_tsd5, "")
+                    new_right = self._create_node(current.data, current.is_donor, current.donor_id, right_node_uid, right_tsd5, current.tsd_3)
+                    
+                elif rel_pos <= tsd_5_len + data_len:
+                    # Split in data
+                    data_rel_pos = rel_pos - tsd_5_len
+                    left_data = current.data[:data_rel_pos]
+                    right_data = current.data[data_rel_pos:]
+                    
+                    left_node_uid = self._get_next_uid()
+                    right_node_uid = self._get_next_uid()
+                    
+                    new_left = self._create_node(left_data, current.is_donor, current.donor_id, left_node_uid, current.tsd_5, "")
+                    new_right = self._create_node(right_data, current.is_donor, current.donor_id, right_node_uid, "", current.tsd_3)
+                    
+                else:
+                    # Split in 3' TSD
+                    tsd3_rel_pos = rel_pos - tsd_5_len - data_len
+                    left_tsd3 = current.tsd_3[:tsd3_rel_pos]
+                    right_tsd3 = current.tsd_3[tsd3_rel_pos:]
+                    
+                    left_node_uid = self._get_next_uid()
+                    right_node_uid = self._get_next_uid()
+                    
+                    new_left = self._create_node(current.data, current.is_donor, current.donor_id, left_node_uid, current.tsd_5, left_tsd3)
+                    new_right = self._create_node("", current.is_donor, current.donor_id, right_node_uid, right_tsd3, "")
 
-                # Save current node information
-                old_node_uid = current.uid
-                is_current_donor = current.is_donor
-                current_donor_id = current.donor_id
-
-                # Create left and right fragment node UIDs
-                left_node_uid = self._get_next_uid()
-                right_node_uid = self._get_next_uid()
-
-                # Create left node with preset UID
-                new_left = self._create_node(left_data, is_current_donor, current_donor_id, left_node_uid)
+                # Set up subtrees
                 if current.left:
                     new_left.left = current.left
                     new_left.update()
-
-                # Create right node with preset UID
-                new_right = self._create_node(right_data, is_current_donor, current_donor_id, right_node_uid)
                 if current.right:
                     new_right.right = current.right
                     new_right.update()
 
-                # If current node is donor, record insertion event
+                # Save the old node UID and info before transformation
+                old_node_uid = current.uid
+                is_current_donor = current.is_donor
+                current_donor_id = current.donor_id
+                original_data = current.data  # Save the data BEFORE any transformation
+
+                # Transform current node to donor with TSD
+                current.data = donor_seq
+                current.length = len(donor_seq)
+                current.is_donor = True
+                current.donor_id = donor_id
+                current.uid = donor_node_uid
+                current.tsd_5 = tsd_5
+                current.tsd_3 = tsd_3
+                current.left = new_left
+                current.right = new_right
+                self.node_dict[donor_node_uid] = current
+                
+                # Record insertion event if inserting into a donor node
                 if is_current_donor:
-                    # Create TSD information (if any)
+                    # Create TSD info
                     tsd_info = None
                     if tsd_length > 0:
                         tsd_info = {
@@ -378,70 +453,84 @@ class SequenceTree:
                             'tsd_3': tsd_3
                         }
                     
+                    # Create a preserved copy of the original target node for journal reference
+                    # Use the saved original data, not the transformed data
+                    original_target = SequenceNode(original_data, is_current_donor, current_donor_id, old_node_uid)
+                    self.node_dict[old_node_uid] = original_target
+                    
                     # Record insertion event
                     self.event_journal.record_insertion(
                         donor_uid=donor_node_uid,
                         target_uid=old_node_uid,
-                        left_uid=left_node_uid,
-                        right_uid=right_node_uid,
+                        left_uid=new_left.uid,
+                        right_uid=new_right.uid,
                         tsd_info=tsd_info
                     )
-
-                # Release old node UID (Do not reuse it)
-                # self._release_uid(old_node_uid)
-
-                # Update node information
-                current.data = donor_seq
-                current.length = len(donor_seq)
-                current.is_donor = True
-                current.donor_id = donor_id
-                current.uid = donor_node_uid
-                self.node_dict[donor_node_uid] = current
-
-                # Set new children
-                current.left = new_left
-                current.right = new_right
+                
                 current.update()
                 break
 
-            # Case 3: Position is in the current node's right subtree
+            # Case 3: Right subtree
             elif abs_position >= node_end:
                 if current.right:
-                    # Record parent node and direction for backtracking
                     parent_stack.append(current)
                     path_directions.append('right')
-                    # Adjust absolute position to fit the right subtree's relative position
                     abs_position -= node_end
                     current = current.right
                 else:
-                    # Create new right child node - use preset UID
-                    donor_node = self._create_node(donor_seq, True, donor_id, donor_node_uid)
+                    # Boundary insertion at right - extract TSD from current node
+                    tsd_5 = tsd_3 = ""
+                    if tsd_length > 0:
+                        # Extract TSD from end of current node's full sequence
+                        full_seq = current.get_full_sequence()
+                        if tsd_length <= len(full_seq):
+                            tsd_source = full_seq[-tsd_length:]
+                            start_pos = len(full_seq) - tsd_length
+                        else:
+                            tsd_source = full_seq
+                            start_pos = 0
+                        tsd_5, tsd_3 = generate_TSD(tsd_source, len(tsd_source))
+                        
+                        # Remove TSD from current node
+                        tsd_5_len = len(current.tsd_5)
+                        data_len = current.length
+                        
+                        if start_pos >= tsd_5_len + data_len:
+                            # TSD entirely from 3' TSD
+                            trim_pos = start_pos - tsd_5_len - data_len
+                            current.tsd_3 = current.tsd_3[:trim_pos]
+                        elif start_pos >= tsd_5_len:
+                            # TSD spans data and 3' TSD
+                            data_trim_pos = start_pos - tsd_5_len
+                            current.data = current.data[:data_trim_pos]
+                            current.length = len(current.data)
+                            current.tsd_3 = ""
+                        else:
+                            # TSD spans all parts
+                            current.tsd_5 = current.tsd_5[:start_pos]
+                            current.data = ""
+                            current.length = 0
+                            current.tsd_3 = ""
+                    
+                    # Create donor with TSD
+                    donor_node = self._create_node(donor_seq, True, donor_id, donor_node_uid, tsd_5, tsd_3)
                     current.right = donor_node
-                    
-                    
                     current.update()
                     break
-            else:
-                raise RuntimeError("[ERROR] Should not reach here")
 
-        # Backtrack and update node heights and total lengths while executing balance
+        # Backtrack and balance
         while parent_stack:
             parent = parent_stack.pop()
             direction = path_directions.pop()
-
-            # Update parent node's child reference
+            
             if direction == 'left':
-                # Balance current node using helper method
                 current = current.balance()
                 parent.left = current
-            else:  # 'right'
-                # Balance current node using helper method
+            else:
                 current = current.balance()
                 parent.right = current
-
+                
             parent.update()
-
-            # Balance parent node
             current = parent.balance()
 
         return current
@@ -454,7 +543,7 @@ class SequenceTree:
         Args:
             node (SequenceNode): Current node
             abs_position (int): Absolute position in the tree to insert at (0-based)
-            donor_seq (str): Donor sequence to insert
+            donor_seq (str): Donor sequence to insert (clean, without TSD)
             donor_id (str): Identifier for the donor sequence
             tsd_length (int): Length of Target Site Duplication (TSD) to generate
             debug (bool): Enable debug output
@@ -462,81 +551,114 @@ class SequenceTree:
         Returns:
             SequenceNode: New node after insertion
         """
-        # Skip insertion if donor sequence is empty
         if not donor_seq:
             return node
 
-        # Create donor node UID
         donor_node_uid = self._get_next_uid()
-
-        # Calculate positions in tree
         node_start = node.left.total_length if node.left else 0
-        node_end = node_start + node.length
+        node_end = node_start + node.length + node.get_tsd_length()
 
-        # Case 1: Position is in the current node's left subtree
+        # Case 1: Left subtree
         if abs_position <= node_start:
             if node.left:
                 node.left = self._insert_recursive(node.left, abs_position, donor_seq, donor_id, tsd_length)
             else:
-                # Insert as left child - use preset UID
-                donor_node = self._create_node(donor_seq, True, donor_id, donor_node_uid)
-                node.left = donor_node
+                # Boundary insertion at left - extract TSD from current node
+                tsd_5 = tsd_3 = ""
+                if tsd_length > 0:
+                    # Extract TSD from beginning of current node's full sequence
+                    full_seq = node.get_full_sequence()
+                    tsd_source = full_seq[:tsd_length] if tsd_length <= len(full_seq) else full_seq
+                    tsd_5, tsd_3 = generate_TSD(tsd_source, len(tsd_source))
+                    
+                    # Remove TSD from current node
+                    tsd_5_len = len(node.tsd_5)
+                    if tsd_length <= tsd_5_len:
+                        # TSD entirely from 5' TSD
+                        node.tsd_5 = node.tsd_5[tsd_length:]
+                    elif tsd_length <= tsd_5_len + node.length:
+                        # TSD spans 5' TSD and data
+                        data_trim = tsd_length - tsd_5_len
+                        node.tsd_5 = ""
+                        node.data = node.data[data_trim:]
+                        node.length = len(node.data)
+                    else:
+                        # TSD spans entire node content (rare case)
+                        tsd_3_trim = tsd_length - tsd_5_len - node.length
+                        node.tsd_5 = ""
+                        node.data = ""
+                        node.length = 0
+                        node.tsd_3 = node.tsd_3[tsd_3_trim:] if tsd_3_trim < len(node.tsd_3) else ""
                 
-
+                # Create donor with TSD
+                donor_node = self._create_node(donor_seq, True, donor_id, donor_node_uid, tsd_5, tsd_3)
+                node.left = donor_node
             node.update()
             return node.balance()
 
-        # Case 2: Position is inside the current node
+        # Case 2: Inside current node
         if node_start < abs_position < node_end:
-            # Split this node
             rel_pos = abs_position - node_start
-            left_data = node.data[:rel_pos]
-            right_data = node.data[rel_pos:]
+            full_seq = node.get_full_sequence()
+            tsd_5_len = len(node.tsd_5)
+            data_len = node.length
 
-            # Handle TSD generation
+            # Generate TSD
             tsd_5 = tsd_3 = ""
-            if tsd_length > 0:
-                # Extract source TSD sequence from the original sequence
-                source_tsd_seq = right_data[:min(tsd_length, len(right_data))]
+            if tsd_length > 0 and rel_pos < len(full_seq):
+                source_seq = full_seq[rel_pos:rel_pos + tsd_length]
+                tsd_5, tsd_3 = generate_TSD(source_seq, tsd_length)
 
-                # Generate TSD sequences (potentially with mutations)
-                tsd_5, tsd_3 = generate_TSD(source_tsd_seq, tsd_length)
+            # Split logic
+            if rel_pos <= tsd_5_len:
+                left_tsd5 = node.tsd_5[:rel_pos]
+                right_tsd5 = node.tsd_5[rel_pos:]
+                new_left = self._create_node("", node.is_donor, node.donor_id, self._get_next_uid(), left_tsd5, "")
+                new_right = self._create_node(node.data, node.is_donor, node.donor_id, self._get_next_uid(), right_tsd5, node.tsd_3)
+            elif rel_pos <= tsd_5_len + data_len:
+                data_rel_pos = rel_pos - tsd_5_len
+                left_data = node.data[:data_rel_pos]
+                right_data = node.data[data_rel_pos:]
+                new_left = self._create_node(left_data, node.is_donor, node.donor_id, self._get_next_uid(), node.tsd_5, "")
+                new_right = self._create_node(right_data, node.is_donor, node.donor_id, self._get_next_uid(), "", node.tsd_3)
+            else:
+                tsd3_rel_pos = rel_pos - tsd_5_len - data_len
+                left_tsd3 = node.tsd_3[:tsd3_rel_pos]
+                right_tsd3 = node.tsd_3[tsd3_rel_pos:]
+                new_left = self._create_node(node.data, node.is_donor, node.donor_id, self._get_next_uid(), node.tsd_5, left_tsd3)
+                new_right = self._create_node("", node.is_donor, node.donor_id, self._get_next_uid(), right_tsd3, "")
 
-                # Remove source TSD from right_data as it will be duplicated
-                if len(source_tsd_seq) > 0:
-                    right_data = right_data[len(source_tsd_seq):]
-
-                # Add TSD sequences to the donor sequence
-                donor_seq = tsd_5 + donor_seq + tsd_3
-
-            # Save current node information
-            old_node_uid = node.uid
-            is_current_donor = node.is_donor
-            current_donor_id = node.donor_id
-
-            # Create left and right fragment node UIDs
-            left_node_uid = self._get_next_uid()
-            right_node_uid = self._get_next_uid()
-
-            # Create new node with preset UID
-            new_left = self._create_node(left_data, is_current_donor, current_donor_id, left_node_uid)
+            # Set up subtrees
             if node.left:
                 new_left.left = node.left
                 new_left.update()
-                # Balance left subtree
                 new_left = new_left.balance()
-
-            # Create right node with preset UID
-            new_right = self._create_node(right_data, is_current_donor, current_donor_id, right_node_uid)
             if node.right:
                 new_right.right = node.right
                 new_right.update()
-                # Balance right subtree
                 new_right = new_right.balance()
 
-            # If current node is donor, record insertion event
+            # Save the old node UID and info before transformation
+            old_node_uid = node.uid
+            is_current_donor = node.is_donor
+            current_donor_id = node.donor_id
+            original_data = node.data  # Save the data BEFORE any transformation
+
+            # Transform node to donor
+            node.data = donor_seq
+            node.length = len(donor_seq)
+            node.is_donor = True
+            node.donor_id = donor_id
+            node.uid = donor_node_uid
+            node.tsd_5 = tsd_5
+            node.tsd_3 = tsd_3
+            node.left = new_left
+            node.right = new_right
+            self.node_dict[donor_node_uid] = node
+            
+            # Record insertion event if inserting into a donor node
             if is_current_donor:
-                # Create TSD information (if any)
+                # Create TSD info
                 tsd_info = None
                 if tsd_length > 0:
                     tsd_info = {
@@ -545,42 +667,65 @@ class SequenceTree:
                         'tsd_3': tsd_3
                     }
                 
+                # Create a preserved copy of the original target node for journal reference
+                # Use the saved original data, not the transformed data
+                original_target = SequenceNode(original_data, is_current_donor, current_donor_id, old_node_uid)
+                self.node_dict[old_node_uid] = original_target
+                
                 # Record insertion event
                 self.event_journal.record_insertion(
                     donor_uid=donor_node_uid,
                     target_uid=old_node_uid,
-                    left_uid=left_node_uid,
-                    right_uid=right_node_uid,
+                    left_uid=new_left.uid,
+                    right_uid=new_right.uid,
                     tsd_info=tsd_info
                 )
-
-            # Release old node UID (Do not reuse it)
-            # self._release_uid(old_node_uid)
-
-            # Update node information
-            node.data = donor_seq
-            node.length = len(donor_seq)
-            node.is_donor = True
-            node.donor_id = donor_id
-            node.uid = donor_node_uid
-            self.node_dict[donor_node_uid] = node
-
-            # Set new children
-            node.left = new_left
-            node.right = new_right
+            
             node.update()
-
             return node.balance()
 
-        # Case 3: Position is in the current node's right subtree
+        # Case 3: Right subtree
         if abs_position >= node_end:
             if node.right:
                 node.right = self._insert_recursive(node.right, abs_position - node_end, donor_seq, donor_id, tsd_length)
             else:
-                # Insert as right child - use preset UID
-                donor_node = self._create_node(donor_seq, True, donor_id, donor_node_uid)
+                # Boundary insertion at right - extract TSD from current node
+                tsd_5 = tsd_3 = ""
+                if tsd_length > 0:
+                    # Extract TSD from end of current node's full sequence
+                    full_seq = node.get_full_sequence()
+                    if tsd_length <= len(full_seq):
+                        tsd_source = full_seq[-tsd_length:]
+                        start_pos = len(full_seq) - tsd_length
+                    else:
+                        tsd_source = full_seq
+                        start_pos = 0
+                    tsd_5, tsd_3 = generate_TSD(tsd_source, len(tsd_source))
+                    
+                    # Remove TSD from current node
+                    tsd_5_len = len(node.tsd_5)
+                    data_len = node.length
+                    
+                    if start_pos >= tsd_5_len + data_len:
+                        # TSD entirely from 3' TSD
+                        trim_pos = start_pos - tsd_5_len - data_len
+                        node.tsd_3 = node.tsd_3[:trim_pos]
+                    elif start_pos >= tsd_5_len:
+                        # TSD spans data and 3' TSD
+                        data_trim_pos = start_pos - tsd_5_len
+                        node.data = node.data[:data_trim_pos]
+                        node.length = len(node.data)
+                        node.tsd_3 = ""
+                    else:
+                        # TSD spans all parts
+                        node.tsd_5 = node.tsd_5[:start_pos]
+                        node.data = ""
+                        node.length = 0
+                        node.tsd_3 = ""
+                
+                # Create donor with TSD
+                donor_node = self._create_node(donor_seq, True, donor_id, donor_node_uid, tsd_5, tsd_3)
                 node.right = donor_node
-
             node.update()
             return node.balance()
 
@@ -609,90 +754,157 @@ class SequenceTree:
 
     def donors(self, seq_id: str) -> Tuple[List[SeqRecord], List[SeqRecord]]:
         """
-        Collect all donor nodes and reconstruct nested donors.
-        Uses in-order traversal to collect only active nodes in the final sequence,
-        and uses event journal for efficient reconstruction.
+        Collect all donor nodes and reconstruct cut donors using tree analysis.
 
         Args:
             seq_id (str): Original sequence ID
 
         Returns:
             Tuple[List[SeqRecord], List[SeqRecord]]:
-                - Regular donor records (only those without nested insertions)
-                - Reconstructed donor records
+                - Regular donor records 
+                - Reconstructed donor records (donors that were cut by others)
         """
-        # Get active nodes via in-order traversal
+        donor_records = []
+        reconstructed_records = []
+        
+        # Collect all donor nodes with position info
+        def _collect_donors_with_positions(node, current_pos=0):
+            if not node:
+                return current_pos
+            
+            # Process left subtree
+            left_end_pos = _collect_donors_with_positions(node.left, current_pos)
+            
+            # Process current node
+            node_start_pos = left_end_pos
+            if node.is_donor:
+                # Calculate clean sequence position (excluding TSD)
+                clean_start = node_start_pos + len(node.tsd_5)
+                clean_length = node.length
+                clean_end = clean_start + clean_length
+                
+                # Skip empty donors
+                if clean_length > 0:
+                    # Create donor ID with 1-based positions
+                    donor_id = f"{seq_id}_{clean_start + 1}_{clean_end}-+-{clean_length}"
+                    if node.donor_id:
+                        donor_id += f"-{node.donor_id}"
+                    
+                    # Create record with clean sequence
+                    donor_record = create_sequence_record(node.get_clean_sequence(), donor_id)
+                    donor_record.annotations["uid"] = node.uid
+                    donor_record.annotations["position"] = clean_start + 1  # 1-based
+                    donor_record.annotations["length"] = clean_length
+                    donor_record.annotations["tsd_5"] = node.tsd_5
+                    donor_record.annotations["tsd_3"] = node.tsd_3
+                    donor_record.annotations["original_donor_id"] = node.donor_id
+                    
+                    donor_records.append(donor_record)
+            
+            # Process right subtree
+            right_end_pos = _collect_donors_with_positions(node.right, node_start_pos + node.length + node.get_tsd_length())
+            
+            return right_end_pos
+        
+        _collect_donors_with_positions(self.root)
+        
+        # Get active nodes for consistency
         active_nodes = self.collect_active_nodes()
         
-        # Collect donor records from active nodes
-        donor_records = []
-        abs_position_map = self.event_journal._calculate_absolute_positions()
+        # Get reconstructed donors from event journal
+        event_reconstructed_records = self.event_journal.reconstruct_donors_to_records(seq_id, active_nodes)
         
-        for node in active_nodes:
-            if node.is_donor:
-                # Get absolute position information
-                start_pos = abs_position_map.get(node.uid, 0)
-                
-                # Convert to 1-based index for output
-                start_pos_1based = start_pos + 1
-                
-                # Get donor sequence and check for TSD
-                donor_seq = node.data
-                donor_length = node.length
-                
-                # Find insertion events where this node is the donor
-                for event in self.event_journal.events:
-                    if event.donor_uid == node.uid and event.tsd_info:
-                        # Extract TSD information
-                        tsd_info = event.tsd_info
-                        tsd_5 = tsd_info.get('tsd_5', '')
-                        tsd_3 = tsd_info.get('tsd_3', '')
-                        
-                        # Remove TSD sequences from donor
-                        if tsd_5 and donor_seq.startswith(tsd_5):
-                            donor_seq = donor_seq[len(tsd_5):]
-                            donor_length -= len(tsd_5)
-                            # Adjust position to account for removed 5' TSD
-                            start_pos_1based += len(tsd_5)
-                        
-                        if tsd_3 and donor_seq.endswith(tsd_3):
-                            donor_seq = donor_seq[:-len(tsd_3)]
-                            donor_length -= len(tsd_3)
-                        
-                        # We found the event with this donor, no need to continue
-                        break
-                
-                # Skip donors with zero length after TSD removal
-                if donor_length <= 0:
-                    continue
-                    
-                # Create donor ID - now reflects sequence without TSD
-                donor_id = f"{seq_id}_{start_pos_1based}_{start_pos_1based + donor_length - 1}-+-{donor_length}"
-                if node.donor_id:
-                    donor_id += f"-{node.donor_id}"
-                
-                # Create record with TSD-free sequence
-                donor_record = create_sequence_record(donor_seq, donor_id)
-                donor_record.annotations["uid"] = node.uid
-                donor_record.annotations["position"] = start_pos_1based
-                donor_record.annotations["length"] = donor_length
-                
-                # Add to result list
-                donor_records.append(donor_record)
-        
-        # Reconstruct nested sequences using event journal, passing active_nodes
-        reconstructed_records = self.event_journal.reconstruct_donors_to_records(seq_id, active_nodes)
-        
-        # Get the UIDs of donors that have been targets of insertion events (have nested insertions)
-        # Pass active_nodes to ensure consistency
+        # Get UIDs of donors that need reconstruction (have nested insertions)
         excluded_uids = self.event_journal.get_reconstructed_donor_uids(active_nodes)
         
-        # Filter donor_records to only include those that don't have nested insertions
+        # Filter donor_records to exclude donors that have nested insertions
         if excluded_uids:
             donor_records = [record for record in donor_records
                             if record.annotations.get("uid") not in excluded_uids]
         
+        # Combine both reconstruction methods
+        # If event journal has reconstructions, use those preferentially
+        if event_reconstructed_records:
+            reconstructed_records = event_reconstructed_records
+        else:
+            # Fall back to tree-based reconstruction for legacy compatibility
+            # Analyze for reconstruction: find donors that were cut by others
+            donor_groups = {}  # Group by original_donor_id
+            for record in donor_records:
+                orig_id = record.annotations.get("original_donor_id")
+                if orig_id:
+                    if orig_id not in donor_groups:
+                        donor_groups[orig_id] = []
+                    donor_groups[orig_id].append(record)
+            
+            # Reconstruct cut donors
+            for orig_id, fragments in donor_groups.items():
+                if len(fragments) > 1:  # Multiple fragments = donor was cut
+                    # Sort fragments by position
+                    fragments.sort(key=lambda x: x.annotations["position"])
+                    
+                    # Create clean reconstruction (original sequence only)
+                    clean_seq = "".join(str(f.seq) for f in fragments)
+                    clean_id = f"{seq_id}_reconstructed_{orig_id}_clean"
+                    clean_record = create_sequence_record(clean_seq, clean_id)
+                    clean_record.annotations["reconstruction_type"] = "clean"
+                    clean_record.annotations["original_donor_id"] = orig_id
+                    clean_record.annotations["fragment_count"] = len(fragments)
+                    
+                    # Create full reconstruction (with nested insertions)
+                    full_seq = self._get_full_sequence_between_positions(
+                        fragments[0].annotations["position"] - 1,  # Convert to 0-based
+                        fragments[-1].annotations["position"] + fragments[-1].annotations["length"] - 1
+                    )
+                    full_id = f"{seq_id}_reconstructed_{orig_id}_full"
+                    full_record = create_sequence_record(full_seq, full_id)
+                    full_record.annotations["reconstruction_type"] = "full"
+                    full_record.annotations["original_donor_id"] = orig_id
+                    full_record.annotations["fragment_count"] = len(fragments)
+                    
+                    reconstructed_records.extend([clean_record, full_record])
+        
         return donor_records, reconstructed_records
+    
+    def _get_full_sequence_between_positions(self, start_pos: int, end_pos: int) -> str:
+        """Extract sequence between two positions including all nested content."""
+        def _extract_range(node, current_pos=0):
+            if not node:
+                return "", current_pos
+            
+            result = ""
+            
+            # Process left subtree
+            left_result, left_end = _extract_range(node.left, current_pos)
+            if self._overlaps_range(current_pos, left_end, start_pos, end_pos):
+                result += left_result
+            
+            # Process current node
+            node_start = left_end
+            node_end = node_start + node.length + node.get_tsd_length()
+            
+            if self._overlaps_range(node_start, node_end, start_pos, end_pos):
+                # Calculate the portion of this node that falls within range
+                extract_start = max(0, start_pos - node_start)
+                extract_end = min(node.length + node.get_tsd_length(), end_pos - node_start + 1)
+                
+                full_node_seq = node.get_full_sequence()
+                if extract_start < len(full_node_seq) and extract_end > extract_start:
+                    result += full_node_seq[extract_start:extract_end]
+            
+            # Process right subtree
+            right_result, right_end = _extract_range(node.right, node_end)
+            if self._overlaps_range(node_end, right_end, start_pos, end_pos):
+                result += right_result
+            
+            return result, right_end
+        
+        full_seq, _ = _extract_range(self.root)
+        return full_seq
+    
+    def _overlaps_range(self, range1_start: int, range1_end: int, range2_start: int, range2_end: int) -> bool:
+        """Check if two ranges overlap."""
+        return not (range1_end < range2_start or range2_end < range1_start)
 
     def to_graphviz_dot(self) -> str:
         """
@@ -730,7 +942,7 @@ class SequenceTree:
 
         Args:
             node (SequenceNode): Current node
-            event_journal: Event journal instance for fragment detection
+            event_journal: Event journal for the tree
             abs_pos (int): Current absolute position (0-based)
 
         Returns:
@@ -767,14 +979,8 @@ class SequenceTree:
         # Process fragment and nesting information
         cut_half = ""
 
-        # Redesigned color assignment logic for clarity:
-        # 1. First set base colors (donor = blue, acceptor = green)
-        # 2. If it's a cut fragment, change to pink
-        # 3. If it has nesting relationship, change to yellow
-        # 4. If conditions 2 and 3 are both true, use purple
-
         # Check if this is a fragment of a cut donor
-        if event_journal.is_fragment(node.uid):
+        if event_journal and event_journal.is_fragment(node.uid):
             # Get fragment info (original_uid, is_left, cutter_uid)
             fragment_info = event_journal.get_fragment_info(node.uid)
             if fragment_info:
@@ -787,8 +993,11 @@ class SequenceTree:
         label = "".join([node_type, " | ", str(node.uid), "\\n",
                          str(start_pos_1based), "\\l",
                          str(end_pos_1based), "\\l",
-                         "Length: ", str(node.length), "\\n",
-                         cut_half])
+                         "Length: ", str(node.length)])
+        
+        # Add cut information if present
+        if cut_half:
+            label += "\\n" + cut_half
 
         # Add the node to the nodes list
         nodes.append(f'{node_id} [label="{label}", fillcolor="{fill_color}"];')

@@ -157,63 +157,66 @@ def save_multi_fasta_from_dict(records_dict: Dict[str, List[SeqRecord]], output_
 # ----------------------------------------------------------------------------------------------------------------------
 # TSD (Target Site Duplication) Functions
 
-
 DEFAULT_TSD_SNP_MUTATION_RATE = 0.05
 DEFAULT_TSD_INDEL_MUTATION_RATE = 0.05
 
-
-def add_snp_mutation(seq: str) -> str:
+def add_snp_mutation(seq: str, seed: Optional[int] = None) -> str:
     """Add a single SNP mutation at a random position in the sequence.
 
     Args:
         seq (str): Input DNA sequence
-
+        seed (int): Random seed
     Returns:
-        str: Mutated sequence (maintaining the same length)
+        str: Mutated sequence
     """
+    rng = random.Random(seed) if seed else random
+
     if not seq:
         return seq
 
     # Randomly choose mutation position
-    pos = random.randrange(len(seq))
+    pos = rng.randrange(len(seq))
     curr_base = seq[pos]
     # Choose a different base
-    new_base = random.choice(list(set("ATGC") - {curr_base}))
+    new_base = rng.choice(list(set("ATGC") - {curr_base}))
 
     # Construct mutated sequence
     return seq[:pos] + new_base + seq[pos+1:]
 
 
-def add_indel_mutation(seq: str) -> str:
+def add_indel_mutation(seq: str, seed: Optional[int] = None) -> str:
     """Add a single indel mutation at a random position in the sequence.
 
     Args:
         seq (str): Input DNA sequence
-
+        seed (int): Random seed
     Returns:
-        str: Mutated sequence (maintaining the same length)
+        str: Mutated sequence
     """
+    rng = random.Random(seed) if seed else random
+
     if len(seq) < 2:
         return seq
 
     # 50% probability of insertion or deletion
-    is_insertion = random.random() < 0.5
-    new_base = random.choice("ATGC")
+    is_insertion = rng.random() < 0.5
+    new_base = rng.choice("ATGC")
 
     if is_insertion:
         # Choose insertion position (n + 1 positions)
-        pos = random.randrange(len(seq) + 1)
+        pos = rng.randrange(len(seq) + 1)
         return seq[:pos] + new_base + seq[pos:]
     else:
         # Choose deletion position (n positions)
-        pos = random.randrange(len(seq))
+        pos = rng.randrange(len(seq))
         return seq[:pos] + seq[pos+1:]
 
 
 def generate_TSD(seq_slice_right: str,
                  length: Optional[int] = None,
                  snp_mutation_rate: float = DEFAULT_TSD_SNP_MUTATION_RATE,
-                 indel_mutation_rate: float = DEFAULT_TSD_INDEL_MUTATION_RATE) -> Tuple[str, str]:
+                 indel_mutation_rate: float = DEFAULT_TSD_INDEL_MUTATION_RATE,
+                 seed: Optional[int] = None) -> Tuple[str, str]:
     """Generate TSD sequences with potential mutations.
 
     Args:
@@ -221,10 +224,12 @@ def generate_TSD(seq_slice_right: str,
         length (int): TSD length (defaults to seq_slice_right length)
         snp_mutation_rate (float): SNP mutation probability
         indel_mutation_rate (float): InDel mutation probability
-
+        seed (int): Random seed
     Returns:
         Tuple[str, str]: (5' TSD sequence, 3' TSD sequence)
     """
+    rng = random.Random(seed) if seed else random
+
     tsd_length = min(len(seq_slice_right), length or len(seq_slice_right))
     # if tsd_length < length:
     #     print(f"[Warning] Requested TSD length {length} exceeds available sequence length {len(seq_slice_right)}. "
@@ -234,18 +239,18 @@ def generate_TSD(seq_slice_right: str,
     tsd_5 = tsd_3 = seq_slice_right[:tsd_length]
 
     # Apply SNP mutation
-    if random.random() < snp_mutation_rate:
-        if random.random() < 0.5:
-            tsd_5 = add_snp_mutation(tsd_5)
+    if rng.random() < snp_mutation_rate:
+        if rng.random() < 0.5:
+            tsd_5 = add_snp_mutation(tsd_5, seed)
         else:
-            tsd_3 = add_snp_mutation(tsd_3)
+            tsd_3 = add_snp_mutation(tsd_3, seed)
 
     # Apply InDel mutation
-    if random.random() < indel_mutation_rate:
-        if random.random() < 0.5:
-            tsd_5 = add_indel_mutation(tsd_5)
+    if rng.random() < indel_mutation_rate:
+        if rng.random() < 0.5:
+            tsd_5 = add_indel_mutation(tsd_5, seed)
         else:
-            tsd_3 = add_indel_mutation(tsd_3)
+            tsd_3 = add_indel_mutation(tsd_3, seed)
 
     return tsd_5, tsd_3
 
