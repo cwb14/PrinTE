@@ -618,6 +618,8 @@ def main():
                        help=f"Number of processors to use for parallel processing. Default: {DEFAULT_ALLOCATED_CPU_CORES}")
     ctrl_group.add_argument("--seed", type=int, metavar="INT",
                        help="Random seed for reproducibility. Setting this will make insertions deterministic. Each process in multiprocessing will derive its seed from this base seed.")
+    ctrl_group.add_argument("--tsd", default=0, type=int, metavar="LENGTH",
+                       help="Enable Target Site Duplication (TSD) with specified length. When a donor sequence is inserted, TSD of this length will be generated at the insertion site.")
 
     # Flags
     flag_group = parser.add_argument_group("Flags")
@@ -625,8 +627,6 @@ def main():
                                 help="Filter out donor sequences containing N.")
     flag_group.add_argument("--track", action="store_true",
                        help="Track and save used donor sequences. Enable this option to generate an additional FASTA file in the output directory recording all used donor sequences and their insertion positions.")
-    flag_group.add_argument("--tsd", type=int, metavar="LENGTH",
-                       help="Enable Target Site Duplication (TSD) with specified length. When a donor sequence is inserted, TSD of this length will be generated at the insertion site.")
     flag_group.add_argument("--visual", action="store_true",
                        help="Generate Graphviz DOT files visualizing the tree structure of each sequence. Files will be named {seqid}_tree_visual.dot and saved in the output directory.")
     flag_group.add_argument("--recursive", action="store_true",
