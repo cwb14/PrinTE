@@ -143,7 +143,7 @@ cat pipeline.log | grep 'Number of born TEs to insert'
 # Fixed-rate method.
 ./TESS/TESS.sh PrinTE -mgs 1500M -P 20 -n 6000 -cn 20 -sz 113Mb -ge 300000 -st 100000 -t 10 -k 0 -kt -F 3.0e-11,5e-11 -m 1.3e-8 -sr 95 
 
-# We can increase '-ge' and add '--continue' to pickup where we resume with more generations. 
+# We can increase '-ge' and add '--continue' to pickup where we left off, adding more generations with new TE insertion/deletion rates. 
 ./TESS/TESS.sh PrinTE -mgs 1500M -P 20 -n 6000 -cn 20 -sz 113Mb -ge 400000 -st 100000 -t 10 -k 0 -kt -F 7.0e-11,1e-11 -m 1.3e-8 -sr 95 --continue
 ```
 
