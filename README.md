@@ -1,7 +1,6 @@
-# TESS: A Forward Simulation Framework for Studying the Role of Transposable Elements in Genome Expansion and Contraction
+# TESS: TE Evolution Simulation Suite
 
 **Version**: 1.00  
-**Repository**: [https://github.com/cwb14/TESS/](https://github.com/cwb14/TESS/)
 
 ---
 
@@ -61,22 +60,6 @@ cd TESS
 chmod +x TESS.sh
 ```
 
-### 3. Compile `ltr_mutator` (PrinTE)
-
-Inside the `prinTE/bin/` directory, compile the C++ source:
-
-```bash
-cd prinTE/bin/
-g++ -std=c++17 -fopenmp -O3 -o ltr_mutator ltr_mutator.cpp
-```
-
-Confirm that `ltr_mutator` exists and is executable:
-
-```bash
-ls -l ltr_mutator
-# -rwxr-xr-x 1 user group <size> <date> ltr_mutator
-```
-
 ---
 
 ## Usage
@@ -104,7 +87,7 @@ ls -l ltr_mutator
 
 ### 1. RandSeqInsert
 
-Invokes the Python script under `RandSeqInsert/`. Refer to the full documentation here:
+Invokes the Python script under `RandSeqInsert/`. Detailed usage can be found at:
 
 [RandSeqInsert README](https://github.com/cwb14/TESS/blob/main/RandSeqInsert/README.md)
 
