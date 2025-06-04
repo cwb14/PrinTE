@@ -115,7 +115,7 @@ Clones (if necessary) the external TEgenomeSimulator repository and executes `TE
 Basic examples:
 
 ```bash
-# Look at the help menu.
+# Help menu.
 ./TESS/TESS.sh TEgenomeSimulator -h
 
 # Random Synthesized Genome mode.
@@ -132,26 +132,30 @@ The `PrinTE` command launches `prinTE/prinTE.sh`. Please refer to the top of the
 Basic examples:
 
 ```bash
-# Run forward TE simulation with input genome and output directory:
-./TESS.sh PrinTE -i input_genome.fasta -o ltr_output/
+# Help menu.
+./TESS/TESS.sh PrinTE -h
 
-# View full list of PrinTE options:
-./TESS.sh PrinTE -h
-```
+# Variable-rate method.
+./TESS/TESS.sh PrinTE -cn 5 -sz 135Mb -tmx 5 -m 7e-9 -P 25 -p 21 -br 1e-7 -ir 1.1e-6 -dr 4e-6 -cbi 1.1 -cbd 1.0 -cb 500 -t 20 -k 2 -ge 40000 -st 10000
 
----
+# What was the gene/TE landscape of the starting genome?
+cat burnin.stat 
 
-## Examples
+# How many TEs were inserted and deleted?
+cat pipeline.report
 
-```bash
-# 1. Run RandSeqInsert with minimal parameters:
-./TESS.sh RandSeqInsert
+# How many TEs were inserted due to vertical acquisition?
+cat pipeline.log | grep 'Number of born TEs to insert'
 
-# 2. Run PrinTE, specifying an input and output directory:
-./TESS.sh PrinTE -i my_genome.fasta -o ltr_results/
+# Fixed-rate method.
+./TESS/TESS.sh PrinTE -mgs 1500M -P 20 -n 6000 -cn 20 -sz 113Mb -ge 300000 -st 100000 -t 10 -k 0 -kt -F 3.0e-11,5e-11 -m 1.3e-8 -sr 95 
 
-# 3. Run TEgenomeSimulator with verbose logging:
-./TESS.sh TEgenomeSimulator --verbose --genome genomes/human_chr1.fasta --output sims/
+# How'd it do?
+cat burnin.stat 
+cat pipeline.report
+
+# We can increase '-ge' and add '--continue' to pickup where we resume with more generations. 
+./TESS/TESS.sh PrinTE -mgs 1500M -P 20 -n 6000 -cn 20 -sz 113Mb -ge 400000 -st 100000 -t 10 -k 0 -kt -F 7.0e-11,1e-11 -m 1.3e-8 -sr 95 --continue
 ```
 
 ---
@@ -162,7 +166,7 @@ Basic examples:
 
 - Confirm `TESS.sh` is executable:
   ```bash
-  chmod +x TESS.sh
+  chmod +x ./TESS/TESS.sh
   ```
 - Ensure you have write permissions in this directory if re-cloning `TEgenomeSimulator`.
 
@@ -194,7 +198,7 @@ Basic examples:
 To force-reclone TEgenomeSimulator (e.g., after pulling new changes upstream), add `--force-update`:
 
 ```bash
-./TESS.sh TEgenomeSimulator --force-update
+./TESS/TESS.sh TEgenomeSimulator --force-update
 ```
 
 ---
