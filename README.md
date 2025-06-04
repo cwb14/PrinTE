@@ -47,7 +47,7 @@ Before installing or running **TESS**, ensure you have:
 Use **mamba** (recommended) or **conda** to create and activate a new environment named `TESS`:
 
 ```bash
-mamba create -n TESS -c conda-forge biopython matplotlib seaborn numpy pandas python=3.9 pyyaml scipy setuptools rmblast graphviz
+mamba create -n TESS -c conda-forge biopython matplotlib seaborn numpy pandas python=3.9 pyyaml scipy setuptools rmblast graphviz r-viridis
 
 # Activate the environment:
 conda activate TESS
