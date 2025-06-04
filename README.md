@@ -122,23 +122,6 @@ Basic examples:
 ./TESS/TESS.sh TEgenomeSimulator -M 0 -p random_mode -c TESS/TEgenomeSimulator/test/input/random_genome_chr_index.csv -r TESS/TEgenomeSimulator/test/input/combined_curated_TE_lib_ATOSZM_selected.fasta -m 5 -n 1 -o random_mode_test
 ```
 
-Internally, TESS will:
-
-1. Check for the `TEgenomeSimulator/` directory.  
-2. If missing or `--force-update` is set:
-   ```bash
-   git clone --depth=1 https://github.com/Plant-Food-Research-Open/TEgenomeSimulator TEgenomeSimulator
-   ```
-3. Look for a compressed test FASTA at:
-   ```bash
-   TEgenomeSimulator/test/input/combined_curated_TE_lib_ATOSZM_selected.fasta.gz
-   ```
-   - If found and not decompressed, run `gunzip`.  
-4. Resolve any relative paths in your arguments to absolute paths.  
-5. Execute:
-   ```bash
-   python3 TEgenomeSimulator/TEgenomeSimulator.py <cleaned-args>
-   ```
 ---
 ### 3. PrinTE
 
