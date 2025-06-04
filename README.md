@@ -115,24 +115,11 @@ Clones (if necessary) the external TEgenomeSimulator repository and executes `TE
 Basic examples:
 
 ```bash
-# First time: clone and run using default test inputs:
-./TESS.sh TEgenomeSimulator
+# Look at the help menu.
+./TESS/TESS.sh TEgenomeSimulator -h
 
-# Enable verbose logging:
-./TESS.sh TEgenomeSimulator --verbose
-
-# Force re-cloning of the TEgenomeSimulator repo:
-./TESS.sh TEgenomeSimulator --force-update
-
-# Pass additional TEgenomeSimulator.py arguments:
-./TESS.sh TEgenomeSimulator \
-  -M 0 -p test_random_mode \
-  -c TEgenomeSimulator/test/input/random_genome_chr_index.csv \
-  -r TEgenomeSimulator/test/input/combined_curated_TE_lib_ATOSZM_selected.fasta \
-  -m 5 -n 1 -o ./test/output
-  --config TEgenomeSimulator/configs/tess_config.yaml \
-  --genome TEgenomeSimulator/reference.fasta \
-  --output sims/
+# Random Synthesized Genome mode.
+./TESS/TESS.sh TEgenomeSimulator -M 0 -p random_mode -c TESS/TEgenomeSimulator/test/input/random_genome_chr_index.csv -r TESS/TEgenomeSimulator/test/input/combined_curated_TE_lib_ATOSZM_selected.fasta -m 5 -n 1 -o random_mode_test
 ```
 
 Internally, TESS will:
