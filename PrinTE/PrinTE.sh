@@ -462,6 +462,11 @@ if [[ "$skip_burnin" -eq 0 ]]; then
     fi
 fi
 
+if [[ "$burnin_only" -eq 1 ]]; then
+  echo "Burn-in complete; exiting due to --burnin_only." | tee -a "$LOG"
+  exit 0
+fi
+
 ###############################################################################
 # Phase 2: Looping Generations
 ###############################################################################
