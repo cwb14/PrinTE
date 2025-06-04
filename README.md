@@ -93,11 +93,15 @@ Invokes the Python script under `RandSeqInsert/`. Detailed usage can be found at
 Basic examples:
 
 ```bash
-# Minimal usage
-./TESS.sh RandSeqInsert
+# Help menu.
+./TESS/TESS.sh RandSeqInsert -h
 
-# Pass additional flags to RandSeqInsert.py, e.g., specifying length or output:
-./TESS.sh RandSeqInsert --length 500 --output out.fasta
+# Create a blank-slate fake genome (burnin.fa) for use with RandSeqInsert. 
+./TESS/TESS.sh PrinTE --burnin_only --cds_percent 0 --TE_percent 0 --chr_number 1 --size 100Mb
+rm pipeline.* TAIR10.cds.fa combined_curated_TE_lib_ATOSZM_selected.fasta lib* backbone.* burnin_mut_dist.pdf burnin.bed
+
+# Run RandSeqInsert.
+./TESS/TESS.sh RandSeqInsert -i burnin.fa -is 50 -it 3 -d ./TESS/RandSeqInsert/lib/TIR/maize/ -w 0.7 --tsd 9 --track --visual
 ```
 
 ---
