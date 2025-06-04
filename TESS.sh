@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Tool Paths
 RANDSEQINSERT_DIR="$SCRIPT_DIR/RandSeqInsert"
-LTR_SIMULATOR_DIR="$SCRIPT_DIR/LTR_simulator"
+PRINTE_DIR="$SCRIPT_DIR/PrinTE"
 TEGENOMESIMULATOR_DIR="$SCRIPT_DIR/TEgenomeSimulator"
 
 # Global Flags
@@ -26,16 +26,16 @@ error() {
 
 usage() {
     cat << EOF
-TEsim (Tools for simulation of Transposable Element evolution)
+TESS (TE Evolution Simulation Suite)
 Version: 1.00
 
 Usage:   $0 <command> [options]
 
 Commands:
 
-     RandSeqInsert          Simulate TIR insertion
-     LTR_simulator          Simulate LTR mutation, insertion, and evolution
-     TEgenomeSimulator      Simulate TE mutation, insertion, and tracking
+     RandSeqInsert          Simulate TIR insertion with tracking
+     TEgenomeSimulator      Simulate a snapshot of TE mutation and insertion with tracking
+     PrinTE                  Simulate TE mutation, insertion, deletion, and forward evolution
 
 Use "$0 <command> -h" for information about individual tools.
 EOF
@@ -67,7 +67,8 @@ clone_TEgenomeSimulator() {
 
 run_TEgenomeSimulator() {
     local args=("$@")
-    local PYTHON_EXEC=$(command -v python3 || command -v python || error "Python is required but not installed.")
+    local PYTHON_EXEC
+    PYTHON_EXEC=$(command -v python3 || command -v python) || error "Python is required but not installed."
 
     # Parse flags
     FORCE_UPDATE=0
@@ -125,6 +126,15 @@ run_TEgenomeSimulator() {
     $PYTHON_EXEC TEgenomeSimulator/TEgenomeSimulator.py "${CMD_ARGS[@]}"
 }
 
+run_PrinTE() {
+    if [ ! -d "$PRINTE_DIR" ]; then
+        error "PrinTE directory not found: $PRINTE_DIR"
+    fi
+
+    # Forward all arguments to the PrinTE entrypoint script
+    bash "$PRINTE_DIR/PrinTE.sh" "$@"
+}
+
 # Main Execution
 if [ $# -lt 1 ]; then
     usage
@@ -140,11 +150,8 @@ case "$COMMAND" in
         fi
         python "$RANDSEQINSERT_DIR/RandSeqInsert.py" "$@"
         ;;
-    LTR_simulator)
-        if [ ! -d "$LTR_SIMULATOR_DIR" ]; then
-            error "LTR_simulator directory not found: $LTR_SIMULATOR_DIR"
-        fi
-        bash "$LTR_SIMULATOR_DIR/LTR_simulator.sh" "$@"
+    PrinTE)
+        run_PrinTE "$@"
         ;;
     TEgenomeSimulator)
         run_TEgenomeSimulator "$@"
@@ -157,3 +164,4 @@ case "$COMMAND" in
         usage
         ;;
 esac
+
