@@ -97,8 +97,8 @@ ls -l ltr_mutator
 | Command             | Description                                                                 |
 |---------------------|-----------------------------------------------------------------------------|
 | `RandSeqInsert`     | Run `RandSeqInsert.py` to simulate TIR insertions.                          |
-| `PrinTE`            | Run `prinTE/prinTE.sh` to simulate LTR mutation/insertion (forward evolution).  |
 | `TEgenomeSimulator` | Clone or update TEgenomeSimulator, then run `TEgenomeSimulator.py`.          |
+| `PrinTE`            | Run `prinTE/prinTE.sh` to simulate LTR mutation/insertion (forward evolution).  |
 
 ---
 
@@ -120,25 +120,7 @@ Basic examples:
 
 ---
 
-### 2. PrinTE
-
-The `PrinTE` command launches `prinTE/prinTE.sh`, which runs the compiled `ltr_mutator` binary. Refer to the top of the script for all supported options:
-
-[prinTE/prinTE.sh](https://github.com/cwb14/TESS/blob/main/prinTE/prinTE.sh)
-
-Basic examples:
-
-```bash
-# Run forward TE simulation with input genome and output directory:
-./TESS.sh PrinTE -i input_genome.fasta -o ltr_output/
-
-# View full list of PrinTE options:
-./TESS.sh PrinTE -h
-```
-
----
-
-### 3. TEgenomeSimulator
+### 2. TEgenomeSimulator
 
 Clones (if necessary) the external TEgenomeSimulator repository and executes `TEgenomeSimulator.py`. Detailed usage can be found at:
 
@@ -184,6 +166,22 @@ Internally, TESS will:
    ```bash
    python3 TEgenomeSimulator/TEgenomeSimulator.py <cleaned-args>
    ```
+---
+### 3. PrinTE
+
+The `PrinTE` command launches `prinTE/prinTE.sh`. Please refer to the top of the script for all supported options:
+
+[prinTE/prinTE.sh](https://github.com/cwb14/TESS/blob/main/prinTE/prinTE.sh)
+
+Basic examples:
+
+```bash
+# Run forward TE simulation with input genome and output directory:
+./TESS.sh PrinTE -i input_genome.fasta -o ltr_output/
+
+# View full list of PrinTE options:
+./TESS.sh PrinTE -h
+```
 
 ---
 
