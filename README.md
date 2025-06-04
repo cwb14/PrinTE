@@ -67,13 +67,6 @@ chmod +x ./TESS/TESS.sh
 ./TESS/TESS.sh <command> [options]
 ```
 
-### Global Flags
-
-- `--verbose`  
-  Enable detailed logging (prints INFO messages to stderr).  
-- `--force-update`  
-  Force removal and re-clone of the `TEgenomeSimulator` repository (if it already exists).  
-
 ### Available Commands
 
 | Command             | Description                                                                 |
@@ -149,10 +142,6 @@ cat pipeline.log | grep 'Number of born TEs to insert'
 
 # Fixed-rate method.
 ./TESS/TESS.sh PrinTE -mgs 1500M -P 20 -n 6000 -cn 20 -sz 113Mb -ge 300000 -st 100000 -t 10 -k 0 -kt -F 3.0e-11,5e-11 -m 1.3e-8 -sr 95 
-
-# How'd it do?
-cat burnin.stat 
-cat pipeline.report
 
 # We can increase '-ge' and add '--continue' to pickup where we resume with more generations. 
 ./TESS/TESS.sh PrinTE -mgs 1500M -P 20 -n 6000 -cn 20 -sz 113Mb -ge 400000 -st 100000 -t 10 -k 0 -kt -F 7.0e-11,1e-11 -m 1.3e-8 -sr 95 --continue
