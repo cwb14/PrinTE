@@ -56,8 +56,7 @@ conda activate TESS
 
 ```bash
 git clone https://github.com/cwb14/TESS.git
-cd TESS
-chmod +x TESS.sh
+chmod +x ./TESS/TESS.sh
 ```
 
 ---
@@ -65,7 +64,7 @@ chmod +x TESS.sh
 ## Usage
 
 ```bash
-./TESS.sh <command> [options]
+./TESS/TESS.sh <command> [options]
 ```
 
 ### Global Flags
