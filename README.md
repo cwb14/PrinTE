@@ -140,7 +140,7 @@ Basic examples:
 
 ### 3. TEgenomeSimulator
 
-Clones (if necessary) the external TEgenomeSimulator repository into `TEgenomeSimulator/`, decompresses any test FASTA, and executes `TEgenomeSimulator.py`. Detailed usage can be found at:
+Clones (if necessary) the external TEgenomeSimulator repository and executes `TEgenomeSimulator.py`. Detailed usage can be found at:
 
 [TEgenomeSimulator GitHub](https://github.com/Plant-Food-Research-Open/TEgenomeSimulator/tree/main)
 
@@ -156,10 +156,14 @@ Basic examples:
 # Force re-cloning of the TEgenomeSimulator repo:
 ./TESS.sh TEgenomeSimulator --force-update
 
-# Pass additional TEgenomeSimulator.py arguments, e.g., providing a custom configuration:
+# Pass additional TEgenomeSimulator.py arguments:
 ./TESS.sh TEgenomeSimulator \
-  --config configs/tess_config.yaml \
-  --genome reference.fasta \
+  -M 0 -p test_random_mode \
+  -c TEgenomeSimulator/test/input/random_genome_chr_index.csv \
+  -r TEgenomeSimulator/test/input/combined_curated_TE_lib_ATOSZM_selected.fasta \
+  -m 5 -n 1 -o ./test/output
+  --config TEgenomeSimulator/configs/tess_config.yaml \
+  --genome TEgenomeSimulator/reference.fasta \
   --output sims/
 ```
 
