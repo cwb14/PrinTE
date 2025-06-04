@@ -17,14 +17,14 @@
   - `RandSeqInsert.py`: Python script that simulates TIR insertions.  
   - Detailed usage: [RandSeqInsert README](https://github.com/cwb14/TESS/blob/main/RandSeqInsert/README.md)
 
-- **PrinTE/**  
-  - prinTE.sh: Bash wrapper that performs forward TE simulations.  
-  - Usage instructions are embedded at the top of [`prinTE/prinTE.sh`](https://github.com/cwb14/TESS/blob/main/prinTE/prinTE.sh).  
-
 - **TEgenomeSimulator/**  
   - Populated automatically by cloning [`https://github.com/Plant-Food-Research-Open/TEgenomeSimulator`](https://github.com/Plant-Food-Research-Open/TEgenomeSimulator) when `TESS.sh TEgenomeSimulator` is run for the first time.  
   - Contains scripts, test data, and dependencies needed to run `TEgenomeSimulator.py`.  
   - Detailed usage: [TEgenomeSimulator GitHub](https://github.com/Plant-Food-Research-Open/TEgenomeSimulator/tree/main)
+
+- **PrinTE/**  
+  - prinTE.sh: Bash wrapper that performs forward TE simulations.  
+  - Usage instructions are embedded at the top of [`prinTE/prinTE.sh`](https://github.com/cwb14/TESS/blob/main/prinTE/prinTE.sh).  
 
 ---
 
