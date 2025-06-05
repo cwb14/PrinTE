@@ -22,8 +22,8 @@
   - Detailed usage: [TEgenomeSimulator GitHub](https://github.com/Plant-Food-Research-Open/TEgenomeSimulator/tree/main)
 
 - **PrinTE/**  
-  - prinTE.sh: Bash wrapper that performs forward TE simulations.  
-  - Usage instructions are embedded at the top of [`prinTE/prinTE.sh`](https://github.com/cwb14/TESS/blob/main/prinTE/prinTE.sh).  
+  - PrinTE.sh: Bash wrapper that performs forward TE simulations.  
+  - Usage instructions are embedded at the top of [`PrinTE/PrinTE.sh`](https://github.com/cwb14/TESS/blob/main/PrinTE/PrinTE.sh).  
 
 ---
 
@@ -73,7 +73,7 @@ chmod +x ./TESS/TESS.sh
 |---------------------|-----------------------------------------------------------------------------|
 | `RandSeqInsert`     | Run `RandSeqInsert.py` to simulate TIR insertions.                          |
 | `TEgenomeSimulator` | Clone or update TEgenomeSimulator, then run `TEgenomeSimulator.py`.          |
-| `PrinTE`            | Run `prinTE/prinTE.sh` to simulate LTR mutation/insertion (forward evolution).  |
+| `PrinTE`            | Run `PrinTE/PrinTE.sh` to simulate LTR mutation/insertion (forward evolution).  |
 
 ---
 
@@ -118,9 +118,9 @@ Basic examples:
 ---
 ### 3. PrinTE
 
-The `PrinTE` command launches `prinTE/prinTE.sh`. Please refer to the top of the script for all supported options:
+The `PrinTE` command launches `PrinTE/PrinTE.sh`. Please refer to the top of the script for all supported options:
 
-[prinTE/prinTE.sh](https://github.com/cwb14/TESS/blob/main/prinTE/prinTE.sh)
+[PrinTE/PrinTE.sh](https://github.com/cwb14/TESS/blob/main/PrinTE/PrinTE.sh)
 
 Basic examples:
 
@@ -165,8 +165,8 @@ cat pipeline.log | grep 'Number of born TEs to insert'
 - The compile command is:
   ```bash
   g++ -std=c++17 -fopenmp -O3 \
-    -o ./TESS/prinTE/bin/ltr_mutator \
-    ./TESS/prinTE/bin/ltr_mutator.cpp
+    -o ./TESS/PrinTE/bin/ltr_mutator \
+    ./TESS/PrinTE/bin/ltr_mutator.cpp
   ```
 - If errors persist, inspect the source code and flags, or install a newer `g++`.
 
