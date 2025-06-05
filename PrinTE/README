@@ -2,26 +2,26 @@
 
 **prinTE** is a comprehensive wrapper script (bash) that orchestrates a two‐phase transposable element (TE) evolution simulation pipeline, followed by supplemental post‐processing and reporting. It automates:
 
-1. **Phase 1 (Burn‐in)**  
-   Builds a synthetic genome, inserts an initial set of TEs, and generates “burn‐in” outputs (e.g., `burnin.fa`, `burnin.bed`) unless the user provides their own starting FASTA/BED files or restarts from a previous run.
+1. **Phase 1 (Burn-in)**  
+   Builds a synthetic genome, inserts an initial set of TEs, and generates “burn-in” outputs (e.g., `burnin.fa`, `burnin.bed`), unless the user provides their own starting FASTA/BED files or restarts from a previous run.
 
 2. **Phase 2 (Looping Generations)**  
-   For each generation (in user‐specified steps), the pipeline:
-   - Mutates the genome (LTR mutator).
-   - Inserts new TEs (nested insertion).
-   - Excises TEs (parallel TE exciser).
-   - Extracts intact TEs to form the next‐generation TE library.
+   For each generation (in user-specified steps), the pipeline:
+   - Mutates the genome (LTR mutator).  
+   - Inserts new TEs (nested insertion).  
+   - Excises TEs (parallel TE exciser).  
+   - Extracts intact TEs to form the next-generation TE library.  
    - Logs progress and checks for maximum genome size.
 
-3. **Supplemental Post‐Processing**  
+3. **Supplemental Post-Processing**  
    After all generations complete (or stop early due to size limits), the pipeline runs a suite of reporting and plotting utilities:
-   - TE fraction over time
-   - Solo vs. intact TE proportions
-   - Superfamily counts
-   - Category bar plots
-   - Genome size trajectory
-   - Per‐generation LTR extraction and divergence analyses
-   - Overall LTR density plot
+   - TE fraction over time  
+   - Solo vs. intact TE proportions  
+   - Superfamily counts  
+   - Category bar plots  
+   - Genome size trajectory  
+   - Per-generation LTR extraction and divergence analyses  
+   - Overall LTR density plot  
 
 ---
 
@@ -31,27 +31,29 @@
 2. [Directory Layout](#directory-layout)  
 3. [Installation & Setup](#installation--setup)  
 4. [Running the Pipeline](#running-the-pipeline)  
-   - [Basic Full‐Pipeline Invocation](#basic-full-pipeline-invocation)  
-   - [Burn‐In Only](#burn-in-only)  
+   - [Basic Full-Pipeline Invocation](#basic-full-pipeline-invocation)  
+   - [Burn-In Only](#burn-in-only)  
    - [Continuing a Previous Run](#continuing-a-previous-run)  
-   - [Skipping Burn‐In with Custom BED/FASTA](#skipping-burn-in-with-custom-bed-fasta)  
+   - [Skipping Burn-In with Custom BED/FASTA](#skipping-burn-in-with-custom-bedfasta)  
    - [Keeping Temporary Files](#keeping-temporary-files)  
    - [Adjusting Chromatin Bias & Deletion](#adjusting-chromatin-bias--deletion)  
    - [Custom TE Mutation Model](#custom-te-mutation-model)  
    - [Limiting Maximum Genome Size](#limiting-maximum-genome-size)  
 5. [Options & Flags](#options--flags)  
    - [Required Arguments (Full Pipeline)](#required-arguments-full-pipeline)  
-   - [Burn‐In Phase Options](#burn-in-phase-options)  
+   - [Burn-In Phase Options](#burn-in-phase-options)  
    - [Fixed vs. Variable TE Indel Rates](#fixed-vs-variable-te-indel-rates)  
-   - [General‐Use Options (Phases 1 & 2)](#general-use-options-phases-1--2)  
-   - [Post‐Processing & Reporting](#post-processing--reporting)  
+   - [Chromatin Bias & Buffers](#chromatin-bias--buffers)  
+   - [TE Mutation Parameters (Burn-In & Phase 2)](#te-mutation-parameters-burn-in--phase-2)  
+   - [General-Use Options (Phases 1 & 2)](#general-use-options-phases-1--2)  
+   - [Post-Processing & Reporting](#post-processing--reporting)  
 6. [Output Files](#output-files)  
 7. [Example Workflows](#example-workflows)  
-   1. [Simulate 3000 Generations (Step 1000)](#simulate-3000-generations-step-1000)  
-   2. [Run Burn‐In Only](#run-burn-in-only)  
-   3. [Resume from Generation 2000](#resume-from-generation-2000)  
-   4. [Start from Custom BED/FASTA](#start-from-custom-bedfasta)  
-   5. [Parallel TE Insertion with Custom Rates & Bias](#parallel-te-insertion-with-custom-rates--bias)  
+   - [Simulate 3000 Generations (Step 1000)](#simulate-3000-generations-step-1000)  
+   - [Run Burn-In Only](#run-burn-in-only)  
+   - [Resume from Generation 2000](#resume-from-generation-2000)  
+   - [Start from Custom BED/FASTA](#start-from-custom-bedfasta)  
+   - [Parallel TE Insertion with Custom Rates & Bias](#parallel-te-insertion-with-custom-rates--bias)  
 8. [Logging & Error Handling](#logging--error-handling)  
 9. [Contact & Support](#contact--support)  
 
@@ -59,22 +61,40 @@
 
 ## Prerequisites
 
-- **Operating System**: Linux/macOS (bash‐compatible shell)
-- **Python ≥ 3.6** (with modules required by internal scripts)
-  - `seq_divergence.py`
-  - `LTR_fasta_header_appender.py`
-  - `extract_intact_TEs.py`
-  - `synthetic_genome.py`
-  - `shared_ltr_inserter_parallel.py`
-  - `nest_inserter_parallel.py`
-  - `TE_exciser_parallel.py`
-  - `extract_intact_LTR.py`
-  - `ltr_mutator` (compiled binary)
-  - `log_to_report.py`
-  - Plotting utilities in `util/` (e.g., `plot_TE_frac.py`, `plot_solo_intact.py`, etc.)
-- **Bash utilities**: `bash`, `cut`, `gunzip`, `stat`, `sort`, `ls`, `bc`
-- **GNU Coreutils**, **GNU grep**, **sort**, **ls**
-- **Optional**: `Rscript` or other plotting backends (if any Python plotting scripts invoke R)
+- **Operating System**: Linux/macOS (bash-compatible shell)  
+- **Python ≥ 3.6** (with modules required by internal scripts):
+  - `seq_divergence.py`  
+  - `LTR_fasta_header_appender.py`  
+  - `extract_intact_TEs.py`  
+  - `synthetic_genome.py`  
+  - `shared_ltr_inserter_parallel.py`  
+  - `nest_inserter_parallel.py`  
+  - `TE_exciser_parallel.py`  
+  - `extract_intact_LTR.py`  
+  - `ltr_mutator` (compiled binary)  
+  - `log_to_report.py`  
+  - Plotting utilities in `util/` (e.g., `plot_TE_frac.py`, `plot_solo_intact.py`, etc.)  
+
+- **Bash utilities**:  
+  - `bash`  
+  - `cut`  
+  - `gunzip`  
+  - `stat`  
+  - `sort`  
+  - `ls`  
+  - `bc`  
+
+- **GNU Coreutils**, **GNU grep**, **sort**, **ls**  
+- **Optional**: `Rscript` or other plotting backends (if any Python plotting scripts invoke R)  
+
+Before running, ensure that:
+
+1. The entire **TESS/prinTE** repository (or folder structure) is cloned/copied.  
+2. You have execute permissions on `prinTE.sh` (e.g., `chmod +x prinTE.sh`).  
+3. Python dependencies for each helper script are installed (check each script for `import` statements).  
+
+   ```bash
+   pip install biopython numpy pandas matplotlib
 
 Before running, ensure that:
 
