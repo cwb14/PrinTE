@@ -23,7 +23,7 @@
 
 - **PrinTE/**  
   - PrinTE.sh: Bash wrapper that performs forward TE simulations.  
-  - Usage instructions are embedded at the top of [`PrinTE/PrinTE.sh`](https://github.com/cwb14/TESS/blob/main/PrinTE/PrinTE.sh).  
+  - Detailed usage: [PrinTE README](https://github.com/cwb14/TESS/blob/main/PrinTE/README.md).  
 
 ---
 
@@ -120,7 +120,7 @@ Basic examples:
 
 The `PrinTE` command launches `PrinTE/PrinTE.sh`. Please refer to the top of the script for all supported options:
 
-[PrinTE/PrinTE.sh](https://github.com/cwb14/TESS/blob/main/PrinTE/PrinTE.sh)
+[PrinTE README](https://github.com/cwb14/TESS/blob/main/PrinTE/README.md) 
 
 Basic examples:
 
