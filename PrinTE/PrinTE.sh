@@ -60,6 +60,21 @@ TOOL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 BIN_DIR="${TOOL_DIR}/bin"
 UTIL_DIR="${TOOL_DIR}/util"
 
+# --- Auto-detect OS and pick appropriate ltr_mutator binary ---
+OS="$(uname)"
+case "$OS" in
+  Darwin)
+    mutator_exec="ltr_mutator_mac"
+    ;;
+  Linux)
+    mutator_exec="ltr_mutator"
+    ;;
+  *)
+    echo "Error: Unsupported OS '$OS'. Only macOS (Darwin) or Linux are supported." >&2
+    exit 1
+    ;;
+esac
+
 # --- Temporary files array (for unzipped inputs) ---
 temp_files=()
 cleanup() {
@@ -559,7 +574,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
     mode=3
   fi
 
-  cmd="${BIN_DIR}/ltr_mutator \
+  cmd="${BIN_DIR}/${mutator_exec} \
     -fasta ${prev_genome} \
     -bed   ${prev_bed} \
     -rate ${mutation_rate} \
@@ -764,3 +779,6 @@ echo "Running: $cmd" | tee -a "$LOG"
 eval $cmd
 
 echo "Post-processing completed at $(date)" | tee -a "$LOG"
+
+
+
