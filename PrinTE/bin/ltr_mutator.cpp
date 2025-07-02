@@ -3,7 +3,19 @@
  *                random generations now follow an exponential decay
  *                distribution (λ = 1.4 × 10⁻⁶) instead of uniform.
  *
- *   g++ -std=c++17 -fopenmp -O3 -o mutator mutator.cpp
+ *   linux: g++ -std=c++17 -fopenmp -O3 -o mutator mutator.cpp
+ *
+ *
+ *   arm64: # Step 1: Compile only (no linking)       
+ *   $(brew --prefix llvm)/bin/clang++ -std=c++17 -O3 -fopenmp \
+ *   -I$(brew --prefix libomp)/include \
+ *   -c TESS/PrinTE/bin/ltr_mutator.cpp -o mutator.o
+ *
+ *   # Step 2: Link manually with static libomp
+ *   $(brew --prefix llvm)/bin/clang++ -O3 mutator.o \
+ *   $(brew --prefix libomp)/lib/libomp.a \
+ *   -lc++ -lm -o TESS/PrinTE/bin/ltr_mutator_mac  
+ *
  *********************************************************************/
 
 #include <iostream>
