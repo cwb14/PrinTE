@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-bedtools.py: Compute overlap stats between SCN/PASS and BED files with reciprocal overlap threshold.
+bedtools-ish.py: Compute overlap stats between SCN/PASS and BED files with reciprocal overlap threshold.
 
 Usage:
-    python bedtools.py -scn infile.scn -bed infile.bed -r 0.9 [-print overlapping]
-    python bedtools.py -pass infile.pass.list -bed infile.bed -r 0.9 [-print unique-scn/pass]
+    python bedtools.py -pass_scn infile.[pass.list|scn] -bed infile.bed -r 0.9 [-print overlapping]
 """
 import argparse
 from collections import defaultdict
+
 
 def parse_scn(path):
     entries = []
@@ -20,11 +20,18 @@ def parse_scn(path):
             parts = line.split()
             if len(parts) < 12:
                 continue
-            start = int(parts[0])
-            end = int(parts[1])
+            try:
+                start = int(parts[0])
+                end = int(parts[1])
+            except ValueError:
+                continue
             chrom = parts[11]
+            # normalize coordinates
+            if start > end:
+                start, end = end, start
             entries.append((chrom, start, end, raw))
     return entries
+
 
 def parse_pass(path):
     entries = []
@@ -36,15 +43,36 @@ def parse_pass(path):
                 continue
             parts = line.split()
             loc = parts[0]
+            if ':' not in loc or '..' not in loc:
+                continue
+            chrom, coords = loc.split(':', 1)
+            start_str, end_str = coords.split('..', 1)
             try:
-                chrom, coords = loc.split(':')
-                start_str, end_str = coords.split('..')
                 start = int(start_str)
                 end = int(end_str)
             except ValueError:
                 continue
+            # normalize coordinates
+            if start > end:
+                start, end = end, start
             entries.append((chrom, start, end, raw))
     return entries
+
+
+def parse_pass_scn(path):
+    # detect format by first non-comment line
+    with open(path) as f:
+        for line in f:
+            line_strip = line.strip()
+            if not line_strip or line_strip.startswith('#'):
+                continue
+            first = line_strip.split()[0]
+            if ':' in first and '..' in first:
+                return parse_pass(path)
+            else:
+                return parse_scn(path)
+    return []
+
 
 def parse_bed(path):
     entries = []
@@ -58,34 +86,40 @@ def parse_bed(path):
             if len(parts) < 3:
                 continue
             chrom = parts[0]
-            start = int(parts[1])
-            end = int(parts[2])
+            try:
+                start = int(parts[1])
+                end = int(parts[2])
+            except ValueError:
+                continue
+            # normalize coordinates
+            if start > end:
+                start, end = end, start
             entries.append((chrom, start, end, raw))
     return entries
+
 
 def reciprocal_overlap(a_start, a_end, b_start, b_end):
     overlap_start = max(a_start, b_start)
     overlap_end = min(a_end, b_end)
     overlap_len = max(0, overlap_end - overlap_start)
-    if overlap_len == 0:
+    if overlap_len <= 0:
         return 0.0, 0.0
     len_a = a_end - a_start
     len_b = b_end - b_start
     return overlap_len / len_a, overlap_len / len_b
 
+
 def main():
     parser = argparse.ArgumentParser(description="Compute overlap stats between SCN/PASS and BED files.")
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('-scn', help='Input SCN-formatted file')
-    group.add_argument('-pass', dest='passfile', help='Input PASS-formatted file')
+    parser.add_argument('-pass_scn', required=True, help='Input SCN- or PASS-formatted file')
     parser.add_argument('-bed', required=True, help='Input BED-formatted file')
     parser.add_argument('-r', type=float, default=0.0, help='Reciprocal overlap threshold (0-1)')
-    parser.add_argument('-print', dest='print_mode', choices=['overlapping', 'unique-scn/pass', 'unique-bed'], help='Lines to print')
+    parser.add_argument('-print', dest='print_mode', choices=['overlapping', 'unique-input', 'unique-bed'], help='Lines to print')
     args = parser.parse_args()
 
-    # Load entries
-    scn_entries = parse_scn(args.scn) if args.scn else parse_pass(args.passfile)
+    in_entries = parse_pass_scn(args.pass_scn)
     bed_entries = parse_bed(args.bed)
+    scn_entries = in_entries
 
     # Index by chromosome
     scn_by_chrom = defaultdict(list)
@@ -127,7 +161,7 @@ def main():
     unique_bed = total_bed - overlapped_bed
 
     # Summary stats
-    print(f"Overlapping entries (SCN matched): {overlapped_scn} ({overlapped_bed} unique)")
+    print(f"Overlapping entries: {overlapped_scn} ({overlapped_bed} unique)")
     print(f"Entries unique to SCN/PASS file: {unique_scn}")
     print(f"Entries unique to BED file: {unique_bed}")
 
@@ -137,10 +171,10 @@ def main():
             print('--')
             print(f"bed: {bed_entries[idx_bed][3]}")
             for idx_scn in bed_to_scn[idx_bed]:
-                print(f"scn: {scn_entries[idx_scn][3]}")
-    elif args.print_mode == 'unique-scn/pass':
+                print(f"in: {scn_entries[idx_scn][3]}")
+    elif args.print_mode == 'unique-input':
         for idx in sorted(set(range(total_scn)) - matched_scn):
-            print(f"scn: {scn_entries[idx][3]}")
+            print(f"in: {scn_entries[idx][3]}")
     elif args.print_mode == 'unique-bed':
         for idx in sorted(set(range(total_bed)) - matched_bed):
             print(f"bed: {bed_entries[idx][3]}")
