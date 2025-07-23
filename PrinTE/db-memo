@@ -1,0 +1,16 @@
+Intact LTR-RT exemplars from Shujun Ou on 07-23-2025:
+
+      athrep.updated.fasta_062024.ltr.full.gz ----- https://github.com/oushujun/TAIR12-TE/tree/main/data/TE_library
+      rice7.0.0.liban.ltr.full.gz ----- https://github.com/oushujun/riceTElib
+      maizeTE02052020.ltr.full.gz ----- https://github.com/oushujun/MTEC
+
+The rice and arabidopsis libraries are partitioned into "Internal" and "LTR" in the download, but reconstituted into intact LTR-RTs here ([LTR][INTERNAL][LTR]).
+The maize library is already intact upon download from Shujun, so no need to reconstituted into intact LTR-RTs.
+
+
+
+
+
+
+
+The "ltr-db.fa.gz" contains exemplar and consensus LTR-RTs. Downloaded from database on 07-22-2025. Similar to rice and arabidopsis libraries above, sequences were partitioned into "Internal" and "LTR" at download, but reconstituted into intact LTR-RTs here.
