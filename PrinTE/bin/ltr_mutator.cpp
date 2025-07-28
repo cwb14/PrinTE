@@ -31,21 +31,19 @@
 #include <omp.h>
 #include <sstream>
 #include <algorithm>
-#include <mutex>
-#include <stdexcept>
 
 // ────────────────────────────────────────────────────────────────────
 // Data structures
 // ────────────────────────────────────────────────────────────────────
 struct BedRegion {
     size_t start, end;
-    std::string chrom;     // column-1 (used as key)
-    std::string extra;     // everything after the 6th column
+    std::string chrom;
+    std::string extra;
 };
 
 struct Segment {
     size_t start, end;
-    int generations;       // if negative, sample later
+    int generations;
     Segment(size_t s, size_t e, int g) : start(s), end(e), generations(g) {}
 };
 
@@ -56,29 +54,32 @@ void print_usage() {
     std::cerr <<
         "Usage: mutator -fasta <in.fa> -rate <u> -generations <G> "
         "-mode <0|1|2|3> -threads <T> -seed <S> -out_prefix <P> "
-        "[-bed <regions.bed>]\n";
+        "[-bed <regions.bed>] [-TsTv <ratio>]\n"
+        "  -TsTv: transition/transversion ratio (default 1.0)\n";
 }
 
 bool parse_args(int argc, char* argv[],
                 std::string &fasta, double &mu,
                 int &G, int &mode, int &threads,
                 int &seed, std::string &prefix,
-                std::string &bedfile)
+                std::string &bedfile, double &tsTv)
 {
-    if (argc != 15 && argc != 17) {
+    if (argc < 15 || argc % 2 == 0) {
         print_usage();
         return false;
     }
+    tsTv = 1.0;  // default
     for (int i = 1; i + 1 < argc; i += 2) {
         std::string a = argv[i], v = argv[i+1];
-        if      (a == "-fasta")       fasta    = v;
-        else if (a == "-rate")        mu       = std::stod(v);
-        else if (a == "-generations") G        = std::stoi(v);
-        else if (a == "-mode")        mode     = std::stoi(v);
-        else if (a == "-threads")     threads  = std::stoi(v);
-        else if (a == "-seed")        seed     = std::stoi(v);
-        else if (a == "-out_prefix")  prefix   = v;
-        else if (a == "-bed")         bedfile  = v;
+        if      (a == "-fasta")       fasta   = v;
+        else if (a == "-rate")        mu      = std::stod(v);
+        else if (a == "-generations") G       = std::stoi(v);
+        else if (a == "-mode")        mode    = std::stoi(v);
+        else if (a == "-threads")     threads = std::stoi(v);
+        else if (a == "-seed")        seed    = std::stoi(v);
+        else if (a == "-out_prefix")  prefix  = v;
+        else if (a == "-bed")         bedfile = v;
+        else if (a == "-TsTv")        tsTv    = std::stod(v);
         else {
             std::cerr << "Unknown argument: " << a << '\n';
             print_usage();
@@ -99,31 +100,23 @@ bool load_bed(const std::string &bedfile,
               std::unordered_map<std::string, std::vector<BedRegion>> &bed_map)
 {
     std::ifstream in(bedfile);
-    if (!in) {
-        std::cerr << "Cannot open BED file: " << bedfile << '\n';
-        return false;
-    }
+    if (!in) { std::cerr << "Cannot open BED file: " << bedfile << '\n'; return false; }
     std::string line;
     while (std::getline(in, line)) {
-        if (line.empty() || line[0] == '#') continue;
+        if (line.empty() || line[0]=='#') continue;
         std::istringstream ss(line);
-        BedRegion r;
-        std::string na, strand;
-
-        // BED: chrom start end name score strand ...
+        BedRegion r; std::string na, strand;
         if (!(ss >> r.chrom >> r.start >> r.end >> na >> na >> strand)) {
             std::cerr << "Skipping malformed BED line: " << line << '\n';
             continue;
         }
-        std::getline(ss, r.extra);               // everything else
+        std::getline(ss, r.extra);
         if (r.end <= r.start) continue;
         bed_map[r.chrom].push_back(r);
     }
-
     for (auto &kv : bed_map) {
         auto &v = kv.second;
-        std::sort(v.begin(), v.end(),
-                  [](auto &a, auto &b){ return a.start < b.start; });
+        std::sort(v.begin(), v.end(), [](auto &a, auto &b){ return a.start < b.start; });
     }
     return true;
 }
@@ -135,17 +128,13 @@ bool load_fasta(const std::string &fasta,
                 std::vector<std::pair<std::string,std::string>> &seqs)
 {
     std::ifstream in(fasta);
-    if (!in) {
-        std::cerr << "Cannot open FASTA file: " << fasta << '\n';
-        return false;
-    }
+    if (!in) { std::cerr << "Cannot open FASTA file: " << fasta << '\n'; return false; }
     std::string line, hdr, seq;
     while (std::getline(in, line)) {
         if (line.empty()) continue;
-        if (line[0] == '>') {
+        if (line[0]=='>') {
             if (!hdr.empty()) seqs.emplace_back(hdr, seq);
-            hdr = line.substr(1);
-            seq.clear();
+            hdr = line.substr(1); seq.clear();
         } else {
             seq += line;
         }
@@ -158,13 +147,10 @@ bool write_fasta(const std::string &out,
                  const std::vector<std::pair<std::string,std::string>> &seqs)
 {
     std::ofstream o(out);
-    if (!o) {
-        std::cerr << "Cannot write FASTA file: " << out << '\n';
-        return false;
-    }
-    for (const auto &p : seqs) {
+    if (!o) { std::cerr << "Cannot write FASTA file: " << out << '\n'; return false; }
+    for (auto &p : seqs) {
         o << '>' << p.first << '\n';
-        const auto &s = p.second;
+        auto &s = p.second;
         for (size_t i = 0; i < s.size(); i += 60)
             o << s.substr(i, 60) << '\n';
     }
@@ -185,179 +171,187 @@ const std::unordered_map<char,std::vector<char>>& get_subs() {
 }
 
 // ────────────────────────────────────────────────────────────────────
-// Decay-distributed generation sampler  (λ = 1.4e-6, truncated at 3e6)
+// Transition helper (case-sensitive)
+const std::unordered_map<char,char> ts_map = {
+    {'A','G'},{'G','A'},{'C','T'},{'T','C'},
+    {'a','g'},{'g','a'},{'c','t'},{'t','c'}
+};
+
+inline bool is_transition(char a, char b) {
+    a = std::toupper(static_cast<unsigned char>(a));
+    b = std::toupper(static_cast<unsigned char>(b));
+    return (a=='A'&&b=='G')||(a=='G'&&b=='A')||(a=='C'&&b=='T')||(a=='T'&&b=='C');
+}
+
 // ────────────────────────────────────────────────────────────────────
-inline int sample_decayG(int G_user, std::mt19937 &rng)
-{
-    static constexpr double LAMBDA   = 1.4e-6;
-    static constexpr int    MAX_DECAY= 3'000'000;    // hard cap
-
+// Decay-distributed generation sampler
+// ────────────────────────────────────────────────────────────────────
+inline int sample_decayG(int G_user, std::mt19937 &rng) {
+    static constexpr double LAMBDA = 1.4e-6;
+    static constexpr int MAX_DECAY = 3'000'000;
     int G = std::clamp(G_user, 0, MAX_DECAY);
-    if (G == 0) return 0;
-
-    // truncated exponential: F(x) = (1 - e^{-λx}) / (1 - e^{-λG})
-    std::uniform_real_distribution<> U(0.0, 1.0);
-    double u      = U(rng);
-    double denom  = 1.0 - std::exp(-LAMBDA * G);
-    double x      = -std::log(1.0 - u * denom) / LAMBDA;
-
+    if (G==0) return 0;
+    std::uniform_real_distribution<> U(0.0,1.0);
+    double u = U(rng);
+    double denom = 1.0 - std::exp(-LAMBDA*G);
+    double x = -std::log(1.0 - u*denom)/LAMBDA;
     return static_cast<int>(std::round(x));
 }
 
 // ────────────────────────────────────────────────────────────────────
 // Main
 // ────────────────────────────────────────────────────────────────────
-int main(int argc, char* argv[])
-{
-    // Parse CLI
+int main(int argc, char* argv[]) {
     std::string fasta, prefix, bedfile;
-    double mu = 0.0;
-    int G = 0, mode = 0, threads = 1, seed = 0;
+    double mu = 0.0, tsTv = 1.0;
+    int G=0, mode=0, threads=1, seed=0;
 
-    if (!parse_args(argc, argv, fasta, mu, G, mode, threads, seed, prefix, bedfile))
+    if (!parse_args(argc, argv, fasta, mu, G, mode, threads, seed, prefix, bedfile, tsTv))
         return EXIT_FAILURE;
 
-    if (threads < 1) threads = 1;
+    std::cout << "Using Ts/Tv ratio: " << tsTv << "\n";
+
+    if (threads<1) threads=1;
     int max_threads = omp_get_max_threads();
-    if (threads > max_threads) {
-        std::cerr << "Requested " << threads << " threads, but only "
-                  << max_threads << " available.  Using " << max_threads << ".\n";
+    if (threads>max_threads) {
+        std::cerr<<"Requested "<<threads<<" threads, but only "
+                 <<max_threads<<" available. Using "<<max_threads<<".\n";
         threads = max_threads;
     }
     omp_set_dynamic(0);
     omp_set_num_threads(threads);
 
-    // BED (for mode 2/3)
     std::unordered_map<std::string,std::vector<BedRegion>> bed_map;
-    if (mode >= 2) {
-        std::cout << "Loading BED " << bedfile << " …\n";
+    if (mode>=2) {
+        std::cout<<"Loading BED "<<bedfile<<" …\n";
         if (!load_bed(bedfile, bed_map)) return EXIT_FAILURE;
-        std::cout << "  " << bed_map.size() << " chromosomes indexed\n";
+        std::cout<<"  "<<bed_map.size()<<" chromosomes indexed\n";
     }
 
-    // FASTA
-    std::cout << "Loading FASTA " << fasta << " …\n";
+    std::cout<<"Loading FASTA "<<fasta<<" …\n";
     auto t0 = std::chrono::high_resolution_clock::now();
     std::vector<std::pair<std::string,std::string>> seqs;
     if (!load_fasta(fasta, seqs)) return EXIT_FAILURE;
     size_t N = seqs.size();
-    if (N == 0) { std::cerr << "No sequences loaded.\n"; return EXIT_FAILURE; }
-    std::cout << "  " << N << " sequences\n";
+    if (N==0) { std::cerr<<"No sequences loaded.\n"; return EXIT_FAILURE; }
+    std::cout<<"  "<<N<<" sequences\n";
 
     unsigned long long genome_size = 0;
-    for (const auto &p : seqs) genome_size += p.second.size();
+    for (auto &p: seqs) genome_size += p.second.size();
     const auto &subs = get_subs();
 
-    // Output container
+    // Outputs and counters
     std::vector<std::pair<std::string,std::string>> out_seqs(N);
-    unsigned long long total_muts = 0ULL;
+    unsigned long long total_muts = 0, total_ts = 0, total_tv = 0;
 
     // ───────── parallel mutator ─────────
-    #pragma omp parallel reduction(+:total_muts)
+    #pragma omp parallel reduction(+:total_muts,total_ts,total_tv)
     {
-        std::mt19937 rng(seed + 7*omp_get_thread_num());       // per-thread RNG
-        std::uniform_int_distribution<size_t> dummy;          // declared once
+        std::mt19937 rng(seed + 7*omp_get_thread_num());
+        std::uniform_real_distribution<> U(0.0,1.0);
 
         #pragma omp for schedule(static)
-        for (size_t i = 0; i < N; ++i) {
-            std::string hdr = seqs[i].first;
-            std::string seq = seqs[i].second;
-            size_t L       = seq.size();
+        for (size_t i=0; i<N; ++i) {
+            auto hdr = seqs[i].first;
+            auto seq = seqs[i].second;
+            size_t L  = seq.size();
 
-            // ── build segments ──
+            // build segments
             std::vector<Segment> segs;
-            if (mode < 2) {
-                int g = (mode == 0) ? G : sample_decayG(G, rng);
-                if (L) segs.emplace_back(0, L, g);
-            }
-            else {
+            if (mode<2) {
+                int g = (mode==0)?G:sample_decayG(G, rng);
+                if (L) segs.emplace_back(0,L,g);
+            } else {
                 size_t prev = 0;
                 auto it = bed_map.find(hdr);
-                if (it != bed_map.end()) {
-                    for (const auto &r : it->second) {
-                        if (r.start > prev && prev < L)
-                            segs.emplace_back(prev,
-                                              std::min(r.start, L),
-                                              G);                        // inter-BED: full G
-
-                        int g = G;
-                        if (mode == 2) {
-                            // example rule: "gene" regions = G, others decay
-                            g = (r.extra.rfind("gene", 0) == 0)
-                                ? G : sample_decayG(G, rng);
-                        } else { /* mode 3 */
-                            // example rule: extra == "new_TE" gets decay
-                            g = (r.extra.find("new_TE") != std::string::npos)
-                                ? sample_decayG(G, rng) : G;
-                        }
-                        if (r.start < L && r.end > r.start)
-                            segs.emplace_back(r.start,
-                                              std::min(r.end, L),
-                                              g);
-                        prev = std::min(r.end, L);
+                if (it!=bed_map.end()) {
+                    for (auto &r: it->second) {
+                        if (r.start>prev && prev<L)
+                            segs.emplace_back(prev, std::min(r.start,L), G);
+                        int g = (mode==2)
+                              ? ((r.extra.rfind("gene",0)==0)?G:sample_decayG(G,rng))
+                              : ((r.extra.find("new_TE")!=std::string::npos)
+                                 ? sample_decayG(G,rng) : G);
+                        if (r.start<L && r.end>r.start)
+                            segs.emplace_back(r.start, std::min(r.end,L), g);
+                        prev = std::min(r.end,L);
                     }
                 }
-                if (prev < L) segs.emplace_back(prev, L, G);
+                if (prev<L) segs.emplace_back(prev,L,G);
             }
 
-            // ── mutate each segment ──
-            unsigned long long seq_muts = 0ULL;
-            std::uniform_real_distribution<> U(0.0, 1.0);
-
-            for (const auto &S : segs) {
-                if (S.end <= S.start) continue;
-
-                double lambda_seg = static_cast<double>(S.generations) * mu
-                                    * static_cast<double>(S.end - S.start);
-                std::poisson_distribution<> pd(lambda_seg);
+            unsigned long long seq_muts = 0;
+            for (auto &S: segs) {
+                if (S.end<=S.start) continue;
+                double λ = double(S.generations)*mu*double(S.end-S.start);
+                std::poisson_distribution<> pd(λ);
                 int mcount = pd(rng);
-                seq_muts  += mcount;
+                seq_muts += mcount;
+                for (int m=0; m<mcount; ++m) {
+                    std::uniform_int_distribution<size_t> pickPos(S.start, S.end-1);
+                    size_t pos = pickPos(rng);
+                    char orig = seq[pos];
+                    auto it2 = subs.find(orig);
+                    if (it2==subs.end()) continue;
+                    auto &cands = it2->second;
 
-                if (mcount) {
-                    std::uniform_int_distribution<size_t> pickPos(S.start, S.end - 1);
-                    for (int m = 0; m < mcount; ++m) {
-                        size_t pos = pickPos(rng);          // random position
-                        auto it2   = subs.find(seq[pos]);
-                        if (it2 != subs.end())
-                            seq[pos] = it2->second[
-                                static_cast<size_t>(U(rng) * 3.0) ];
+                    // True Ts vs Tv decision:
+                    double p_ts = tsTv/(tsTv+1.0);
+                    char nb;
+                    if (U(rng) < p_ts) {
+                        // transition
+                        nb = ts_map.at(orig);
+                        ++total_ts;
+                    } else {
+                        // transversion: pick uniformly among the two non-transition cands
+                        char tvs[2];
+                        int idx=0;
+                        for (char c: cands)
+                            if (!is_transition(orig,c))
+                                tvs[idx++] = c;
+                        std::uniform_int_distribution<int> pickTv(0,1);
+                        nb = tvs[pickTv(rng)];
+                        ++total_tv;
                     }
+                    seq[pos] = nb;
                 }
             }
 
             total_muts += seq_muts;
             out_seqs[i] = { std::move(hdr), std::move(seq) };
 
-            if ((i+1) % 10000 == 0 && omp_get_thread_num() == 0)
-                std::cout << "  processed " << (i+1) << '/' << N << " sequences\n";
-        } // for
-    } // parallel
+            if ((i+1)%10000==0 && omp_get_thread_num()==0)
+                std::cout<<"  processed "<<(i+1)<<"/"<<N<<" sequences\n";
+        }
+    }
 
-    // ───────── output FASTA ─────────
+    // ───────── write outputs ─────────
     std::string outfa = prefix + ".fa";
-    std::cout << "Writing " << outfa << " …\n";
+    std::cout<<"Writing "<<outfa<<" …\n";
     if (!write_fasta(outfa, out_seqs)) return EXIT_FAILURE;
 
-    // ───────── summary metrics ─────────
     std::string outtxt = prefix + ".txt";
     std::ofstream ot(outtxt);
-    if (!ot) {
-        std::cerr << "Cannot write metrics file: " << outtxt << '\n';
-        return EXIT_FAILURE;
-    }
-    double lambda_obs = static_cast<double>(total_muts) / genome_size;
-    double U_hits    = genome_size * (1.0 - std::exp(-lambda_obs)); // unique sites
+    if (!ot) { std::cerr<<"Cannot write metrics file: "<<outtxt<<"\n"; return EXIT_FAILURE; }
+    double λ_obs = double(total_muts)/genome_size;
+    double U_hits = genome_size*(1.0 - std::exp(-λ_obs));
     double recurrent = total_muts - U_hits;
-    double mu1       = U_hits / genome_size;
+    double mu1 = U_hits/genome_size;
 
-    ot << "Genome size:  " << genome_size << '\n'
-       << "Total muts:   " << total_muts  << '\n'
-       << "Recurrent est:" << recurrent   << '\n'
-       << "Muts/site:    " << mu1         << '\n'
-       << "Muts/site*2:  " << mu1 * 2.0   << '\n';
+    ot<<"Genome size:  "<<genome_size<<"\n"
+      <<"Total muts:   "<<total_muts<<"\n"
+      <<"Recurrent est:"<<recurrent<<"\n"
+      <<"Muts/site:    "<<mu1<<"\n"
+      <<"Muts/site*2:  "<<mu1*2.0<<"\n";
+
+    // Debug prints
+    std::cout<<"Transition count:      "<<total_ts<<"\n";
+    std::cout<<"Transversion count:    "<<total_tv<<"\n";
+    std::cout<<"Ts + Tv = "<<(total_ts+total_tv)
+             <<" (should equal Total muts: "<<total_muts<<")\n";
 
     auto t1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> dt = t1 - t0;
-    std::cout << "Done in " << dt.count() << " s\n";
+    std::cout<<"Done in "<<dt.count()<<" s\n";
     return EXIT_SUCCESS;
 }

@@ -196,20 +196,62 @@ def compute_allowed_intervals(seq_length, exclusion_intervals):
         allowed.append((current, seq_length))
     return allowed
 
-def mutate_sequence(seq, mutation_rate):
+#def mutate_sequence(seq, mutation_rate):
+#    """
+#    Mutate the given sequence by randomly substituting bases with probability mutation_rate.
+#    mutation_rate should be a fraction (e.g., 0.03 for 3%).
+#    """
+#    mutated = []
+#    for base in seq:
+#        if random.random() < mutation_rate:
+#            bases = ['A', 'C', 'G', 'T']
+#            if base.upper() in bases:
+#                bases.remove(base.upper())
+#            mutated.append(random.choice(bases))
+#        else:
+#            mutated.append(base)
+#    return ''.join(mutated)
+
+def mutate_sequence(seq, mutation_rate, ts_tv_ratio):
     """
-    Mutate the given sequence by randomly substituting bases with probability mutation_rate.
-    mutation_rate should be a fraction (e.g., 0.03 for 3%).
+    Mutate seq by substitution at rate `mutation_rate`.  When substituting,
+    choose a transition vs. transversion event with ratio ts_tv_ratio.
+    Prints counts of Ts, Tv, and the observed Ts/Tv ratio.
     """
+    ts_map = {'A': 'G', 'G': 'A', 'C': 'T', 'T': 'C'}
+    tv_map = {
+        'A': ['C', 'T'], 'G': ['C', 'T'],
+        'C': ['A', 'G'], 'T': ['A', 'G']
+    }
+
+    transitioned = 0
+    transverted = 0
     mutated = []
+
     for base in seq:
         if random.random() < mutation_rate:
-            bases = ['A', 'C', 'G', 'T']
-            if base.upper() in bases:
-                bases.remove(base.upper())
-            mutated.append(random.choice(bases))
+            b = base.upper()
+            if b in ts_map:
+                # decide between Ts and Tv
+                p_ts = ts_tv_ratio / (ts_tv_ratio + 1.0)
+                if random.random() < p_ts:
+                    new = ts_map[b]
+                    transitioned += 1
+                else:
+                    new = random.choice(tv_map[b])
+                    transverted += 1
+                # preserve case
+                mutated.append(new if base.isupper() else new.lower())
+            else:
+                # non-ACGT characters unchanged
+                mutated.append(base)
         else:
             mutated.append(base)
+
+    # After processing, report counts
+    obs_ratio = (transitioned / transverted) if transverted > 0 else float('inf')
+#    print(f"[mutate_sequence] Transitions: {transitioned}; Transversions: {transverted}; Observed Ts/Tv = {obs_ratio:.2f}")
+
     return ''.join(mutated)
 
 def plot_decay_function(k, Mmax, pdf_out):
@@ -223,7 +265,7 @@ def plot_decay_function(k, Mmax, pdf_out):
     # Compute normalized PDF
     norm_const = 1 - math.exp(-k)
     f_values = (k / (Mmax * norm_const)) * np.exp(-k * (M_values / Mmax))
-    
+
     plt.figure(figsize=(6,4))
     plt.plot(M_values, f_values, lw=2)
     plt.xlabel("Mutation Percent (%)", fontsize=12)
@@ -240,18 +282,18 @@ def process_chromosome(task):
     Process TE insertions on a single chromosome.
     task is a tuple containing:
       (chrom, chrom_data, target_mode, target_value, te_headers, te_info_dict,
-       te_dict, te_ratio_weights, te_type_to_headers, k, Mmax, seed_offset)
+       te_dict, te_ratio_weights, te_type_to_headers, k, Mmax, seed_offset, ts_tv_ratio)
     target_mode: 'n' (number of insertions) or 'p' (target TE bp)
     target_value: integer target insertions or target bp to insert
     """
     (chrom, data, target_mode, target_value, te_headers, te_info_dict,
-     te_dict, te_ratio_weights, te_type_to_headers, k, Mmax, seed_offset) = task
+     te_dict, te_ratio_weights, te_type_to_headers, k, Mmax, seed_offset, ts_tv_ratio) = task
 
     # Optionally seed random generators per chromosome
     if seed_offset is not None:
         random.seed(seed_offset)
         np.random.seed(seed_offset)
-    
+
     seq = list(data['seq'])
     chr_length = data['length']
     # Copy the exclusion intervals (gene plus already inserted TEs)
@@ -288,7 +330,7 @@ def process_chromosome(task):
             u = random.random()
             mutation_percent = - (Mmax / k) * math.log(1 - u * (1 - math.exp(-k)))
             mutation_rate = mutation_percent / 100.0
-            te_sequence = mutate_sequence(te_sequence, mutation_rate)
+            te_sequence = mutate_sequence(te_sequence, mutation_rate, ts_tv_ratio)
             # Uncomment the next line to print detailed mutation info per chromosome.
             # print(f"[{chrom}] Mutating TE {selected_te} at {mutation_percent:.2f}% rate.")
 
@@ -365,7 +407,7 @@ def process_chromosome(task):
             total_TE_bp_inserted += inserted
             total_insertions_done += 1
             # Uncomment the next line to see per-insertion logs.
-            # print(f"[{chrom}] Insertion {total_insertions_done} inserted TE of length {inserted}bp.")
+#            print(f"[{chrom}] Insertion {total_insertions_done} inserted TE of length {inserted}bp.")
         attempts += 1
 
     modified_seq = ''.join(seq)
@@ -391,6 +433,8 @@ def main():
     parser.add_argument('-pdf_out', help='Output PDF file for mutation decay function plot (default mutation_decay.pdf)', default="mutation_decay.pdf")
     # New multiprocessing parameter: number of chromosomes to process concurrently.
     parser.add_argument('-m', type=int, default=1, help='Number of chromosomes to process concurrently (multiprocessing; default 1)')
+    parser.add_argument('-TsTv', type=float, default=1.0,
+                        help='Transition/transversion ratio (default 1.0: Ts and Tv equally likely)')
     args = parser.parse_args()
 
     # Set global random seed if provided.
@@ -511,7 +555,9 @@ def main():
                 target_n = 1
             tasks.append((chrom, chrom_data[chrom], 'n', target_n,
                           te_headers, te_info_dict, te_dict, te_ratio_weights, te_type_to_headers, k, Mmax,
-                          (args.seed + idx) if args.seed is not None else None))
+                          (args.seed + idx) if args.seed is not None else None,
+                          args.TsTv))
+
         print(f"Performing a total of {total_insertions} TE insertions distributed across chromosomes.")
     else:
         target_percent = args.p
@@ -520,7 +566,8 @@ def main():
             target_bp = chr_length * (target_percent / 100)
             tasks.append((chrom, chrom_data[chrom], 'p', target_bp,
                           te_headers, te_info_dict, te_dict, te_ratio_weights, te_type_to_headers, k, Mmax,
-                          (args.seed + idx) if args.seed is not None else None))
+                          (args.seed + idx) if args.seed is not None else None,
+                          args.TsTv))
         print(f"Performing TE insertions on each chromosome until approximately {target_percent}% TE content is reached.")
 
     # Process chromosomes concurrently using multiprocessing.

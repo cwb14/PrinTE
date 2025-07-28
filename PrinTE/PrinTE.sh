@@ -161,6 +161,7 @@ Options:
   -x,  --continue            Resume simulation from the last completed generation.
   -kt, --keep_temps          Keep temporary files (default: remove them after each loop)
   -md, --model               DNA mutation model for LTR dating (choose from: raw, K2P, JC69; default: K2P)
+  -TsTv, --TsTv              Transition/transversion ratio (default: 1.0)
   -ex, --ex_LTR              Exclude LTR sequences without a domain hit (passed as '-exclude_no_hits' to LTR_fasta_header_appender.py)
   -h,  --help                Display this help message and exit
 
@@ -204,6 +205,7 @@ disable_genes=0
 TE_mut_k=10
 TE_mut_Mmax=20
 sel_coeff=0
+TsTv=1.0
 
 while [[ $# -gt 0 ]]; do
   key="$1"
@@ -261,6 +263,9 @@ while [[ $# -gt 0 ]]; do
       shift; shift;;
     -sr|--solo_rate)
       solo_rate="$2"
+      shift; shift;;
+    -TsTv|--TsTv)
+      TsTv="$2"
       shift; shift;;
     -k|--k)
       k="$2"
@@ -340,6 +345,7 @@ solo_rate="${solo_rate:-95}"
 k="${k:-10}"
 sigma="${sigma:-1.0}"
 max_size="${max_size:-}" # If not set, remains empty
+TsTv="${TsTv:-1.0}"
 
 # --- Validate mutually exclusive CDS options ---
 if [[ -n "$cds_num" && -n "$cds_percent" ]]; then
@@ -467,6 +473,7 @@ if [[ "$skip_burnin" -eq 0 ]]; then
     else
         cmd+=" -n ${TE_num}"
     fi
+    cmd+=" -TsTv ${TsTv}"
     cmd+=" -bed backbone.bed -output burnin -seed ${seed} -TE_ratio ${TE_ratio} -stat_out burnin.stat"
     cmd+=" -k ${TE_mut_k} -Mmax ${TE_mut_Mmax} -pdf_out burnin_mut_dist.pdf -m ${threads}"
     echo "Running: $cmd" | tee -a "$LOG"
@@ -581,6 +588,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
     -generations ${step} \
     -mode ${mode} \
     -threads ${threads} \
+    -TsTv ${TsTv} \
     -seed ${current_seed} \
     -out_prefix ${mut_prefix}"
   echo "Running: $cmd" | tee -a "$LOG"
@@ -779,6 +787,3 @@ echo "Running: $cmd" | tee -a "$LOG"
 eval $cmd
 
 echo "Post-processing completed at $(date)" | tee -a "$LOG"
-
-
-
