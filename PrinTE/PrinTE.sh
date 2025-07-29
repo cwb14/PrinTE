@@ -675,7 +675,12 @@ for (( i=start_iter; i<=iterations; i++ )); do
   if [[ -n "$max_size" ]]; then
     fasta="gen${current_gen}_final.fasta"
     if [[ -f "$fasta" ]]; then
-      actual_bytes=$(stat -c%s "$fasta")
+      if [[ "$OS" == "Darwin" ]]; then
+          actual_bytes=$(stat -f%z "$fasta")  # macOS
+      else
+          actual_bytes=$(stat -c%s "$fasta")  # Linux
+      fi
+      
       if (( actual_bytes > max_bytes )); then
         echo "Maximum genome size exceeded: $actual_bytes bytes > $max_bytes bytes" | tee -a "$LOG"
         echo "Stopping at generation ${current_gen}." | tee -a "$LOG"
