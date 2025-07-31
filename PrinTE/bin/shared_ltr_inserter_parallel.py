@@ -446,7 +446,12 @@ def main():
         print("No random seed provided. Results will be non-reproducible.")
 
     # Plot the decay function for mutation percentages.
-    plot_decay_function(args.k, args.Mmax, args.pdf_out)
+    # But not if Mmax zero (ie, no mutations added).
+#    plot_decay_function(args.k, args.Mmax, args.pdf_out)
+    if args.Mmax > 0:
+        plot_decay_function(args.k, args.Mmax, args.pdf_out)
+    else:
+        print("Mmax is 0. Skipping mutation decay plot since mutation is disabled.")
 
     genome_path = args.genome
     te_path = args.TE
