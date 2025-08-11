@@ -369,23 +369,24 @@ int main(int argc, char* argv[]) {
     std::string outtxt = prefix + ".txt";
     std::ofstream ot(outtxt);
     if (!ot) { std::cerr<<"Cannot write metrics file: "<<outtxt<<"\n"; return EXIT_FAILURE; }
-
-    // Exact (non-recurrent) and recurrent metrics
+    
+    // Exact (non-recurrent) and total rates
     // unique_sites_hit == number of sites with >=1 successful mutation
-    // non-recurrent mutations/site counts only the first hit to each site
+    // Non-recurrent mutations/site counts only the first hit to each site
     const double muts_per_site_exact_nonrec = (genome_size > 0)
         ? static_cast<double>(total_unique_sites_hit) / static_cast<double>(genome_size)
         : 0.0;
-
-    // For completeness, "Mutions / site" keeps the historical meaning: unique hits per site (non-recurrent rate used before by estimate).
-    const double muts_per_site              = muts_per_site_exact_nonrec;
+    // Total mutations per site (requested behavior for "Mutions / site")
+    const double muts_per_site_total = (genome_size > 0)
+        ? static_cast<double>(total_muts) / static_cast<double>(genome_size)
+        : 0.0;
 
     // Output summary (with the requested field names/spelling)
     ot << "Genome size:  " << genome_size << "\n"
        << "Total mutations: " << total_muts << "\n"
        << "Recurrent mutations: " << total_recurrent_hits << "\n"
-       << "Mutions / site:    " << std::setprecision(10) << muts_per_site << "\n"
-       << "Mutions / site * 2:    " << std::setprecision(10) << (muts_per_site * 2.0) << "\n"
+       << "Mutions / site:    " << std::setprecision(10) << muts_per_site_total << "\n"
+       << "Mutions / site * 2:    " << std::setprecision(10) << (muts_per_site_total * 2.0) << "\n"
        << "Non-recurrent Mutions / site:    " << std::setprecision(10) << muts_per_site_exact_nonrec << "\n"
        << "Non-recurrent Mutions / site * 2:    " << std::setprecision(10) << (muts_per_site_exact_nonrec * 2.0) << "\n";
 
