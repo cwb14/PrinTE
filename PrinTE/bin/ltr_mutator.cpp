@@ -6,7 +6,7 @@
  *   linux: g++ -std=c++17 -fopenmp -O3 -o mutator mutator.cpp
  *
  *
- *   arm64: # Step 1: Compile only (no linking)       
+ *   arm64: # Step 1: Compile only (no linking)
  *   $(brew --prefix llvm)/bin/clang++ -std=c++17 -O3 -fopenmp \
  *   -I$(brew --prefix libomp)/include \
  *   -c TESS/PrinTE/bin/ltr_mutator.cpp -o mutator.o
@@ -14,23 +14,26 @@
  *   # Step 2: Link manually with static libomp
  *   $(brew --prefix llvm)/bin/clang++ -O3 mutator.o \
  *   $(brew --prefix libomp)/lib/libomp.a \
- *   -lc++ -lm -o TESS/PrinTE/bin/ltr_mutator_mac  
+ *   -lc++ -lm -o TESS/PrinTE/bin/ltr_mutator_mac
  *
  *********************************************************************/
 
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <vector>
-#include <random>
-#include <unordered_map>
-#include <cstdlib>
-#include <ctime>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cctype>
+#include <cstdlib>
+#include <ctime>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
 #include <omp.h>
+#include <random>
 #include <sstream>
-#include <algorithm>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 // ────────────────────────────────────────────────────────────────────
 // Data structures
@@ -47,8 +50,6 @@ struct Segment {
     Segment(size_t s, size_t e, int g) : start(s), end(e), generations(g) {}
 };
 
-// ────────────────────────────────────────────────────────────────────
-// Command-line helpers
 // ────────────────────────────────────────────────────────────────────
 void print_usage() {
     std::cerr <<
@@ -170,17 +171,26 @@ const std::unordered_map<char,std::vector<char>>& get_subs() {
     return m;
 }
 
-// ────────────────────────────────────────────────────────────────────
-// Transition helper (case-sensitive)
-const std::unordered_map<char,char> ts_map = {
-    {'A','G'},{'G','A'},{'C','T'},{'T','C'},
-    {'a','g'},{'g','a'},{'c','t'},{'t','c'}
-};
-
+// Transition helper (case-insensitive compare, but preserve case in output)
 inline bool is_transition(char a, char b) {
     a = std::toupper(static_cast<unsigned char>(a));
     b = std::toupper(static_cast<unsigned char>(b));
     return (a=='A'&&b=='G')||(a=='G'&&b=='A')||(a=='C'&&b=='T')||(a=='T'&&b=='C');
+}
+
+// For deterministic transition choice preserving case
+inline char transition_of(char base) {
+    switch (base) {
+        case 'A': return 'G';
+        case 'G': return 'A';
+        case 'C': return 'T';
+        case 'T': return 'C';
+        case 'a': return 'g';
+        case 'g': return 'a';
+        case 'c': return 't';
+        case 't': return 'c';
+        default:  return base;
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -244,8 +254,12 @@ int main(int argc, char* argv[]) {
     std::vector<std::pair<std::string,std::string>> out_seqs(N);
     unsigned long long total_muts = 0, total_ts = 0, total_tv = 0;
 
+    // New exact counters for recurrence
+    unsigned long long total_unique_sites_hit = 0; // sites with >=1 successful mutation
+    unsigned long long total_recurrent_hits   = 0; // sum over sites of (hits - 1) when hits>=1
+
     // ───────── parallel mutator ─────────
-    #pragma omp parallel reduction(+:total_muts,total_ts,total_tv)
+    #pragma omp parallel reduction(+:total_muts,total_ts,total_tv,total_unique_sites_hit,total_recurrent_hits)
     {
         std::mt19937 rng(seed + 7*omp_get_thread_num());
         std::uniform_real_distribution<> U(0.0,1.0);
@@ -255,6 +269,9 @@ int main(int argc, char* argv[]) {
             auto hdr = seqs[i].first;
             auto seq = seqs[i].second;
             size_t L  = seq.size();
+
+            // Per-sequence hit counter to track recurrence (only for successful mutations)
+            std::vector<uint16_t> pos_hits(L, 0);
 
             // build segments
             std::vector<Segment> segs;
@@ -281,31 +298,31 @@ int main(int argc, char* argv[]) {
             }
 
             unsigned long long seq_muts = 0;
+
             for (auto &S: segs) {
                 if (S.end<=S.start) continue;
-                double λ = double(S.generations)*mu*double(S.end-S.start);
-                std::poisson_distribution<> pd(λ);
+                double lambda_segment = double(S.generations)*mu*double(S.end-S.start);
+                std::poisson_distribution<> pd(lambda_segment);
                 int mcount = pd(rng);
-                seq_muts += mcount;
+
                 for (int m=0; m<mcount; ++m) {
                     std::uniform_int_distribution<size_t> pickPos(S.start, S.end-1);
                     size_t pos = pickPos(rng);
                     char orig = seq[pos];
                     auto it2 = subs.find(orig);
-                    if (it2==subs.end()) continue;
-                    auto &cands = it2->second;
+                    if (it2==subs.end()) continue; // skip non-ACGT; don't count as a mutation
 
                     // True Ts vs Tv decision:
                     double p_ts = tsTv/(tsTv+1.0);
                     char nb;
                     if (U(rng) < p_ts) {
                         // transition
-                        nb = ts_map.at(orig);
+                        nb = transition_of(orig);
                         ++total_ts;
                     } else {
                         // transversion: pick uniformly among the two non-transition cands
-                        char tvs[2];
-                        int idx=0;
+                        const auto &cands = it2->second;
+                        char tvs[2]; int idx=0;
                         for (char c: cands)
                             if (!is_transition(orig,c))
                                 tvs[idx++] = c;
@@ -313,11 +330,30 @@ int main(int argc, char* argv[]) {
                         nb = tvs[pickTv(rng)];
                         ++total_tv;
                     }
+
+                    // apply mutation
                     seq[pos] = nb;
+                    ++seq_muts;
+                    // track recurrence (successful hit only)
+                    if (pos_hits[pos] < std::numeric_limits<uint16_t>::max())
+                        ++pos_hits[pos];
                 }
             }
 
-            total_muts += seq_muts;
+            // tally unique and recurrent hits for this sequence
+            unsigned long long unique_sites = 0;
+            unsigned long long recurrent_hits = 0;
+            for (size_t p = 0; p < L; ++p) {
+                uint16_t h = pos_hits[p];
+                if (h > 0) {
+                    ++unique_sites;           // site hit at least once
+                    if (h > 1) recurrent_hits += (h - 1); // extra hits beyond the first
+                }
+            }
+
+            total_unique_sites_hit += unique_sites;
+            total_recurrent_hits   += recurrent_hits;
+            total_muts             += seq_muts;
             out_seqs[i] = { std::move(hdr), std::move(seq) };
 
             if ((i+1)%10000==0 && omp_get_thread_num()==0)
@@ -333,22 +369,33 @@ int main(int argc, char* argv[]) {
     std::string outtxt = prefix + ".txt";
     std::ofstream ot(outtxt);
     if (!ot) { std::cerr<<"Cannot write metrics file: "<<outtxt<<"\n"; return EXIT_FAILURE; }
-    double λ_obs = double(total_muts)/genome_size;
-    double U_hits = genome_size*(1.0 - std::exp(-λ_obs));
-    double recurrent = total_muts - U_hits;
-    double mu1 = U_hits/genome_size;
 
-    ot<<"Genome size:  "<<genome_size<<"\n"
-      <<"Total muts:   "<<total_muts<<"\n"
-      <<"Recurrent est:"<<recurrent<<"\n"
-      <<"Muts/site:    "<<mu1<<"\n"
-      <<"Muts/site*2:  "<<mu1*2.0<<"\n";
+    // Exact (non-recurrent) and recurrent metrics
+    // unique_sites_hit == number of sites with >=1 successful mutation
+    // non-recurrent mutations/site counts only the first hit to each site
+    const double muts_per_site_exact_nonrec = (genome_size > 0)
+        ? static_cast<double>(total_unique_sites_hit) / static_cast<double>(genome_size)
+        : 0.0;
+
+    // For completeness, "Mutions / site" keeps the historical meaning: unique hits per site (non-recurrent rate used before by estimate).
+    const double muts_per_site              = muts_per_site_exact_nonrec;
+
+    // Output summary (with the requested field names/spelling)
+    ot << "Genome size:  " << genome_size << "\n"
+       << "Total mutations: " << total_muts << "\n"
+       << "Recurrent mutations: " << total_recurrent_hits << "\n"
+       << "Mutions / site:    " << std::setprecision(10) << muts_per_site << "\n"
+       << "Mutions / site * 2:    " << std::setprecision(10) << (muts_per_site * 2.0) << "\n"
+       << "Non-recurrent Mutions / site:    " << std::setprecision(10) << muts_per_site_exact_nonrec << "\n"
+       << "Non-recurrent Mutions / site * 2:    " << std::setprecision(10) << (muts_per_site_exact_nonrec * 2.0) << "\n";
 
     // Debug prints
     std::cout<<"Transition count:      "<<total_ts<<"\n";
     std::cout<<"Transversion count:    "<<total_tv<<"\n";
     std::cout<<"Ts + Tv = "<<(total_ts+total_tv)
-             <<" (should equal Total muts: "<<total_muts<<")\n";
+             <<" (should equal Total mutations: "<<total_muts<<")\n";
+    std::cout<<"Unique sites hit:      "<<total_unique_sites_hit<<"\n";
+    std::cout<<"Recurrent mutations:   "<<total_recurrent_hits<<"\n";
 
     auto t1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> dt = t1 - t0;
