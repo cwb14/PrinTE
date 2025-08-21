@@ -744,6 +744,32 @@ eval $cmd
 ###############################################################################
 echo "=== Per-Generation Post-Processing ===" | tee -a "$LOG"
 
+# Ensure Kmer2LTR is available (clone into TOOL_DIR if missing)
+if [[ ! -d "${TOOL_DIR}/Kmer2LTR" ]]; then
+  echo "Cloning Kmer2LTR into ${TOOL_DIR}..." | tee -a "$LOG"
+  (
+    cd "${TOOL_DIR}" \
+      && git clone https://github.com/cwb14/Kmer2LTR.git
+  ) >> "$LOG" 2>> "$ERR"
+  if [ $? -ne 0 ]; then
+    echo "Error cloning Kmer2LTR" | tee -a "$ERR"
+    exit 1
+  fi
+fi
+
+# Ensure Kmer2LTR is available (clone into TOOL_DIR if missing)
+if [[ ! -d "${TOOL_DIR}/Kmer2LTR" ]]; then
+  echo "Cloning Kmer2LTR into ${TOOL_DIR}..." | tee -a "$LOG"
+  (
+    cd "${TOOL_DIR}" \
+      && git clone https://github.com/cwb14/Kmer2LTR.git
+  ) >> "$LOG" 2>> "$ERR"
+  if [ $? -ne 0 ]; then
+    echo "Error cloning Kmer2LTR" | tee -a "$ERR"
+    exit 1
+  fi
+fi
+
 # Determine how many generations we actually ran
 # (i.e. highest_gen / step)
 # total_gens=$iterations
@@ -779,11 +805,25 @@ for iter in "${selected[@]}"; do
   cmd="python ${BIN_DIR}/extract_intact_LTR.py --bed ${final_prefix}.bed --genome ${final_prefix}.fasta --out_fasta ${final_prefix}_LTR.fasta"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd
-  
-  # (b) Compute sequence divergence on extracted LTR sequences.
-  cmd="python ${BIN_DIR}/seq_divergence.py -i ${final_prefix}_LTR.fasta -o ${final_prefix}_LTR.tsv -t ${threads} --min_align 100 --max_off 20 --miu ${mutation_rate} --blast_outfmt '6 qseqid sseqid sstart send slen qstart qend qlen length nident btop'"
+
+#  # (b) Compute sequence divergence on extracted LTR sequences.
+#  cmd="python ${BIN_DIR}/seq_divergence.py -i ${final_prefix}_LTR.fasta -o ${final_prefix}_LTR.tsv -t ${threads} --min_align 100 --max_off 20 --miu ${mutation_rate} --blast_outfmt '6 qseqid sseqid sstart send slen qstart qend qlen length nident btop'"
+#  echo "Running: $cmd" | tee -a "$LOG"
+#  eval $cmd
+
+  # (b) Pull LTR domains and run Kmer2LTR to produce the TSV (replaces seq_divergence.py).
+  #     1) Pull domains
+  cmd="python ${BIN_DIR}/ltr_domain_puller.py ${final_prefix}_LTR.fasta ${final_prefix}_LTR.domain"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd
+
+  #     2) Kmer2LTR (uses the repo cloned under TOOL_DIR)
+  cmd="python ${TOOL_DIR}/Kmer2LTR/Kmer2LTR.py -p ${threads} ${final_prefix}_LTR.fasta -D ${final_prefix}_LTR.domain --assume-duplicate-same-ltr -o ${final_prefix}_LTR.tsv -u ${mutation_rate} >/dev/null"
+  echo "Running: $cmd" | tee -a "$LOG"
+  eval $cmd
+
+  #     3) Clean up the temporary domains file
+  rm -f ${final_prefix}_LTR.domain
 done
 
 # Run ltr_dens.py once after per-generation analyses.
