@@ -823,7 +823,7 @@ for iter in "${selected[@]}"; do
   eval $cmd
 
   #     3) Clean up the temporary domains file
-  rm -f ${final_prefix}_LTR.domain
+  rm -f ${final_prefix}_LTR.domain ${final_prefix}_LTR.tsv.log ${final_prefix}_LTR.tsv.summary
 done
 
 # Run ltr_dens.py once after per-generation analyses.
