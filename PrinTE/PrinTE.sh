@@ -818,7 +818,7 @@ for iter in "${selected[@]}"; do
   eval $cmd
 
   #     2) Kmer2LTR (uses the repo cloned under TOOL_DIR)
-  cmd="python ${TOOL_DIR}/Kmer2LTR/Kmer2LTR.py -p ${threads} ${final_prefix}_LTR.fasta -D ${final_prefix}_LTR.domain --assume-duplicate-same-ltr -o ${final_prefix}_LTR.tsv -u ${mutation_rate} >/dev/null"
+  cmd="python ${TOOL_DIR}/Kmer2LTR/Kmer2LTR.py -p ${threads} -i ${final_prefix}_LTR.fasta -D ${final_prefix}_LTR.domain --assume-duplicate-same-ltr -o ${final_prefix}_LTR.tsv -u ${mutation_rate} --no-plot"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd
 
