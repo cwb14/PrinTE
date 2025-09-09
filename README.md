@@ -38,9 +38,10 @@ conda activate PrinTE
 ```
 ---
 
-## Inputs
+## Phase 1 - Inputs and Parameters 
+Allowing customization of the sequence composition for the initial (**burn-in**) genome.
 
-These inputs allow customization of the sequence composition for the initial (**burn-in**) genome.
+### Inputs
 
 1. **CDS FASTA (`--cds`)**  
    Specifies the **genes** to insert into the synthetic genome.  
@@ -56,11 +57,15 @@ These inputs allow customization of the sequence composition for the initial (**
      >Os2670#MITE/Tourist
      ```  
    - Supported `#[class]/[superfamily]` suffixes are listed in `ratios.tsv`.
+   - Users can control the abundance of TEs in the burn-in genome using `--TE_percent` or `--TE_num`.
 
-3. **TE Ratios File (`--TE_ratio`)**  
+3. **TE Ratios File (`--TE_ratio ratios.tsv`)**  
    Defines the relative frequency of each TE superfamily in the genome.  
    - Columns:  
      1. `class`  
      2. `superfamily`  
-     3. `weight` (probability of insertion)  
+     3. `weight` (probability of insertion)
+   - PrinTE ships with `ratios.tsv` for this purpose.  
    - Users can adjust the `weight` values (column 3) to tune the TE landscape to their needs.
+
+### Parameters
