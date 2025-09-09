@@ -36,3 +36,31 @@ git clone https://github.com/cwb14/PrinTE.git
 mamba env create -f PrinTE/env.yml
 conda activate PrinTE
 ```
+---
+
+## Inputs
+
+These inputs allow customization of the sequence composition for the initial (**burn-in**) genome.
+
+1. **CDS FASTA (`--cds`)**  
+   Specifies the **genes** to insert into the synthetic genome.  
+   - By default, PrinTE uses *Arabidopsis thaliana* TAIR10 CDS, which contains 19,621 sequences.  
+   - If you request more CDS sequences than this (via `--cds_percent` or `--cds_num`), you must provide an alternative CDS FASTA file.
+
+2. **TE Library FASTA (`--TE_lib`)**  
+   Specifies the **transposable elements** to insert into the synthetic genome.  
+   - Default: `combined_curated_TE_lib_ATOSZM_selected.fasta`  
+   - FASTA headers must follow **RepeatMasker format**, e.g.:  
+     ```
+     >[name]#[class]/[superfamily]
+     >Os2670#MITE/Tourist
+     ```  
+   - Supported `#[class]/[superfamily]` suffixes are listed in `ratios.tsv`.
+
+3. **TE Ratios File (`--TE_ratio`)**  
+   Defines the relative frequency of each TE superfamily in the genome.  
+   - Columns:  
+     1. `class`  
+     2. `superfamily`  
+     3. `weight` (probability of insertion)  
+   - Users can adjust the `weight` values (column 3) to tune the TE landscape to their needs.
