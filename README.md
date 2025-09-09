@@ -69,3 +69,26 @@ Allowing customization of the sequence composition for the initial (**burn-in**)
    - Users can adjust the `weight` values (column 3) to tune the TE landscape to their needs.
 
 ### Parameters
+
+1. **`--chr_number`**  
+   Number of chromosomes in the burn-in genome.  
+   - Parallelization occurs on a per-chromosome basis, so more chromosomes generally improve runtimes.  
+   - Avoid oversplitting the genome into too many small chromosomes.  
+
+2. **`--size`**  
+   Total size (bp) of the burn-in genome.  
+
+3. **`--TE_mut_k` and `--TE_mut_Mmax`**  
+   Control the distribution of TE substitution mutations in the burn-in genome.  
+   - TE Mutations are clock-like, but older TEs are more likely to have been deleted or fragmented than younger. This means that the observed mutation landscape appears asymetric, with most intact TEs appear young, while older TEs are often lost.  
+   - **`--TE_mut_k`** sets the *decay rate*:  
+     - Large values -> steep decay (most TEs with very low mutation rates).  
+     - Small values -> flatter distribution (higher mutation rates more likely).  
+   - **`--TE_mut_Mmax`** sets the *ceiling* for mutation percentage.  
+     - **Use `--TE_mut_Mmax 0` to disables TE mutations in the burn-in.**  
+   - PrinTE generates a PDF of the mutation decay function: `burnin_mut_dist.pdf`.  
+
+4. **`--burnin_only`**  
+   Runs only Phase 1 (burn-in).  
+   - Generates the synthetic genome and stops before evolution steps (Phase 2).  
+   
