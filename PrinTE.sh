@@ -121,7 +121,7 @@ Options:
   -st, --step                Generation step size (number of generations per loop; REQUIRED unless --burnin_only is used)
 
 ############### BURN-IN ###############
-  -c,  --cds                 Path to CDS file (default: ${TOOL_DIR}/TAIR10.cds.fa)
+  -c,  --cds                 Path to CDS file (default: ${TOOL_DIR}/data/TAIR10.cds.fa)
   -N,  --cds_num             Number of CDS sequences to insert. (Mutually exclusive with --cds_percent)
   -P,  --cds_percent         Percent of the genome that should be CDS. (Mutually exclusive with --cds_num)
   -n,  --TE_num              Number of TE insertions in burn‐in (default: 2000) (Mutually exclusive with --TE_percent)
@@ -131,18 +131,17 @@ Options:
   -tk, --TE_mut_k            Slope of exponential decay for TE mutation (default: 10)
   -tmx, --TE_mut_Mmax         X-limit for exponential decay function (default: 20)
   -bo, --burnin_only         Run burn-in phase only and then exit.
-  -i,  --TE_lib              TE library file (default: ${TOOL_DIR}/combined_curated_TE_lib_ATOSZM_selected.fasta)
-  -m,  --mutation_rate       DNA Mutation rate (default: 1.3e-8)
+  -i,  --TE_lib              TE library file (default: ${TOOL_DIR}/data/combined_curated_TE_lib_ATOSZM_selected.fasta.gz)
 
 ########## FIXED TE INDEL RATE ##########
   -F,  --fix                 Fixed insertion and deletion numbers, comma-separated. Format: insertion,deletion (e.g., 1e-9,1e-9)
   -dg, --disable_genes       Disable insertion into genes (only effective if -F/--fix is provided)
 
-######### VARIABLE TE INDEL RATE #########  
+######### VARIABLE TE INDEL RATE #########
   -ir, --insert_rate         TE insertion rate (default: 1e-8)
-  -dr, --delete_rate         TE deletion rate (default: 1e-7)  
+  -dr, --delete_rate         TE deletion rate (default: 1e-7)
   -br, --birth_rate          TE birth rate (default: 1e-3)
-  -sc, --sigma               Selection coefficient for gene insertions (default: 1.0)  
+  -sc, --sigma               Selection coefficient for gene insertions (default: 1.0)
   -sf, --sel_coeff           Selection coefficient for TE excision (variable-rate only; default: 0)
                              0 = neutral; 0.1 = 2× bias; 1 = 11× bias.
   -cbi, --chromatin_bias_insert   Chromatin bias for TE insertion (default: 1.0)
@@ -150,7 +149,8 @@ Options:
   -cb,  --chromatin_buffer         Interval upstream/downstream used for chromatin bias (default: 10000)
 
 ########## GENERAL USE ##########
-  -mgs, --max_size           Maximum genome size allowed before breaking loop in bytes (e.g., 100M, 1G)             
+  -m,  --mutation_rate       DNA Mutation rate (default: 1.3e-8)
+  -mgs, --max_size           Maximum genome size allowed before breaking loop in bytes (e.g., 100M, 1G)
   -s,  --seed                Random seed (default: 42)
   -r,  --TE_ratio            TE ratio file (default: ${TOOL_DIR}/ratios.tsv)
   -t,  --threads             Number of threads (default: 4)
@@ -349,7 +349,7 @@ k="${k:-10}"
 sigma="${sigma:-1.0}"
 max_size="${max_size:-}" # If not set, remains empty
 TsTv="${TsTv:-1.0}"
-pergen_select="${pergen_select:-3}"   # how many evenly spaced generations to select (incl. burnin and max)
+pergen_select="${pergen_select:-2}"   # how many evenly spaced generations to select (incl. burnin and max)
 
 
 # --- Validate mutually exclusive CDS options ---
