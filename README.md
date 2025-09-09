@@ -90,5 +90,137 @@ Allowing customization of the sequence composition for the initial (**burn-in**)
 
 4. **`--burnin_only`**  
    Runs only Phase 1 (burn-in).  
-   - Generates the synthetic genome and stops before evolution steps (Phase 2).  
+   - Generates the synthetic genome and stops before evolution steps (Phase 2).
+
+
+  ## Phase 2 - Parameters
+
+With the burn-in genome created, Phase 2 specifies how to evolve it across generations.  
+PrinTE implements two approaches for TE evolution:
+
+1. **Fixed rates** – constant TE insertion and deletion rates per base of the genome per generation.  
+2. **Variable rates** – insertion and deletion rates depend on the TE landscape of the previous generation.
+
+In both approaches, PrinTE dynamically updates the TE library:  
+- Only **intact TEs** are eligible for insertion into the next generation.  
+- The exception is when `--birth_rate` is specified (Variable approach), which allows reintroduction of TEs from the original library.
+
+---
+
+### Fixed Approach
+
+The **Fixed** method is simpler: you specify constant TE insertion and deletion rates.  
+
+- **`--fix`**  
+  TE insertion and deletion rates **per base per generation**.  
+  - Format: `--fix <insertion_rate>,<deletion_rate>`  
+  - Example:  
+    ```bash
+    --fix 5e-9,1e-8
+    ```
+    -> insertion rate = `5e-9`, deletion rate = `1e-8`.  
+
+- **`--disable_genes`**  
+  Prevents TE insertions into genes.
+
+---
+
+### Variable Approach
+
+The **Variable** method modulates TE dynamics based on the composition of the previous generation. TE mutations accrue.
+Insertion and deletion rates are **per intact TE per generation**, and PrinTE internally converts them into **per-base** rates.
+
+#### Core Parameters
+- **`--insert_rate`**  
+  TE insertion rate **per intact TE per generation**.  
+
+- **`--delete_rate`**  
+  TE deletion rate **per intact TE per generation**.  
+
+- **`--birth_rate`**  
+  Rate of horizontally acquired TEs.  
+  - Normally, only intact TEs are propagated.  
+  - With `--birth_rate`, PrinTE occasionally samples from the **original TE library** (`--TE_lib`), simulating horizontal transfer or reintroduction of extinct TE lineages.  
+
+#### Selective Constraints
+The genome is modeled as:  
+1. **Selectively constrained sequence** (genes).  
+2. **Neutral sequence** (TEs + intergenic space).  
+
+- **`--sigma`**  
+  Controls how unevenly selective constraints are distributed across genes (via a log-normal distribution).  
+  - Low values -> constraints clustered (most genes similarly constrained).  
+  - High values -> uneven constraints (a few highly constrained, most weakly constrained).  
+  - PrinTE outputs `lognormal_distribution.pdf` to visualize the distribution.  
+
+- **`--sel_coeff`**  
+  By default, PrinTE does not purge TEs based on fitness.  
+  - With this parameter, insertions with higher deleterious effects are **more likely to be deleted**.  
+
+#### Chromatin Effects
+TE insertions may occur more readily in euchromatin than heterochromatin.  
+PrinTE approximates this by treating **genes as euchromatin** and **non-gene regions as heterochromatin**.
+
+- **`--chromatin_buffer`**  
+  Expands the euchromatin region around genes.  
+
+- **`--chromatin_bias_insert`**  
+  Increases the probability of TE **insertion** into euchromatin.  
+
+- **`--chromatin_bias_delete`**  
+  Increases the probability of TE **deletion** in euchromatin.  
+
+---
+
+In summary:  
+- Use **Fixed** for simple, constant-rate simulations.  
+- Use **Variable** for more realistic dynamics shaped by genome composition, selective constraints, and chromatin context.
+
    
+## General Parameters
+
+These options apply across both Phase 1 and Phase 2 of the pipeline.
+
+- **`--generation_end`**
+  The total number of generations to simulate.
+
+- **`--step`**
+  The number of generations to simulate in a single step.
+  - E.g., `--generation_end 3000 --step 1000` simulates generation 1000, 2000, and 3000.
+
+- **`--mutation_rate`**  
+  Rate of DNA substitutions applied to the genome.  
+
+- **`--max_size`**  
+  Terminates Phase 2 early if the genome size exceeds this threshold, even if `--generation_end` has not been reached.  
+
+- **`--seed`**  
+  Random seed for reproducibility.  
+
+- **`--threads`**  
+  Number of threads to use for parallel execution.  
+
+- **`--solo_rate`**  
+  When an LTR-RT is selected for deletion, it may be removed entirely or partially, leaving behind a solo-LTR.  
+  - This parameter controls the frequency of solo-LTR formation.  
+
+- **`--k`**  
+  Longer TEs are more likely to undergo unequal or illegitimate recombination, leading to their deletion.  
+  - **`--k`** controls the slope of this length–bias curve.  
+  - Use `--k 0` to disable length-biased deletion.
+  - See `weighted_candidate_selection.pdf` to visualize the deletion weight by TE lenght dustribution. 
+
+- **`--fasta`, `--bed`, `--continue`**  
+  Provide previous PrinTE results to resume evolution from an earlier run.  
+
+- **`--keep_temps`**  
+  Retain intermediate temporary files instead of cleaning them up automatically.  
+
+- **`--model`**  
+  Substitution model of DNA evolution used for dating LTR-RTs.  
+
+- **`--TsTv`**  
+  Transition/transversion ratio applied during substitution modeling.  
+
+- **`--ex_LTR`**  
+  From the TE library, exclude LTR-RTs that lack detectable LTRs.  
