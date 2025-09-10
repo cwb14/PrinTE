@@ -14,7 +14,7 @@
  *   # Step 2: Link manually with static libomp
  *   $(brew --prefix llvm)/bin/clang++ -O3 mutator.o \
  *   $(brew --prefix libomp)/lib/libomp.a \
- *   -lc++ -lm -o TESS/PrinTE/bin/ltr_mutator_mac
+ *   -lm -o TESS/PrinTE/bin/ltr_mutator_mac
  *
  *********************************************************************/
 
@@ -36,8 +36,7 @@
 #include <vector>
 #include <limits>
 #include <filesystem>
-#include <regex>
-#include <optional>
+#include <cctype>
 
 namespace fs = std::filesystem;
 
@@ -215,7 +214,7 @@ inline int sample_decayG(int G_user, std::mt19937 &rng) {
 }
 
 // ────────────────────────────────────────────────────────────────────
-// Helpers for accumulated metric
+// Helpers for accumulated metric (portable, no regex)
 // ────────────────────────────────────────────────────────────────────
 static inline std::string trim_copy(const std::string &s) {
     size_t b = 0, e = s.size();
@@ -224,9 +223,16 @@ static inline std::string trim_copy(const std::string &s) {
     return s.substr(b, e-b);
 }
 
-static inline std::string regex_escape(const std::string &s) {
-    static const std::regex re(R"([.^$|()\\[*+?{\-]])");
-    return std::regex_replace(s, re, R"(\$&)");
+static inline bool starts_with(const std::string &s, const std::string &pfx) {
+    return s.size() >= pfx.size() && std::equal(pfx.begin(), pfx.end(), s.begin());
+}
+static inline bool ends_with(const std::string &s, const std::string &sfx) {
+    return s.size() >= sfx.size() && std::equal(sfx.rbegin(), sfx.rend(), s.rbegin());
+}
+static inline bool is_all_digits(const std::string &s) {
+    if (s.empty()) return false;
+    for (unsigned char c : s) if (!std::isdigit(c)) return false;
+    return true;
 }
 
 // Extract the first (and assumed only) run of digits in a string.
@@ -266,26 +272,23 @@ static bool read_mutions_per_site(const fs::path &txt_path, double &out) {
     return false;
 }
 
-// Given out_prefix, build a regex to match sibling reports differing only by the [int] run.
-static std::optional<std::regex> build_report_regex_from_prefix(const std::string &out_prefix_basename) {
-    auto [i, j] = find_digit_run(out_prefix_basename);
-    if (i == std::string::npos) return std::nullopt; // no digits; nothing to accumulate
-    std::string pre = out_prefix_basename.substr(0, i);
-    std::string post = out_prefix_basename.substr(j+1);
-    std::string pattern = "^" + regex_escape(pre) + R"(\d+)" + regex_escape(post) + R"(\.txt$)";
-    try {
-        return std::regex(pattern);
-    } catch (...) {
-        return std::nullopt;
-    }
+// Extract prefix/suffix around the digit run in out_prefix's basename.
+// Returns false if no digit run (then we won't accumulate).
+static bool get_pre_post_from_prefix(const std::string &basename, std::string &pre, std::string &post) {
+    auto [i, j] = find_digit_run(basename);
+    if (i == std::string::npos) return false;
+    pre  = basename.substr(0, i);
+    post = basename.substr(j+1);
+    return true;
 }
 
 // Sum prior matching reports' "Mutions / site:" values in the same directory.
 static double sum_prior_reports(const fs::path &dir,
                                 const std::string &current_basename_txt,
-                                const std::optional<std::regex> &rx)
+                                const std::string &pre,
+                                const std::string &post)
 {
-    if (!rx) return 0.0;
+
     double sum = 0.0;
     std::error_code ec;
     if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec)) return 0.0;
@@ -295,7 +298,17 @@ static double sum_prior_reports(const fs::path &dir,
         if (!entry.is_regular_file()) continue;
         const auto fname = entry.path().filename().string();
         if (fname == current_basename_txt) continue; // skip current
-        if (!std::regex_match(fname, *rx)) continue;
+        if (!ends_with(fname, ".txt")) continue;
+
+        // strip .txt
+        std::string stem = fname.substr(0, fname.size() - 4);
+        if (!starts_with(stem, pre)) continue;
+        if (!ends_with(stem, post)) continue;
+        // middle must be digits
+        const size_t mid_begin = pre.size();
+        const size_t mid_len   = stem.size() - pre.size() - post.size();
+        if (mid_len == 0) continue;
+        if (!is_all_digits(stem.substr(mid_begin, mid_len))) continue;
         double val = 0.0;
         if (read_mutions_per_site(entry.path(), val)) {
             sum += val;
@@ -473,8 +486,11 @@ int main(int argc, char* argv[]) {
     const std::string base_name = out_prefix_path.filename().string(); // e.g., "gen40000_mut"
     const std::string current_report_name = base_name + ".txt";
 
-    auto rx = build_report_regex_from_prefix(base_name);
-    double prior_sum = sum_prior_reports(out_dir, current_report_name, rx);
+    std::string pre, post;
+    double prior_sum = 0.0;
+    if (get_pre_post_from_prefix(base_name, pre, post)) {
+        prior_sum = sum_prior_reports(out_dir, current_report_name, pre, post);
+    }
     double accumulated_muts_per_site = prior_sum + muts_per_site_total;
 
     // ───────── write outputs ─────────
