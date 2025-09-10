@@ -38,6 +38,9 @@ git clone https://github.com/cwb14/PrinTE.git
 mamba env create -f PrinTE/env.yml
 conda activate PrinTE
 ```
+
+PrinTE installs and uses [Kmer2LTR](https://github.com/cwb14/Kmer2LTR.git) for LTR-RT dating. 
+
 ---
 
 ## Phase 1 (Burn-in) - Inputs and Parameters  
@@ -83,7 +86,7 @@ conda activate PrinTE
 2. **`--size`**  
    Total size (bp) of the burn-in genome.  
 
-3. **`--TE_mut_k` and `--TE_mut_Mmax`**  
+3. **`--TE_mut_k`** and **`--TE_mut_Mmax`**  
    Control the distribution of TE substitution mutations in the burn-in genome.  
    - TE Mutations are clock-like, but older TEs are more likely to have been deleted or fragmented than younger. This means that the observed mutation landscape appears asymetric, with most intact TEs appear young, while older TEs are often lost.  
      - **`--TE_mut_k`** sets the *decay rate*:  
