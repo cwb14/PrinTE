@@ -34,6 +34,12 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <limits>
+#include <filesystem>
+#include <regex>
+#include <optional>
+
+namespace fs = std::filesystem;
 
 // ────────────────────────────────────────────────────────────────────
 // Data structures
@@ -209,6 +215,96 @@ inline int sample_decayG(int G_user, std::mt19937 &rng) {
 }
 
 // ────────────────────────────────────────────────────────────────────
+// Helpers for accumulated metric
+// ────────────────────────────────────────────────────────────────────
+static inline std::string trim_copy(const std::string &s) {
+    size_t b = 0, e = s.size();
+    while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
+    while (e > b && std::isspace(static_cast<unsigned char>(s[e-1]))) --e;
+    return s.substr(b, e-b);
+}
+
+static inline std::string regex_escape(const std::string &s) {
+    static const std::regex re(R"([.^$|()\\[*+?{\-]])");
+    return std::regex_replace(s, re, R"(\$&)");
+}
+
+// Extract the first (and assumed only) run of digits in a string.
+// Returns {start_index, end_index_inclusive}. If none, returns {npos, npos}.
+static inline std::pair<size_t,size_t> find_digit_run(const std::string &name) {
+    size_t i = 0, n = name.size();
+    while (i < n && !std::isdigit(static_cast<unsigned char>(name[i]))) ++i;
+    if (i == n) return {std::string::npos, std::string::npos};
+    size_t j = i;
+    while (j+1 < n && std::isdigit(static_cast<unsigned char>(name[j+1]))) ++j;
+    return {i, j};
+}
+
+// Read "Mutions / site:" (not Non-recurrent) from a report file.
+// Returns true and sets out if found; otherwise false.
+static bool read_mutions_per_site(const fs::path &txt_path, double &out) {
+    std::ifstream in(txt_path);
+    if (!in) return false;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.find("Mutions / site:") != std::string::npos &&
+            line.find("Non-recurrent") == std::string::npos)
+        {
+            // Parse number after colon
+            auto pos = line.find(':');
+            if (pos != std::string::npos) {
+                std::string num = trim_copy(line.substr(pos+1));
+                try {
+                    out = std::stod(num);
+                    return true;
+                } catch (...) {
+                    // fall through
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// Given out_prefix, build a regex to match sibling reports differing only by the [int] run.
+static std::optional<std::regex> build_report_regex_from_prefix(const std::string &out_prefix_basename) {
+    auto [i, j] = find_digit_run(out_prefix_basename);
+    if (i == std::string::npos) return std::nullopt; // no digits; nothing to accumulate
+    std::string pre = out_prefix_basename.substr(0, i);
+    std::string post = out_prefix_basename.substr(j+1);
+    std::string pattern = "^" + regex_escape(pre) + R"(\d+)" + regex_escape(post) + R"(\.txt$)";
+    try {
+        return std::regex(pattern);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+// Sum prior matching reports' "Mutions / site:" values in the same directory.
+static double sum_prior_reports(const fs::path &dir,
+                                const std::string &current_basename_txt,
+                                const std::optional<std::regex> &rx)
+{
+    if (!rx) return 0.0;
+    double sum = 0.0;
+    std::error_code ec;
+    if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec)) return 0.0;
+
+    for (const auto &entry : fs::directory_iterator(dir, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file()) continue;
+        const auto fname = entry.path().filename().string();
+        if (fname == current_basename_txt) continue; // skip current
+        if (!std::regex_match(fname, *rx)) continue;
+        double val = 0.0;
+        if (read_mutions_per_site(entry.path(), val)) {
+            sum += val;
+        }
+    }
+    return sum;
+}
+
+// ────────────────────────────────────────────────────────────────────
 // Main
 // ────────────────────────────────────────────────────────────────────
 int main(int argc, char* argv[]) {
@@ -361,6 +457,26 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // ───────── compute metrics ─────────
+    unsigned long long genome_size_local = genome_size; // just a local alias
+    const double muts_per_site_exact_nonrec = (genome_size_local > 0)
+        ? static_cast<double>(total_unique_sites_hit) / static_cast<double>(genome_size_local)
+        : 0.0;
+    const double muts_per_site_total = (genome_size_local > 0)
+        ? static_cast<double>(total_muts) / static_cast<double>(genome_size_local)
+        : 0.0;
+
+    // ───────── prepare accumulation (scan BEFORE we write) ─────────
+    fs::path out_prefix_path(prefix);
+    fs::path out_dir = out_prefix_path.parent_path();
+    if (out_dir.empty()) out_dir = fs::path(".");
+    const std::string base_name = out_prefix_path.filename().string(); // e.g., "gen40000_mut"
+    const std::string current_report_name = base_name + ".txt";
+
+    auto rx = build_report_regex_from_prefix(base_name);
+    double prior_sum = sum_prior_reports(out_dir, current_report_name, rx);
+    double accumulated_muts_per_site = prior_sum + muts_per_site_total;
+
     // ───────── write outputs ─────────
     std::string outfa = prefix + ".fa";
     std::cout<<"Writing "<<outfa<<" …\n";
@@ -370,17 +486,6 @@ int main(int argc, char* argv[]) {
     std::ofstream ot(outtxt);
     if (!ot) { std::cerr<<"Cannot write metrics file: "<<outtxt<<"\n"; return EXIT_FAILURE; }
     
-    // Exact (non-recurrent) and total rates
-    // unique_sites_hit == number of sites with >=1 successful mutation
-    // Non-recurrent mutations/site counts only the first hit to each site
-    const double muts_per_site_exact_nonrec = (genome_size > 0)
-        ? static_cast<double>(total_unique_sites_hit) / static_cast<double>(genome_size)
-        : 0.0;
-    // Total mutations per site (requested behavior for "Mutions / site")
-    const double muts_per_site_total = (genome_size > 0)
-        ? static_cast<double>(total_muts) / static_cast<double>(genome_size)
-        : 0.0;
-
     // Output summary (with the requested field names/spelling)
     ot << "Genome size:  " << genome_size << "\n"
        << "Total mutations: " << total_muts << "\n"
@@ -388,7 +493,9 @@ int main(int argc, char* argv[]) {
        << "Mutions / site:    " << std::setprecision(10) << muts_per_site_total << "\n"
        << "Mutions / site * 2:    " << std::setprecision(10) << (muts_per_site_total * 2.0) << "\n"
        << "Non-recurrent Mutions / site:    " << std::setprecision(10) << muts_per_site_exact_nonrec << "\n"
-       << "Non-recurrent Mutions / site * 2:    " << std::setprecision(10) << (muts_per_site_exact_nonrec * 2.0) << "\n";
+       << "Non-recurrent Mutions / site * 2:    " << std::setprecision(10) << (muts_per_site_exact_nonrec * 2.0) << "\n"
+       // New accumulated metric (sum of matching prior reports + current)
+       << "Accumulated Mutions / site:    " << std::setprecision(10) << accumulated_muts_per_site << "\n";
 
     // Debug prints
     std::cout<<"Transition count:      "<<total_ts<<"\n";
