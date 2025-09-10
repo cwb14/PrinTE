@@ -801,15 +801,17 @@ if (( ${#gens[@]} == 0 )); then
   echo "No generations found for per-generation analysis; skipping." | tee -a "$LOG"
   selected_gens=()
 else
-  # Emit "gen<TAB>label" pairs, sort by gen, dedup by gen
-  mapfile -t sorted_pairs < <(paste <(printf "%s\n" "${gens[@]}") <(printf "%s\n" "${labels[@]}") | sort -n -u -k1,1)
+  # Portable replacement for mapfile + process substitution (BSD/macOS safe)
+  sorted_pairs="$( paste \
+      <(printf "%s\n" "${gens[@]}") \
+      <(printf "%s\n" "${labels[@]}") \
+      | sort -n -u -k1,1 )"
   gens=( ); labels=( )
-  for pair in "${sorted_pairs[@]}"; do
-    gen="${pair%%$'\t'*}"
-    lab="${pair#*$'\t'}"
+  while IFS=$'\t' read -r gen lab; do
+    [ -n "$gen" ] || continue
     gens+=("$gen")
     labels+=("$lab")
-  done
+  done <<< "$sorted_pairs"
 fi
 
 # Decide how many selections to make (at least 2 if we have ≥2 gens)
@@ -827,7 +829,8 @@ else
 
   # Choose k evenly spaced indices in [0, n-1], always including 0 and n-1.
   # Round to nearest and deduplicate while preserving ascending order.
-  mapfile -t idxs < <(python - "$n" "$k" <<'PY'
+  # Use command substitution instead of mapfile
+  idxs=( $(python - "$n" "$k" <<'PY'
 import sys, math
 n = int(sys.argv[1])
 k = int(sys.argv[2])
@@ -845,7 +848,7 @@ for v in raw:
         out.append(v)
 print("\n".join(map(str, out)))
 PY
-)
+) )
   selected_idx=( "${idxs[@]}" )
 fi
 
@@ -864,8 +867,8 @@ echo "Selected labels: ${selected_labels[*]}" | tee -a "$LOG"
 # Iterate in descending order (as your original loop expected)
 # We’ll drive by labels to directly find the right files, and handle burnin specially.
 # (No reliance on 'step' or iteration math.)
-# Create an index array sorted by descending generation
-mapfile -t desc_idx < <(for i in "${!selected_gens[@]}"; do echo "$i"; done | sort -nr -k1,1 -t$'\n' -S1M | while read -r i; do echo "$i"; done)
+# Create an index array sorted by descending generation (BSD sort safe)
+desc_idx=( $(for i in "${!selected_gens[@]}"; do echo "$i"; done | sort -nr) )
 
 for i_idx in "${desc_idx[@]}"; do
   gen="${selected_gens[$i_idx]}"
@@ -905,3 +908,4 @@ eval $cmd
 echo "Post-processing completed at $(date)" | tee -a "$LOG"
 
 # END
+
