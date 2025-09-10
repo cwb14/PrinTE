@@ -215,8 +215,11 @@ These options apply across both Phase 1 and Phase 2 of the pipeline.
   - Use `--k 0` to disable length-biased deletion.
   - See `weighted_candidate_selection.pdf` to visualize the deletion weight by TE lenght dustribution. 
 
-- **`--fasta`, `--bed`, `--continue`**  
-  Provide previous PrinTE results to resume evolution from an earlier run.  
+- **`--fasta`, `--bed`**
+  Provide genome fasta and PrinTE-formatted bed to skip the burn-in phase, using these files instead.
+
+- **`--continue`**
+  Tells PrinTE to look for existing outputs in the working directory and pickup where it left off. 
 
 - **`--keep_temps`**  
   Retain intermediate temporary files instead of cleaning them up automatically.  
@@ -234,8 +237,12 @@ These options apply across both Phase 1 and Phase 2 of the pipeline.
   ---
 
 ## Usage
+See help menu.
+```bash
+bash PrinTE/PrinTE.sh
+```
 
-Create a blank-slate fake genome (burnin.fa). 
+Create a blank-slate genome (burnin.fa). 
 ```bash
 bash PrinTE/PrinTE.sh --burnin_only --cds_percent 0 --TE_percent 0 --chr_number 1 --size 100Mb
 ```
@@ -263,3 +270,5 @@ bash PrinTE/PrinTE.sh -mgs 1500M -P 20 -n 6000 -cn 20 -sz 113Mb -ge 300000 -st 1
 bash PrinTE/PrinTE.sh -mgs 1500M -P 20 -n 6000 -cn 20 -sz 113Mb -ge 400000 -st 100000 -t 10 -k 0 -kt -F 7.0e-11,1e-11 -m 1.3e-8 -sr 95 --continue
 ```
 ---
+
+
