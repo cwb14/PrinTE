@@ -638,7 +638,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
   # If --keep_temps is not provided, remove intermediate files.
   if [[ "$keep_temps" -ne 1 ]]; then
     echo "Removing temporary files for generation ${current_gen}" | tee -a "$LOG"
-    rm -f "${mut_prefix}.fa" "${nest_prefix}.bed" "${nest_prefix}.fasta"
+    rm -f "${mut_prefix}.fa" "${nest_prefix}.bed" "${nest_prefix}.fasta" "backbone.fa" "backbone.cds" "backbone.bed" "lib.fa"
   fi
   
   # (2d) Build the new per‑gen TE library
