@@ -38,8 +38,11 @@ conda activate PrinTE
 ```
 ---
 
-## Phase 1 - Inputs and Parameters 
-Allowing customization of the sequence composition for the initial (**burn-in**) genome.
+## Phase 1 (Burn-in) - Inputs and Parameters 
+   - Allowing customization of the sequence composition for the initial (**burn-in**) genome.  
+   - PrinTE's burn-in utility is quite flexible, allowing simulations that mirror the composition of a wide range any real genome.  
+   - A caveat is that PrinTE does not support inserting fragmented TEs into the burn-in, but the simulated evolution of Phase 2 (Looping Generations) creates fragmentation.   
+   - For simulations involving TE fragmentation, be sure to proceed to Phase 2 (Looping Generations). Alternatively, [TEgenomeSimulator](https://github.com/Plant-Food-Research-Open/TEgenomeSimulator) may support your needs.
 
 ### Inputs
 
@@ -58,6 +61,7 @@ Allowing customization of the sequence composition for the initial (**burn-in**)
      ```  
    - Supported `#[class]/[superfamily]` suffixes are listed in `ratios.tsv`.
    - Users can control the abundance of TEs in the burn-in genome using `--TE_percent` or `--TE_num`.
+   - Unlike genes, where each CDS is inserted a maximum of 1 time, a TEs are selected randomly from the library and may be inserted any number of times in ratios matching `ratios.tsv`. So, larger TE libraries yield more diverse TE landscapes. 
 
 3. **TE Ratios File (`--TE_ratio ratios.tsv`)**  
    Defines the relative frequency of each TE superfamily in the genome.  
@@ -93,7 +97,7 @@ Allowing customization of the sequence composition for the initial (**burn-in**)
    - Generates the synthetic genome and stops before evolution steps (Phase 2).
 
 
-  ## Phase 2 - Parameters
+  ## Phase 2 (Looping Generations) - Parameters
 
 With the burn-in genome created, Phase 2 specifies how to evolve it across generations.  
 PrinTE implements two approaches for TE evolution:
