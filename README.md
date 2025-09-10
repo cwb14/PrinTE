@@ -155,7 +155,7 @@ The genome is modeled as:
 - **`--sigma`**  
   Controls how unevenly selective constraints are distributed across genes (via a log-normal distribution).  
   - Low values -> constraints clustered (most genes similarly constrained).  
-  - High values -> uneven constraints (a few highly constrained, most weakly constrained).  
+  - High values -> uneven constraints (a few highly constrained, most moderately constrained).  
   - PrinTE outputs `lognormal_distribution.pdf` to visualize the distribution.  
 
 - **`--sel_coeff`**  
@@ -264,7 +264,7 @@ bash PrinTE/PrinTE.sh -mgs 1500M -P 20 -n 6000 -cn 20 -sz 113Mb -ge 400000 -st 1
 
 ## Outputs
 
-The primary outputs are: 
+The primary outputs are:  
 (1) The **genome fasta** (`gen[generation_number]_final.fasta`).  
 (2) The **cooresponding bed** (`gen[generation_number]_final.bed`) showing gene and TE coordinates in the genome.  
 (3) The **evolved TE library** (`gen[generation_number]_final.lib`).  
@@ -275,7 +275,7 @@ gen40000_final.bed
 gen40000_final.lib
 ```
 
-The bed file looks like this:
+The `gen40000_final.bed` file looks like this:
 ```bash
 chr1    1852998 1854855 gene1316        NA      +
 chr1    1857719 1859314 tuteh_AC183372_584#LTR/unknown~LTRlen:126;CUT_BY:Os2721#DNAnona/hAT     CATTC   +
@@ -286,6 +286,7 @@ chr1    1863430 1863672 Os0204#MITE/Stow        CA      +
 chr3	1869245	1869502	anysaf_AC211487_11211#LTR/Ty3~LTRlen:257_SOLO	GCGCG	-
 ```
 - Columns are `chromosome`, `start`, `end`, `feature_ID`, `target site duplication sequence (TSD)`, and `strand`.
+- This means that in `gen40000_final.fasta`, theres a gene (`gene1316`) on `chr1:1852998-1854855`.
 - Here, `Os2721#DNAnona/hAT` is nested inside `tuteh_AC183372_584#LTR/unknown`.
 - PrinTE now considers this `tuteh_AC183372_584#LTR/unknown` to be non-viable for transposition, since its no longer intact. 
 - `anysaf_AC211487_11211#LTR/Ty3` has the `_SOLO` tag on its `feature_ID`, so its a solo-LTR and also not viable for transposition.
