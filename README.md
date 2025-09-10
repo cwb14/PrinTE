@@ -251,15 +251,6 @@ bash PrinTE/PrinTE.sh --burnin_only --cds_percent 0 --TE_percent 0 --chr_number 
 Variable-rate method.
 ```bash
 bash PrinTE/PrinTE.sh -cn 5 -sz 135Mb -tmx 5 -m 7e-9 -P 25 -p 21 -br 1e-7 -ir 1.1e-6 -dr 4e-6 -cbi 1.1 -cbd 1.0 -cb 500 -t 20 -k 2 -ge 40000 -st 10000
-
-# What was the gene/TE landscape of the starting genome?
-cat burnin.stat 
-
-# How many TEs were inserted and deleted?
-cat pipeline.report
-
-# How many TEs were inserted due to vertical acquisition?
-cat pipeline.log | grep 'Number of born TEs to insert'
 ```
 
 Fixed-rate method.
@@ -271,4 +262,78 @@ bash PrinTE/PrinTE.sh -mgs 1500M -P 20 -n 6000 -cn 20 -sz 113Mb -ge 400000 -st 1
 ```
 ---
 
+## Outputs
 
+The primary outputs are: 
+(1) The **genome fasta** (`gen[generation_number]_final.fasta`).  
+(2) The **cooresponding bed** (`gen[generation_number]_final.bed`) showing gene and TE coordinates in the genome.  
+(3) The **evolved TE library** (`gen[generation_number]_final.lib`).  
+```bash
+ls gen40000_final.*
+gen40000_final.fasta
+gen40000_final.bed
+gen40000_final.lib
+```
+
+The bed file looks like this:
+```bash
+chr1    1852998 1854855 gene1316        NA      +
+chr1    1857719 1859314 tuteh_AC183372_584#LTR/unknown~LTRlen:126;CUT_BY:Os2721#DNAnona/hAT     CATTC   +
+chr1    1859314 1859734 Os2721#DNAnona/hAT;NESTED_IN:tuteh_AC183372_584#LTR/unknown~LTRlen:126  CTTCCG  +
+chr1    1859740 1860095 tuteh_AC183372_584#LTR/unknown~LTRlen:126;CUT_BY:Os2721#DNAnona/hAT     CATTC   +
+chr1    1860701 1862054 gene1321        NA      +
+chr1    1863430 1863672 Os0204#MITE/Stow        CA      +
+chr3	1869245	1869502	anysaf_AC211487_11211#LTR/Ty3~LTRlen:257_SOLO	GCGCG	-
+```
+- Columns are `chromosome`, `start`, `end`, `feature_ID`, `target site duplication sequence (TSD)`, and `strand`.
+- Here, `Os2721#DNAnona/hAT` is nested inside `tuteh_AC183372_584#LTR/unknown`.
+- PrinTE now considers this `tuteh_AC183372_584#LTR/unknown` to be non-viable for transposition, since its no longer intact. 
+- `anysaf_AC211487_11211#LTR/Ty3` has the `_SOLO` tag on its `feature_ID`, so its a solo-LTR and also not viable for transposition.
+
+
+`gen[generation_number]_mut.txt` is useful for looking at emperical mutation data:
+```bash
+cat gen40000_mut.txt                
+Genome size:  136266136
+Total mutations: 9487
+Recurrent mutations: 1
+Mutations / site:    6.962111261e-05
+Mutations / site * 2:    0.0001392422252
+Non-recurrent Mutations / site:    6.961377403e-05
+Non-recurrent Mutations / site * 2:    0.0001392275481
+Accumulated Mutations / site:    0.000265089172
+```
+- Lets assume I ran PrinTE with `-ge 400000 -st 100000`.  
+- This means that, between `gen40000_mut.txt` and the preceeding simulation (`gen30000_mut.txt`), PrinTE introduced `9487` random mutations and only `1` was reccurent. 
+- `Accumulated Mutations / site` shows us the frequency of mutations up to this point in the simulation (ie, distance from the original `burn-in` genome).
+
+
+`burnin.stat` tells the composition of the original burnin genome:
+```bash
+The burn-in genome is 135000000bp in length with 19621 genes (21.21%) and 14173 TEs (21.01%).
+Total insertions done: 14173 (TE bp inserted: 28358660). 
+```
+
+`pipeline.report` tells us the number of insertions and deletions per generation simulated:
+```bash
+Generation	TE_inserts(nest/nonnest)	Calculated_TE_deletions	Actual_TE_deletions
+10000	154(69/85)	2	2
+20000	189(75/114)	13	13
+30000	201(85/116)	23	23
+40000	168(70/98)	16	16
+```
+
+If the variable-rate method was used with `--birth_rate`, I can check how many TEs were inserted horizontally:
+```bash
+cat pipeline.log | grep 'Number of born TEs to insert' 
+Number of born TEs to insert (from birth_rate and birth_file): 14
+Number of born TEs to insert (from birth_rate and birth_file): 14
+Number of born TEs to insert (from birth_rate and birth_file): 14
+Number of born TEs to insert (from birth_rate and birth_file): 14
+```
+
+- `all_LTR_density.pdf` shows a density distribution of LTR-RT ages through the simulation.  
+- `genome_size_plot.pdf` plots the change in genome size.  
+- `percent_TE.pdf` plots the change in TE abundance through generation simulated.   
+- `stat_intact_plot.pdf` and `stat_frag_plot.pdf` show superfamily counts for each simulation.  
+- `solo_intact.pdf` plots the changing solo-LTR ratio through generations.  
