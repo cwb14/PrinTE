@@ -16,12 +16,14 @@
 3. **Supplemental Post-Processing**  
    After all generations complete, the pipeline runs a suite of reporting and plotting utilities:
    - TE fraction over time  
-   - Solo vs. intact TE proportions  
+   - Fragmented vs. intact TE proportions  
    - Superfamily counts  
    - Category bar plots  
    - Genome size trajectory  
    - Per-generation LTR extraction and divergence analyses  
    - Overall LTR density plot  
+
+PrinTE treats all TEs as Type 1 (copy-and-paste). It supports simulating Type 2 (cut-and-paste) TEs, but does not currently model the cut-and-paste aspect of their biology. 
 
 ---
 
@@ -38,9 +40,8 @@ conda activate PrinTE
 ```
 ---
 
-## Phase 1 (Burn-in) - Inputs and Parameters 
-   - Allowing customization of the sequence composition for the initial (**burn-in**) genome.  
-   - PrinTE's burn-in utility is quite flexible, allowing simulations that mirror the composition of a wide range any real genome.  
+## Phase 1 (Burn-in) - Inputs and Parameters  
+   - PrinTE's initial (**burn-in**) utility is quite flexible, allowing simulations that mirror the composition of a wide range any real genome.  
    - A caveat is that PrinTE does not support inserting fragmented TEs into the burn-in, but the simulated evolution of Phase 2 (Looping Generations) creates fragmentation.   
    - For simulations involving TE fragmentation, be sure to proceed to Phase 2 (Looping Generations). Alternatively, [TEgenomeSimulator](https://github.com/Plant-Food-Research-Open/TEgenomeSimulator) may support your needs.
 
@@ -61,7 +62,7 @@ conda activate PrinTE
      ```  
    - Supported `#[class]/[superfamily]` suffixes are listed in `ratios.tsv`.
    - Users can control the abundance of TEs in the burn-in genome using `--TE_percent` or `--TE_num`.
-   - Unlike genes, where each CDS is inserted a maximum of 1 time, a TEs are selected randomly from the library and may be inserted any number of times in ratios matching `ratios.tsv`. So, larger TE libraries yield more diverse TE landscapes. 
+   - Unlike genes, where each CDS is inserted a maximum of 1 time, TEs are selected randomly from the library and may be inserted any number of times in ratios matching `ratios.tsv`. So, larger TE libraries yield more diverse TE landscapes. 
 
 3. **TE Ratios File (`--TE_ratio ratios.tsv`)**  
    Defines the relative frequency of each TE superfamily in the genome.  
@@ -85,11 +86,11 @@ conda activate PrinTE
 3. **`--TE_mut_k` and `--TE_mut_Mmax`**  
    Control the distribution of TE substitution mutations in the burn-in genome.  
    - TE Mutations are clock-like, but older TEs are more likely to have been deleted or fragmented than younger. This means that the observed mutation landscape appears asymetric, with most intact TEs appear young, while older TEs are often lost.  
-   - **`--TE_mut_k`** sets the *decay rate*:  
-     - Large values -> steep decay (most TEs with very low mutation rates).  
-     - Small values -> flatter distribution (higher mutation rates more likely).  
-   - **`--TE_mut_Mmax`** sets the *ceiling* for mutation percentage.  
-     - **Use `--TE_mut_Mmax 0` to disables TE mutations in the burn-in.**  
+     - **`--TE_mut_k`** sets the *decay rate*:  
+       - Large values -> steep decay (most TEs with very low mutation rates).  
+       - Small values -> flatter distribution (higher mutation rates more likely).  
+     - **`--TE_mut_Mmax`** sets the *ceiling* for mutation percentage.  
+   - **Use `--TE_mut_Mmax 0` to disables TE mutations in the burn-in.**  
    - PrinTE generates a PDF of the mutation decay function: `burnin_mut_dist.pdf`.  
 
 4. **`--burnin_only`**  
@@ -102,11 +103,11 @@ conda activate PrinTE
 With the burn-in genome created, Phase 2 specifies how to evolve it across generations.  
 PrinTE implements two approaches for TE evolution:
 
-1. **Fixed rates** – constant TE insertion and deletion rates per base of the genome per generation.  
-2. **Variable rates** – insertion and deletion rates depend on the TE landscape of the previous generation.
+1. **Fixed rates** – constant TE insertion and deletion rates **per base of the genome per generation**.  
+2. **Variable rates** – The **per base per generation** insertion and deletion rates depend on the TE landscape of the previous generation.
 
 In both approaches, PrinTE dynamically updates the TE library:  
-- Only **intact TEs** are eligible for insertion into the next generation.  
+- Only **intact TEs** are eligible for insertion into the next generation. Accumulated mutations are inherited to the transposed copy.   
 - The exception is when `--birth_rate` is specified (Variable approach), which allows reintroduction of TEs from the original library.
 
 ---
