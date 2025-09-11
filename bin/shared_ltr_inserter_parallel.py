@@ -131,45 +131,110 @@ def extract_te_info(header):
 def get_tsd_length(te_class, te_superfamily):
     """
     Determine the TSD length based on TE class and superfamily.
-    Returns an integer representing the TSD length.
-    If TSD length is variable, selects a random length within the specified range.
+    Case-insensitive. Returns an integer. Variable TSDs are sampled within ranges.
     """
-    tsd_mapping = {
-        # Fixed TSD lengths
-        ('LTR', 'Copia'): lambda: 5,
-        ('LTR', 'Gypsy'): lambda: 5,
-        ('LTR', 'Solo'): lambda: 5,
-        ('LTR', 'Ty3'): lambda: 5,
-        ('LTR', 'unknown'): lambda: 5,
-        ('DNA', 'Harbinger'): lambda: 3,
-        ('DNA', 'Mariner'): lambda: 2,
-        ('DNAauto', 'Helitron'): lambda: 0,
-        ('DNA', 'Helitron'): lambda: 0,
-        ('DNAnona', 'Helitron'): lambda: 0,
+    # Normalize for case-insensitive matching
+    c = (te_class or "").strip().lower()
+    s = (te_superfamily or "").strip().lower()
 
-        # Variable TSD lengths (range inclusive)
-        ('MITE', 'Stow'): lambda: random.randint(2, 10),
-        ('MITE', 'Tourist'): lambda: random.randint(2, 10),
-        ('SINE', 'tRNA'): lambda: random.randint(5, 20),
-        ('SINE', 'unknown'): lambda: random.randint(5, 20),
-        ('LINE', 'L1'): lambda: random.randint(5, 20),
-        ('LINE', 'unknown'): lambda: random.randint(5, 20),
-        ('DNAauto', 'CACTA'): lambda: random.randint(2, 4),
-        ('DNA', 'CACTA'): lambda: random.randint(2, 4),
-        ('DNAnona', 'CACTA'): lambda: random.randint(2, 4),
-        ('DNA', 'hAT'): lambda: random.randint(5, 8),
-        ('DNAnona', 'hAT'): lambda: random.randint(5, 8),
-        ('DNAauto', 'hAT'): lambda: random.randint(5, 8),
-        ('DNAauto', 'MuDR'): lambda: random.randint(8, 9),
-        ('DNAnona', 'MULE'): lambda: random.randint(8, 9),
-        ('DNA', 'MuDR'): lambda: random.randint(8, 9),
-        ('DNAauto', 'MULE'): lambda: random.randint(8, 9),
+    # Helper lambdas for shared behaviors
+    _const5 = lambda: 5
+    _hat_rng = lambda: random.randint(5, 8)        # DNAauto/hAT
+    _cacta_rng = lambda: random.randint(2, 4)      # DNA/CACTA
+    _tourist_rng = lambda: random.randint(2, 10)   # MITE/Tourist (Stowaway)
+    _mule_rng = lambda: random.randint(8, 9)       # DNAnona/MULE
+    _l1_rng = lambda: random.randint(5, 20)        # LINE/L1
+    _unknown_tir_rng = lambda: random.choice([2, 10])  # Unknown TIR: 2 or 10
+
+    tsd_mapping = {
+        # Fixed TSDs
+        ('ltr', 'copia'): _const5,
+        ('ltr', 'gypsy'): _const5,
+        ('ltr', 'solo'):  _const5,
+        ('ltr', 'ty3'):   _const5,
+        ('ltr', 'unknown'): _const5,
+        ('ltr', 'crm'): _const5,
+        ('ltr', 'trim'): _const5,
+
+        ('dna', 'harbinger'): lambda: 3,
+        ('dna', 'mariner'):   lambda: 2,
+
+        ('dnaauto', 'helitron'): lambda: 0,
+        ('dna',     'helitron'): lambda: 0,
+        ('dnanona', 'helitron'): lambda: 0,
+
+        # Variable TSDs (original)
+        ('mite', 'stow'):     _tourist_rng,   # Stowaway 2–10
+        ('mite', 'tourist'):  _tourist_rng,
+        ('sine', 'trna'):     _l1_rng,        # 5–20
+        ('sine', 'unknown'):  _l1_rng,
+        ('line', 'l1'):       _l1_rng,
+        ('line', 'unknown'):  _l1_rng,
+        ('line', 'rte'):      _l1_rng,        # LINE/RTE ~ LINE/L1
+
+        ('dnaauto', 'cacta'): _cacta_rng,
+        ('dna',     'cacta'): _cacta_rng,
+        ('dnanona', 'cacta'): _cacta_rng,
+
+        ('dna',     'hat'):   _hat_rng,
+        ('dnanona', 'hat'):   _hat_rng,
+        ('dnaauto', 'hat'):   _hat_rng,
+
+        ('dnaauto', 'mudr'):  _mule_rng,  # 8–9
+        ('dnanona', 'mule'):  _mule_rng,
+        ('dna',     'mudr'):  _mule_rng,
+        ('dnaauto', 'mule'):  _mule_rng,
+        ('dna', 'mutator'): _mule_rng,
+
+        # DTA ~ hAT
+        ('dna',  'dta'): _hat_rng,
+        ('mite', 'dta'): _hat_rng,
+
+        # DTC ~ CACTA
+        ('dna',  'dtc'): _cacta_rng,
+        ('mite', 'dtc'): _cacta_rng,
+
+        # DTH ~ Tourist (Stowaway)
+        ('dna',  'dth'): _tourist_rng,
+        ('mite', 'dth'): _tourist_rng,
+
+        # DTM ~ MULE
+        ('dna',  'dtm'): _mule_rng,
+        ('mite', 'dtm'): _mule_rng,
+
+        # DTT ~ Stowaway
+        ('dna',  'dtt'): _tourist_rng,
+        ('mite', 'dtt'): _tourist_rng,
+
+        # CACTG -> CACTA
+        ('dnaauto', 'cactg'): _cacta_rng,
+        ('dnanona', 'cactg'): _cacta_rng,
+
+        # MLE -> Stowaway (Tourist)
+        ('dnaauto', 'mle'): _tourist_rng,
+        ('dnanona', 'mle'): _tourist_rng, 
+
+        # DNAnona/MULEtir -> MULE
+        ('dnanona', 'muletir'): _mule_rng,
+
+        # DNAnona/Tourist -> Stowaway
+        ('dnanona', 'tourist'): _tourist_rng,
+        ('dna', 'tc1_mariner'): _tourist_rng,
+
+        # Unknown TIR families (choose 2 or 10)
+        ('dnaauto', 'pile'): _unknown_tir_rng,
+        ('dnaauto', 'pole'): _unknown_tir_rng,
+        ('dnanona', 'pile'): _unknown_tir_rng,
+        ('dnanona', 'pole'): _unknown_tir_rng,
+        ('dnanona', 'unknown'): _unknown_tir_rng,
+        ('dna', 'unknown'): _unknown_tir_rng,
     }
 
-    key = (te_class, te_superfamily)
-    if key in tsd_mapping:
-        return tsd_mapping[key]()
+    func = tsd_mapping.get((c, s))
+    if func:
+        return func()
     else:
+        # Keep the warning (show the original, un-normalized form for easier debugging)
         print(f"Warning: TSD length not defined for TE class '{te_class}' and superfamily '{te_superfamily}'. Using default TSD length of 5.")
         return 5
 
@@ -630,3 +695,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

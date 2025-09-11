@@ -131,7 +131,7 @@ Options:
   -tk, --TE_mut_k            Slope of exponential decay for TE mutation (default: 10)
   -tmx, --TE_mut_Mmax         X-limit for exponential decay function (default: 20)
   -bo, --burnin_only         Run burn-in phase only and then exit.
-  -i,  --TE_lib              TE library file (default: ${TOOL_DIR}/data/combined_curated_TE_lib_ATOSZM_selected.fasta.gz)
+  -i,  --TE_lib              TE library file (default: ${TOOL_DIR}/data/maize_rice_arab_curated_TE.lib.gz)
 
 ########## FIXED TE INDEL RATE ##########
   -F,  --fix                 Fixed insertion and deletion numbers, comma-separated. Format: insertion,deletion (e.g., 1e-9,1e-9)
@@ -336,7 +336,7 @@ cds="${cds:-${TOOL_DIR}/data/TAIR10.cds.fa}"
 chr_number="${chr_number:-4}"
 size="${size:-400Mb}"
 seed="${seed:-42}"
-TE_lib="${TE_lib:-${TOOL_DIR}/data/combined_curated_TE_lib_ATOSZM_selected.fasta}"
+TE_lib="${TE_lib:-${TOOL_DIR}/data/maize_rice_arab_curated_TE.lib.gz}"
 mutation_rate="${mutation_rate:-1.3e-8}"
 TE_ratio="${TE_ratio:-${TOOL_DIR}/ratios.tsv}"
 TE_num="${TE_num:-2000}"

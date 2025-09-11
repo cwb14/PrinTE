@@ -1,23 +1,22 @@
-LTR	Copia	0.04
-LTR	Ty3	0.06
-LTR	unknown	0.01
-DNA	Harbinger	0.07
-DNA	Mariner	0.01
-DNAauto	Helitron	0.09
-DNA	Helitron	0.04
-DNAnona	Helitron	0.03
-MITE	Stow	0.08
-MITE	Tourist	0.04
-SINE	tRNA	0.01
-SINE	unknown	0.09
-LINE	L1	0.02
-LINE	unknown	0.03
-DNAauto	CACTA	0.03
-DNA	CACTA	0.08
-DNAnona	CACTA	0.01
-DNA	hAT	0.04
-DNAnona	hAT	0.07
-DNAauto	hAT	0.07
-DNAnona	MULE	0.01
-DNA	MuDR	0.06
-DNAauto	MULE	0.01
+# zcat ./PrinTE/data/maize_rice_arab_curated_TE.lib.gz   | grep '>'   | cut -d'#' -f2-   | sort   | uniq -c   | sort -nr
+
+# TE_class   TE_superfamily   frequency
+DNA         Helitron          0.07
+DNA         DTA               0.06
+DNA         DTC               0.05
+DNA         DTM               0.08
+MITE        DTH               0.07
+SINE        unknown           0.06
+LTR         Gypsy             0.19
+LTR         Copia             0.18
+DNA         DTH               0.04
+MITE        DTA               0.04
+DNAnona     MULE              0.03
+MITE        DTM               0.03
+DNAnona     hAT               0.02
+MITE        DTT               0.02
+MITE        Tourist           0.01
+LINE        unknown           0.01
+DNAnona     MULEtir           0.01
+MITE        DTC               0.01
+LTR         unknown           0.01

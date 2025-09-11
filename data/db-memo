@@ -14,3 +14,32 @@ The maize library is already intact upon download from Shujun, so no need to rec
 
 
 The "ltr-db.fa.gz" contains exemplar and consensus LTR-RTs. Downloaded from database on 07-22-2025. Similar to rice and arabidopsis libraries above, sequences were partitioned into "Internal" and "LTR" at download, but reconstituted into intact LTR-RTs here.
+
+
+
+
+# Downloaded athrep.updated.fasta_062024,  NAM.EDTA2.0.0.MTEC02052020.TElib.fa,  maizeTE02052020, and  rice7.0.0.liban from https://github.com/oushujun on 09/11/2025.
+# Remove junk in rice header.
+sed 's/[ \t].*$//' rice7.0.0.liban > rice7.0.0.liban.header
+
+# Use the LTR-RT stitcher script on each lib to merge LTR pieces into intact LTR-RTs.
+
+# Merge TEs and remove non-TE repeats.
+cat athrep.updated.fasta_062024.stitched NAM.EDTA2.0.0.MTEC02052020.TElib.fasta.stitched maizeTE02052020.stitched rice7.0.0.liban.header.stitched | seqkit grep -v -r -p "Centro/|Cent/|Evirus/|knob/|rDNA/|repeat/|Satellite/|subtelomere/|telomere/" > maize_rice_arab_TEs.fa
+
+# Pull out the LTR sequences only for additional filtering.
+python ../PrinTE/Kmer2LTR/Kmer2LTR.py -i maize_rice_arab_LTR.fa -p 200 --min-retained-fraction 0.5
+# The Kmer2LTR TSV contains only the real-looking LTR-RTs.
+# I further filtered crappy alignments from the kmer2Ltr tsv like this.
+## Rule 1: drop if col2 < 100 and col7 > 0.10 (drop LTR-RTs with short LTRs and relatively large p-distance).
+## Rule 2: drop if col1 starts with 'TE_00' and col7 > 0.10 (TE_00* LTRs appear problematic. apply aggressive p-distance > 0.10 filter).
+## Rule 3: drop if col7 > 0.25 (p-distance > 0.25).
+## Rule 4: drop if col2 < 80 (LTR length less than 80).
+
+# Any remaining LTR-RTs in the filtered Kmer2LTR TSV seem real. 
+# Use IDs in the cleaned TSV to filter 'maize_rice_arab_TEs.fa' to 'maize_rice_arab_TEs_filter.fa'.
+
+# Merge the cleaned LTR-RTs with the whole DB.
+
+# Final cleaning.
+cd-hit-est -i maize_rice_arab_TEs.fa -o maize_rice_arab_TEs_clean.fa -c 0.95 -aS 0.8 -T 200 -M 0 -d 0
