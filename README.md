@@ -57,7 +57,7 @@ PrinTE installs and uses [Kmer2LTR](https://github.com/cwb14/Kmer2LTR.git) for L
 
 2. **TE Library FASTA (`--TE_lib`)**  
    Specifies the **transposable elements** to insert into the synthetic genome.  
-   - Default: `combined_curated_TE_lib_ATOSZM_selected.fasta`  
+   - Default: `maize_rice_arab_curated_TE.lib.gz`  
    - FASTA headers must follow **RepeatMasker format**, e.g.:  
      ```
      >[name]#[class]/[superfamily]
