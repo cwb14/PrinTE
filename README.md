@@ -296,7 +296,7 @@ chr3	1869245	1869502	anysaf_AC211487_11211#LTR/Ty3~LTRlen:257_SOLO	GCGCG	-
 
 ---
 
-`gen[generation_number]_mut.txt` is useful for looking at emperical mutation data:
+`gen[generation_number]_mut.txt` is useful for looking at empirical mutation data:
 ```bash
 cat gen40000_mut.txt                
 Genome size:  136266136
