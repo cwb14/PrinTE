@@ -45,8 +45,7 @@ PrinTE installs and uses [Kmer2LTR](https://github.com/cwb14/Kmer2LTR.git) for L
 
 ## Phase 1 (Burn-in) - Inputs and Parameters  
    - PrinTE's initial (**burn-in**) utility is quite flexible, allowing simulations that mirror the composition of a wide range any real genome.  
-   - A caveat is that PrinTE does not support inserting fragmented TEs into the burn-in, but the simulated evolution of Phase 2 (Looping Generations) creates fragmentation.   
-   - For simulations involving TE fragmentation, be sure to proceed to Phase 2 (Looping Generations). Alternatively, [TEgenomeSimulator](https://github.com/Plant-Food-Research-Open/TEgenomeSimulator) may support your needs.
+   - A caveat is that PrinTE does not simulate solo-LTRs in burn-in genomes. For solo-LTRs, be sure to proceed to Phase 2 (looping generattions).
 
 ### Inputs
 
@@ -64,17 +63,29 @@ PrinTE installs and uses [Kmer2LTR](https://github.com/cwb14/Kmer2LTR.git) for L
      >Os2670#MITE/Tourist
      ```  
    - Supported `#[class]/[superfamily]` suffixes are listed in `ratios.tsv`.
-   - Users can control the abundance of TEs in the burn-in genome using `--TE_percent` or `--TE_num`.
-   - Unlike genes, where each CDS is inserted a maximum of 1 time, TEs are selected randomly from the library and may be inserted any number of times in ratios matching `ratios.tsv`. So, larger TE libraries yield more diverse TE landscapes. 
+   - Users can control the abundance of **intact TEs** in the burn-in genome using `--intact_TE_percent` or `--intact_TE_num` and **fragmented TEs** using `--frag_TE_num` or `--frag_TE_percent`.
+   - Unlike genes, where each CDS is inserted a maximum of 1 time, TEs are selected randomly from the library and may be inserted any number of times in ratios matching `ratios.tsv`. So, larger TE libraries yield more diverse TE landscapes.
+   - Note that in the burn-in, there are no nested insertions. All genes and TEs are laid out in tandem at random distances appart (minimum 20bp).
 
 3. **TE Ratios File (`--TE_ratio ratios.tsv`)**  
    Defines the relative frequency of each TE superfamily in the genome.  
    - Columns:  
      1. `class`  
      2. `superfamily`  
-     3. `weight` (probability of insertion)
+     3. `weight` of **intact TE** (probability of inserting intact TE)
+     4. `weight` of **fragmented TE** (probability of inserting fragmented TE)
    - PrinTE ships with `ratios.tsv` for this purpose.  
-   - Users can adjust the `weight` values (column 3) to tune the TE landscape to their needs.
+   - Users can adjust the `weight` values (column 3 & 4) with to tune the TE landscape to their need.
+
+    ```bash
+    # TE_class   TE_superfamily   intact_frequency	fragmented_frequency
+    DNA         Helitron          0.03	0.07
+    SINE        unknown           0.05	0.06
+    LTR         Gypsy             0.19	0.21
+    ```
+    For example, with `ratios.tsv` above, and the options  `--intact_TE_percent 20 --frag_TE_percent 10`:  
+        - **Intact `DNA/Helitron`** -> `20 * 0.03 = 0.6%` of the genome.
+        - **Fragmented `DNA/Helitron`** -> `10 * 0.07 = 0.7%` of the genome.
 
 ### Parameters
 
@@ -316,8 +327,9 @@ Accumulated Mutations / site:    0.000265089172
 
 `burnin.stat` tells the composition of the original burnin genome:
 ```bash
-The burn-in genome is 135000000bp in length with 19621 genes (21.21%) and 14173 TEs (21.01%).
-Total insertions done: 14173 (TE bp inserted: 28358660). 
+The burn-in genome is 135000000bp in length with 19621 genes (21.21%) and 68300 TEs (51.16%).
+  INTACT:  insertions=18300, TE bp inserted=27009913, (20.01% of genome)
+  FRAG   : insertions=50000, TE bp inserted=42062617, (31.16% of genome)
 ```
 ---
 
