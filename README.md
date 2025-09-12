@@ -356,3 +356,15 @@ Number of born TEs to insert (from birth_rate and birth_file): 14
 - `percent_TE.pdf` plots the change in TE abundance through generation simulated.   
 - `stat_intact_plot.pdf` and `stat_frag_plot.pdf` show superfamily counts for each simulation.  
 - `solo_intact.pdf` plots the changing solo-LTR ratio through generations.  
+
+---
+
+## Compatibbility with [TEgenomeSimulator](https://github.com/Plant-Food-Research-Open/TEgenomeSimulator/tree/main)
+
+If you prefer to use TEgenomeSimulator for your initial burn-in and PrinTE for forward evolution... 
+
+```bash
+# Convert TEgenomeSimulator GFF to a bed that's compatible for input into PrinTE.
+python PrinTE/util/gff_to_bed.py TEgenomeSimulator.gff TegenomeSimulator.bed
+```
+Feed the `TEgenomeSimulator.bed` and `TEgenomeSimulator.fa` outputs to PrinTE using PrinTE's `--bed` & `--fasta` flags.
