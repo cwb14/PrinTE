@@ -84,8 +84,8 @@ PrinTE installs and uses [Kmer2LTR](https://github.com/cwb14/Kmer2LTR.git) for L
     LTR         Gypsy             0.19	0.21
     ```
     For example, with `ratios.tsv` above, and the options  `--intact_TE_percent 20 --frag_TE_percent 10`:  
-        - **Intact `DNA/Helitron`** -> `20 * 0.03 = 0.6%` of the genome.
-        - **Fragmented `DNA/Helitron`** -> `10 * 0.07 = 0.7%` of the genome.
+        - **Intact `DNA/Helitron`** -> `20 * 0.03 = 0.6%` of the genome.  
+        - **Fragmented `DNA/Helitron`** -> `10 * 0.07 = 0.7%` of the genome.  
 
 ### Parameters
 
