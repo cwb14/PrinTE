@@ -296,13 +296,13 @@ chr1    1857719 1859314 tuteh_AC183372_584#LTR/unknown~LTRlen:126;CUT_BY:Os2721#
 chr1    1859314 1859734 Os2721#DNAnona/hAT;NESTED_IN:tuteh_AC183372_584#LTR/unknown~LTRlen:126  CTTCCG  +
 chr1    1859740 1860095 tuteh_AC183372_584#LTR/unknown~LTRlen:126;CUT_BY:Os2721#DNAnona/hAT     CATTC   +
 chr1    1860701 1862054 gene1321        NA      +
-chr1    1863430 1863672 Os0204#MITE/Stow        CA      +
-chr3	1869245	1869502	anysaf_AC211487_11211#LTR/Ty3~LTRlen:257_SOLO	GCGCG	-
+chr1 	  1862094	1863435	TE_00016444_FRAG#MITE/DTA	NA	-
+chr1	  1869245	1869502	anysaf_AC211487_11211#LTR/Ty3~LTRlen:257_SOLO	GCGCG	-
 ```
 - Columns are `chromosome`, `start`, `end`, `feature_ID`, `target site duplication sequence (TSD)`, and `strand`.
-- This means that in `gen40000_final.fasta`, theres a gene (`gene1316`) on `chr1:1852998-1854855`.
-- Here, `Os2721#DNAnona/hAT` is nested inside `tuteh_AC183372_584#LTR/unknown`.
-- PrinTE now considers this `tuteh_AC183372_584#LTR/unknown` to be non-viable for transposition, since its no longer intact. 
+- `Os2721#DNAnona/hAT` is nested inside `tuteh_AC183372_584#LTR/unknown`.
+- `TE_00016444` has `_FRAG` in its feature_ID, indicating it was added into the burn-in using `--frag_TE_num` or `--frag_TE_percent`.
+   - Neither `Os2721#DNAnona/hAT` or `TE_00016444_FRAG` are intact, so theyre not eligable for transpoition but avaible for deletion.
 - `anysaf_AC211487_11211#LTR/Ty3` has the `_SOLO` tag on its `feature_ID`, so its a solo-LTR and also not viable for transposition.
 
 ---
