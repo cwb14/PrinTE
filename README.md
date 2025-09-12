@@ -361,7 +361,7 @@ Number of born TEs to insert (from birth_rate and birth_file): 14
 
 ## Compatibbility with [TEgenomeSimulator](https://github.com/Plant-Food-Research-Open/TEgenomeSimulator/tree/main)
 
-If you prefer to use TEgenomeSimulator for your initial burn-in and PrinTE for forward evolution... 
+If you prefer to use TEgenomeSimulator instead of PrinTE for the initial (phase 1) burn-in:
 
 ```bash
 # Convert TEgenomeSimulator GFF to a bed that's compatible for input into PrinTE.
