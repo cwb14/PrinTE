@@ -1,31 +1,31 @@
 # zcat ./data/maize_rice_arab_curated_TE.lib.gz   | grep '>'   | cut -d'#' -f2-   | sort   | uniq -c   | sort -nr | grep -i 'LTR'
 # Approximately matching proportions as they appear in the library.
-
-# TE_class   TE_superfamily   frequency
-LTR	Gypsy	0.46
-LTR	Copia	0.42
-LTR	Ty3	0.02
-LTR	unknown	0.08
-LTR	TRIM	0.02
-LTR	CRM	0.004
-
-DNA	Harbinger	0
-DNA	Mariner	0
-DNAauto	Helitron	0
-DNA	Helitron	0
-DNAnona	Helitron	0
-MITE	Stow	0
-MITE	Tourist	0
-SINE	tRNA	0
-SINE	unknown	0
-LINE	L1	0
-LINE	unknown	0
-DNAauto	CACTA	0
-DNA	CACTA	0
-DNAnona	CACTA	0
-DNA	hAT	0
-DNAnona	hAT	0
-DNAauto	hAT	0
-DNAnona	MULE	0
-DNA	MuDR	0
-DNAauto	MULE	0
+	
+# TE_class   TE_superfamily   intact_frequency	fragmented_frequency
+LTR	Gypsy	0.46	0.46
+LTR	Copia	0.42	0.42
+LTR	Ty3	0.02	0.02
+LTR	unknown	0.08	0.08
+LTR	TRIM	0.02	0.02
+LTR	CRM	0.004	0.004
+	
+DNA	Harbinger	0	0
+DNA	Mariner	0	0
+DNAauto	Helitron	0	0
+DNA	Helitron	0	0
+DNAnona	Helitron	0	0
+MITE	Stow	0	0
+MITE	Tourist	0	0
+SINE	tRNA	0	0
+SINE	unknown	0	0
+LINE	L1	0	0
+LINE	unknown	0	0
+DNAauto	CACTA	0	0
+DNA	CACTA	0	0
+DNAnona	CACTA	0	0
+DNA	hAT	0	0
+DNAnona	hAT	0	0
+DNAauto	hAT	0	0
+DNAnona	MULE	0	0
+DNA	MuDR	0	0
+DNAauto	MULE	0	0

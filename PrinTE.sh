@@ -28,9 +28,8 @@
 #  (6) New options -tk/--TE_mut_k and -tmx/--TE_mut_Mmax replace the old TE_mut_in parameter.
 #
 #  (7) New parallel versions of internal scripts:
-#         - Use 'shared_ltr_inserter_parallel.py' instead of 'shared_ltr_inserter.py'
-#         - Use 'nest_inserter_parallel.py' instead of 'nest_inserter_parallel.py', which now adds a '-m' parameter for threads.
-#           Also accepts the new optional flag --disable_genes (-dg) to disable insertion into genes.
+#         - Use 'shared_ltr_inserter_parallel.py' (updated CLI: -n_intact/-p_intact plus -n_frag/-p_frag)
+#         - Use 'nest_inserter_parallel.py' with '-m' for threads and optional --disable_genes (-dg).
 #
 #  (8) New flag -bo, --burnin_only:
 #      When activated, the script will run the burn-in phase only and then exit.
@@ -124,8 +123,10 @@ Options:
   -c,  --cds                 Path to CDS file (default: ${TOOL_DIR}/data/TAIR10.cds.fa)
   -N,  --cds_num             Number of CDS sequences to insert. (Mutually exclusive with --cds_percent)
   -P,  --cds_percent         Percent of the genome that should be CDS. (Mutually exclusive with --cds_num)
-  -n,  --TE_num              Number of TE insertions in burn‐in (default: 2000) (Mutually exclusive with --TE_percent)
-  -p,  --TE_percent          Percent of the genome that should be TEs in the burn‐in (Mutually exclusive with --TE_num)
+  -itn, --intact_TE_num      Number of INTACT TE insertions in burn-in (mutually exclusive with --intact_TE_percent)
+  -itp, --intact_TE_percent  Target % genome as INTACT TE bp in burn-in (default: 20; mutually exclusive with --intact_TE_num)
+  -ftn, --frag_TE_num        Number of FRAGMENTED TE insertions in burn-in (mutually exclusive with --frag_TE_percent)
+  -ftp, --frag_TE_percent    Target % genome as FRAGMENTED TE bp in burn-in (default: 0; mutually exclusive with --frag_TE_num)
   -cn, --chr_number          Number of chromosomes (default: 4)
   -sz, --size                Genome size in kb, Mb, or Gb (default: 400Mb)
   -tk, --TE_mut_k            Slope of exponential decay for TE mutation (default: 10)
@@ -237,11 +238,17 @@ while [[ $# -gt 0 ]]; do
     -r|--TE_ratio)
       TE_ratio="$2"
       shift; shift;;
-    -n|--TE_num)
-      TE_num="$2"
+    -itn|--intact_TE_num)
+      intact_TE_num="$2"
       shift; shift;;
-    -p|--TE_percent)
-      TE_percent="$2"
+    -itp|--intact_TE_percent)
+      intact_TE_percent="$2"
+      shift; shift;;
+    -ftn|--frag_TE_num)
+      frag_TE_num="$2"
+      shift; shift;;
+    -ftp|--frag_TE_percent)
+      frag_TE_percent="$2"
       shift; shift;;
     -st|--step)
       step="$2"
@@ -339,7 +346,6 @@ seed="${seed:-42}"
 TE_lib="${TE_lib:-${TOOL_DIR}/data/maize_rice_arab_curated_TE.lib.gz}"
 mutation_rate="${mutation_rate:-1.3e-8}"
 TE_ratio="${TE_ratio:-${TOOL_DIR}/ratios.tsv}"
-TE_num="${TE_num:-2000}"
 threads="${threads:-4}"
 insert_rate="${insert_rate:-1e-8}"
 birth_rate="${birth_rate:-1e-3}"
@@ -350,7 +356,12 @@ sigma="${sigma:-1.0}"
 max_size="${max_size:-}" # If not set, remains empty
 TsTv="${TsTv:-1.0}"
 pergen_select="${pergen_select:-2}"   # how many evenly spaced generations to select (incl. burnin and max)
-
+if [[ -z "$intact_TE_num" && -z "$intact_TE_percent" ]]; then
+  intact_TE_percent=20
+fi
+if [[ -z "$frag_TE_num" && -z "$frag_TE_percent" ]]; then
+  frag_TE_percent=0
+fi
 
 # --- Validate mutually exclusive CDS options ---
 if [[ -n "$cds_num" && -n "$cds_percent" ]]; then
@@ -358,9 +369,14 @@ if [[ -n "$cds_num" && -n "$cds_percent" ]]; then
   exit 1
 fi
 
-# --- Validate mutually exclusive TE insertion options ---
-if [[ -z "$TE_percent" ]]; then
-  TE_num="${TE_num:-2000}"
+# --- Validate mutually exclusive TE insertion options (burn-in) ---
+if [[ -n "$intact_TE_num" && -n "$intact_TE_percent" ]]; then
+  echo "Error: Provide either --intact_TE_num or --intact_TE_percent, not both." | tee -a "$ERR"
+  exit 1
+fi
+if [[ -n "$frag_TE_num" && -n "$frag_TE_percent" ]]; then
+  echo "Error: Provide either --frag_TE_num or --frag_TE_percent, not both." | tee -a "$ERR"
+  exit 1
 fi
 
 # --- Validate required parameters (if not running burn-in only) ---
@@ -471,13 +487,21 @@ if [[ "$skip_burnin" -eq 0 ]]; then
         exit 1
     fi
 
-    # (1b) Insert TEs into the synthetic genome using the parallel version.
+    # (1b) Insert TEs into the synthetic genome using the updated parallel inserter.
     cmd="python ${BIN_DIR}/shared_ltr_inserter_parallel.py -genome backbone.fa -TE ${clean_lib}"
-    if [[ -n "$TE_percent" ]]; then
-        cmd+=" -p ${TE_percent}"
-    else
-        cmd+=" -n ${TE_num}"
+    # INTACT controls
+    if [[ -n "$intact_TE_percent" ]]; then
+        cmd+=" -p_intact ${intact_TE_percent}"
+    elif [[ -n "$intact_TE_num" ]]; then
+        cmd+=" -n_intact ${intact_TE_num}"
     fi
+    # FRAGMENTED controls
+    if [[ -n "$frag_TE_percent" ]]; then
+        cmd+=" -p_frag ${frag_TE_percent}"
+    elif [[ -n "$frag_TE_num" ]]; then
+        cmd+=" -n_frag ${frag_TE_num}"
+    fi
+    
     cmd+=" -TsTv ${TsTv}"
     cmd+=" -bed backbone.bed -output burnin -seed ${seed} -TE_ratio ${TE_ratio} -stat_out burnin.stat"
     cmd+=" -k ${TE_mut_k} -Mmax ${TE_mut_Mmax} -pdf_out burnin_mut_dist.pdf -m ${threads}"
@@ -908,4 +932,3 @@ eval $cmd
 echo "Post-processing completed at $(date)" | tee -a "$LOG"
 
 # END
-
