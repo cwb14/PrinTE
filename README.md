@@ -294,6 +294,7 @@ chr3	1869245	1869502	anysaf_AC211487_11211#LTR/Ty3~LTRlen:257_SOLO	GCGCG	-
 - PrinTE now considers this `tuteh_AC183372_584#LTR/unknown` to be non-viable for transposition, since its no longer intact. 
 - `anysaf_AC211487_11211#LTR/Ty3` has the `_SOLO` tag on its `feature_ID`, so its a solo-LTR and also not viable for transposition.
 
+---
 
 `gen[generation_number]_mut.txt` is useful for looking at emperical mutation data:
 ```bash
@@ -311,12 +312,14 @@ Accumulated Mutations / site:    0.000265089172
 - This means that, between `gen40000_mut.txt` and the preceeding simulation (`gen30000_mut.txt`), PrinTE introduced `9487` random mutations and only `1` was reccurent. 
 - `Accumulated Mutations / site` shows us the frequency of mutations up to this point in the simulation (ie, distance from the original `burn-in` genome).
 
+---
 
 `burnin.stat` tells the composition of the original burnin genome:
 ```bash
 The burn-in genome is 135000000bp in length with 19621 genes (21.21%) and 14173 TEs (21.01%).
 Total insertions done: 14173 (TE bp inserted: 28358660). 
 ```
+---
 
 `pipeline.report` tells us the number of insertions and deletions per generation simulated:
 ```bash
@@ -326,7 +329,7 @@ Generation	TE_inserts(nest/nonnest)	Calculated_TE_deletions	Actual_TE_deletions
 30000	201(85/116)	23	23
 40000	168(70/98)	16	16
 ```
-
+---
 If the variable-rate method was used with `--birth_rate`, I can check how many TEs were inserted horizontally:
 ```bash
 cat pipeline.log | grep 'Number of born TEs to insert' 
@@ -335,7 +338,7 @@ Number of born TEs to insert (from birth_rate and birth_file): 14
 Number of born TEs to insert (from birth_rate and birth_file): 14
 Number of born TEs to insert (from birth_rate and birth_file): 14
 ```
-
+---
 - `all_LTR_density.pdf` shows a density distribution of LTR-RT ages through the simulation.  
 - `genome_size_plot.pdf` plots the change in genome size.  
 - `percent_TE.pdf` plots the change in TE abundance through generation simulated.   
