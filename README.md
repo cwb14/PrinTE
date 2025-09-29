@@ -258,21 +258,21 @@ bash PrinTE/PrinTE.sh
 
 Create a blank-slate genome (burnin.fa). 
 ```bash
-bash PrinTE/PrinTE.sh --burnin_only --cds_percent 0 --TE_percent 0 --chr_number 1 --size 100Mb
+bash PrinTE/PrinTE.sh --burnin_only --cds_percent 0 --intact_TE_percent 0 --chr_number 1 --size 100Mb
 ```
 
 
 Variable-rate method.
 ```bash
-bash PrinTE/PrinTE.sh -cn 5 -sz 135Mb -tmx 5 -m 7e-9 -P 25 -p 21 -br 1e-7 -ir 1.1e-6 -dr 4e-6 -cbi 1.1 -cbd 1.0 -cb 500 -t 20 -k 2 -ge 40000 -st 10000
+bash PrinTE/PrinTE.sh -cn 5 -sz 135Mb -tmx 5 -m 7e-9 -P 25 -itp 21 -br 1e-7 -ir 1.1e-6 -dr 4e-6 -cbi 1.1 -cbd 1.0 -cb 500 -t 20 -k 2 -ge 40000 -st 10000
 ```
 
 Fixed-rate method.
 ```bash
-bash PrinTE/PrinTE.sh -mgs 1500M -P 20 -n 6000 -cn 20 -sz 113Mb -ge 300000 -st 100000 -t 10 -k 0 -kt -F 3.0e-11,5e-11 -m 1.3e-8 -sr 95 
+bash PrinTE/PrinTE.sh -mgs 1500M -P 20 -itn 6000 -cn 20 -sz 113Mb -ge 300000 -st 100000 -t 10 -k 0 -kt -F 3.0e-11,5e-11 -m 1.3e-8 -sr 95 
 
 # We can increase '-ge' and add '--continue' to pickup where we left off, adding more generations with new TE insertion/deletion rates. 
-bash PrinTE/PrinTE.sh -mgs 1500M -P 20 -n 6000 -cn 20 -sz 113Mb -ge 400000 -st 100000 -t 10 -k 0 -kt -F 7.0e-11,1e-11 -m 1.3e-8 -sr 95 --continue
+bash PrinTE/PrinTE.sh -mgs 1500M -P 20 -itn 6000 -cn 20 -sz 113Mb -ge 400000 -st 100000 -t 10 -k 0 -kt -F 7.0e-11,1e-11 -m 1.3e-8 -sr 95 --continue
 ```
 ---
 
