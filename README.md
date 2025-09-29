@@ -256,9 +256,9 @@ See help menu.
 bash PrinTE/PrinTE.sh
 ```
 
-Create a blank-slate genome (burnin.fa). 
+Create a 100Mb chromosome with 4% genes and 10% TEs (burnin.fa). 
 ```bash
-bash PrinTE/PrinTE.sh --burnin_only --cds_percent 0 --intact_TE_percent 0 --chr_number 1 --size 100Mb
+bash PrinTE/PrinTE.sh --burnin_only --cds_percent 4 --intact_TE_percent 10 --chr_number 1 --size 100Mb
 ```
 
 
