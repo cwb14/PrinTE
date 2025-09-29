@@ -368,3 +368,7 @@ If you prefer to use TEgenomeSimulator instead of PrinTE for the initial (phase 
 python PrinTE/util/gff_to_bed.py TEgenomeSimulator.gff TegenomeSimulator.bed
 ```
 Feed the `TEgenomeSimulator.bed` and `TEgenomeSimulator.fa` outputs to PrinTE using PrinTE's `--bed` & `--fasta` flags.
+
+## Operating systems
+Tested on macOS 14.6.1 (Apple M2 Pro, 16 GB RAM) and Linux Ubuntu 22.04.5 LTS (AMD EPYC 7763, 1 TiB RAM).   
+Requires ~2 GB RAM min; optimal with 16 GB+ RAM, 4+ cores @3.3 GHz, and 25 Mbps internet.
