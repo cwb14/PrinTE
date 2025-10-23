@@ -89,9 +89,7 @@ def process_bed_file(bed_file):
                 else:
                     record['category'] = "Potential intact TE"
 
-    # Rule (3): For potential intact TEs with at least one additional attribute,
-    # check within +/- 100 lines for another TE with the same TSD and strand and
-    # where one NAME is a prefix of the other.
+    # Rule (3): for potential intact TEs with at least one additional attribute, look nearby
     for i, record in enumerate(records):
         if record['category'] == "Potential intact TE" and record['additional']:
             for j in range(max(0, i - 100), min(len(records), i + 101)):
@@ -124,7 +122,7 @@ def load_genome(genome_fasta):
 def extract_intact_LTRs(records, genome):
     """
     From the list of BED records, extract sequences of intact TEs with TE_class == LTR.
-    Returns a list of tuples: (fasta_header, sequence)
+    Returns a list of tuples: (original_header, sequence_string)
     """
     ltr_entries = []
     for record in records:
@@ -147,32 +145,47 @@ def extract_intact_LTRs(records, genome):
             continue  # skip if chromosome not found in genome
 
         seq = genome[chrom][start:end]
-        # Use the full NAME from the BED file as FASTA header.
-        header = record['name']
-        ltr_entries.append((header, str(seq)))
+        # Save the original BED NAME as the "original_header"
+        original_header = record['name']
+        ltr_entries.append((original_header, str(seq)))
     return ltr_entries
 
-def write_fasta(entries, out_file):
+def wrap_and_write_sequence(handle, header, seq, width=60):
+    handle.write(f">{header}\n")
+    for i in range(0, len(seq), width):
+        handle.write(seq[i:i+width] + "\n")
+
+def write_fasta_numeric(entries, out_fasta, out_key, start_index=1):
     """
-    Write a list of (header, sequence) tuples to a FASTA file.
+    Write sequences to FASTA with numeric headers and produce a key TSV.
+    entries: list of (original_header, sequence_string)
+    out_fasta: path to FASTA with numeric headers
+    out_key: path to TSV mapping numeric_id -> original_header
     """
-    with open(out_file, "w") as f:
-        for header, seq in entries:
-            f.write(f">{header}\n")
-            # Wrap sequence every 60 characters
-            for i in range(0, len(seq), 60):
-                f.write(seq[i:i+60] + "\n")
+    count = 0
+    with open(out_fasta, "w") as f_fa, open(out_key, "w") as f_key:
+        for idx, (orig_header, seq) in enumerate(entries, start=start_index):
+            wrap_and_write_sequence(f_fa, str(idx), seq, width=60)
+            f_key.write(f"{idx}\t{orig_header}\n")
+            count += 1
+    return count
 
 def main():
     parser = argparse.ArgumentParser(
         description="Extract intact LTRs from BED files using a genome FASTA. "
-                    "Intact LTRs are intact TEs with TE_class = LTR. "
-                    "The FASTA header is taken from the BED NAME field."
+                    "Outputs a multi-sequence FASTA with numeric headers (>1, >2, ...) "
+                    "and a key mapping numeric IDs to the original BED NAME."
     )
     parser.add_argument("--bed", nargs="+", required=True, help="Input BED file(s)")
     parser.add_argument("--genome", required=True, help="Genome FASTA file")
-    parser.add_argument("--out_fasta", required=True, help="Output multi-sequence FASTA file")
+    parser.add_argument("--out_fasta", required=True, help="Output multi-sequence FASTA file (numeric headers)")
+    parser.add_argument("--out_key", default=None,
+                        help="Output TSV mapping numeric_id to original header (default: <out_fasta>.key.tsv)")
+    parser.add_argument("--start_index", type=int, default=1,
+                        help="Starting numeric index for FASTA headers (default: 1)")
     args = parser.parse_args()
+
+    out_key = args.out_key if args.out_key else f"{args.out_fasta}.key.tsv"
 
     # Load genome FASTA
     genome = load_genome(args.genome)
@@ -186,9 +199,12 @@ def main():
 
     if not all_entries:
         print("No intact LTR entries found.", flush=True)
-    else:
-        write_fasta(all_entries, args.out_fasta)
-        print(f"Extracted {len(all_entries)} intact LTR entries to {args.out_fasta}", flush=True)
+        return
+
+    # Write numeric FASTA and key
+    n = write_fasta_numeric(all_entries, args.out_fasta, out_key, start_index=args.start_index)
+    print(f"Extracted {n} intact LTR entries to {args.out_fasta}", flush=True)
+    print(f"Key (numeric_id -> original header) written to {out_key}", flush=True)
 
 if __name__ == "__main__":
     main()
