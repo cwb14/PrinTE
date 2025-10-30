@@ -911,12 +911,12 @@ for i_idx in "${desc_idx[@]}"; do
   eval $cmd
 
   # (b1) Pull domains
-  cmd="python ${BIN_DIR}/ltr_domain_puller.py ${final_prefix}_LTR.fasta ${final_prefix}_LTR.domain"
+  cmd="python ${BIN_DIR}/ltr_domain_puller.py ${final_prefix}_LTR.fasta.key.tsv ${final_prefix}_LTR.domain"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd
 
   # (b2) Kmer2LTR
-  cmd="python ${TOOL_DIR}/Kmer2LTR/Kmer2LTR.py -p ${threads} -i ${final_prefix}_LTR.fasta -D ${final_prefix}_LTR.domain --assume-duplicate-same-ltr -o ${final_prefix}_LTR.tsv -u ${mutation_rate} --no-plot"
+  cmd="python ${TOOL_DIR}/Kmer2LTR/Kmer2LTR.py -p ${threads} -i ${final_prefix}_LTR.fasta -D ${final_prefix}_LTR.domain -o ${final_prefix}_LTR.tsv -u ${mutation_rate} --no-plot"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd
 
