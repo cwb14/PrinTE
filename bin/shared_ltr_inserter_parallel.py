@@ -285,6 +285,80 @@ def plot_decay_function(k, Mmax, pdf_out):
     plt.close()
     print(f"Decay function plot saved to {pdf_out}.")
 
+def parse_mutation_bins(file_path):
+    """
+    Parse a mutation bin file:
+        <bin_start> <bin_end> <frequency>
+
+    bin_start / bin_end are mutation *rates* (0–1, e.g. 0.006 = 0.6% of bases mutated).
+    frequency is a weight; the script normalizes them so they sum to 1.
+    """
+    bins = []
+    try:
+        with open(file_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                start = float(parts[0])
+                end = float(parts[1])
+                freq = float(parts[2])
+                bins.append({'start': start, 'end': end, 'freq': freq})
+    except FileNotFoundError:
+        print(f"Error: Mutation bin file {file_path} not found.")
+        sys.exit(1)
+
+    if not bins:
+        print(f"Error: Mutation bin file {file_path} contained no valid rows.")
+        sys.exit(1)
+
+    total = sum(b['freq'] for b in bins)
+    if total <= 0:
+        print(f"Error: Mutation bin frequencies in {file_path} sum to zero or negative.")
+        sys.exit(1)
+
+    # Normalize and build cumulative distribution
+    cum = 0.0
+    for b in bins:
+        cum += b['freq'] / total
+        b['cum'] = cum
+    bins[-1]['cum'] = 1.0  # ensure final bin closes at 1.0
+
+    return bins
+
+
+def sample_mutation_rate(mutation_bins, k, Mmax):
+    """
+    Return a mutation RATE (0–1).
+
+    If mutation_bins is not None:
+        1) choose a bin according to its frequency
+        2) draw uniformly between [bin_start, bin_end] for that bin
+    Else:
+        use the existing exponential approach based on k and Mmax.
+    """
+    # Bin-based mode
+    if mutation_bins is not None:
+        r = random.random()
+        for b in mutation_bins:
+            if r <= b['cum']:
+                if b['start'] == b['end']:
+                    return b['start']
+                return random.uniform(b['start'], b['end'])
+        # Fallback, should never really happen
+        last = mutation_bins[-1]
+        return (last['start'] + last['end']) / 2.0
+
+    # Original exponential mode (unchanged logic)
+    if Mmax <= 0:
+        return 0.0
+    u = random.random()
+    mutation_percent = - (Mmax / k) * math.log(1 - u * (1 - math.exp(-k)))
+    return mutation_percent / 100.0
+
 def add_frag_tag(header):
     """
     Insert _FRAG before the first '#' in header; if no '#', append.
@@ -593,12 +667,12 @@ def main():
     # Intact target: count OR percent
     group_intact = parser.add_mutually_exclusive_group()
     group_intact.add_argument('-n_intact', type=int, help='Total number of INTACT TE insertions to perform (distributed across chromosomes)')
-    group_intact.add_argument('-p_intact', type=float, help='Target percent of genome to be INTACT TE bp per chromosome (e.g. 20 for 20%)')
+    group_intact.add_argument('-p_intact', type=float, help='Target percent of genome to be INTACT TE bp per chromosome (e.g. 20 for 20%%)')
 
     # Fragmented target: count OR percent
     group_frag = parser.add_mutually_exclusive_group()
     group_frag.add_argument('-n_frag', type=int, help='Total number of FRAGMENTED TE insertions to perform (distributed across chromosomes)')
-    group_frag.add_argument('-p_frag', type=float, help='Target percent of genome to be FRAGMENTED TE bp per chromosome (e.g. 5 for 5%)')
+    group_frag.add_argument('-p_frag', type=float, help='Target percent of genome to be FRAGMENTED TE bp per chromosome (e.g. 5 for 5%%)')
 
     parser.add_argument('-bed', required=True, help='Path to the gene BED file')
     parser.add_argument('-output', required=True, help='Prefix for output files (will create prefix.fa and prefix.bed)')
@@ -610,6 +684,13 @@ def main():
     parser.add_argument('-k', type=float, default=10.0, help='Exponential decay parameter (default 10)')
     parser.add_argument('-Mmax', type=float, default=10.0, help='Maximum mutation percent (default 10)')
     parser.add_argument('-pdf_out', help='Output PDF file for mutation decay function plot (default mutation_decay.pdf)', default="mutation_decay.pdf")
+
+    parser.add_argument(
+        '-mutation_bins',
+        help='Optional file of mutation bins: <bin_start> <bin_end> <frequency> per line. '
+             'If provided, overrides -k and -Mmax and disables the decay plot.',
+        default=None
+    )
 
     # Multiprocessing
     parser.add_argument('-m', type=int, default=1, help='Number of chromosomes to process concurrently (default 1)')
@@ -638,11 +719,20 @@ def main():
     else:
         print("No random seed provided. Results will be non-reproducible.")
 
-    # Plot decay if enabled
-    if args.Mmax > 0:
-        plot_decay_function(args.k, args.Mmax, args.pdf_out)
+    # Mutation bins: override k/Mmax if provided
+    mutation_bins = None
+    if args.mutation_bins:
+        print(f"Reading mutation bin file: {args.mutation_bins}")
+        mutation_bins = parse_mutation_bins(args.mutation_bins)
+
+    # Plot decay function only if we're using the exponential mode
+    if mutation_bins is not None:
+        print("Mutation bin file provided. Ignoring -k and -Mmax and skipping exponential decay plot.")
     else:
-        print("Mmax is 0. Skipping mutation decay plot since mutation is disabled.")
+        if args.Mmax > 0:
+            plot_decay_function(args.k, args.Mmax, args.pdf_out)
+        else:
+            print("Mmax is 0. Skipping mutation decay plot since mutation is disabled.")
 
     genome_path = args.genome
     te_path = args.TE

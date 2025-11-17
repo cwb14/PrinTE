@@ -16,9 +16,10 @@ with optional length-weighted resampling to match a guide distribution.
 Usage:
   Genome mode:
     extract_te_with_weighted_sampling.py --bed file1.bed file2.bed --genome genome.fa \
-        --out_fasta out.fa [--weight_by guide.fa] [--plot_kde_comparison] [--exclude_missing_ltr_len]
+        --out_fasta out.fa [--weight_by guide.fa] [--plot_kde_comparison] [--exclude_missing_ltr_len] [--exclude_truncated]
   Library mode:
-    extract_te_with_weighted_sampling.py --lib te_library.fa --out_fasta out.fa [--exclude_missing_ltr_len]
+    extract_te_with_weighted_sampling.py --lib te_library.fa --out_fasta out.fa \
+        [--exclude_missing_ltr_len] [--weight_by guide.fa] [--exclude_truncated]
 
 Options:
   -h, --help            Show this help message and exit
@@ -27,23 +28,16 @@ Options:
   --genome FASTA        Reference genome FASTA (required with --bed)
   --lib FASTA           TE library FASTA to correct LTR ends (library mode)
   --out_fasta FILE      Output FASTA path (required)
-  --weight_by FASTA     Guide FASTA whose length distribution is targeted
+  --weight_by FASTA     Guide FASTA whose length distribution is targeted and,
+                        if --exclude_truncated is set, used as the reference
+                        full-length TE set.
   --duplication_mode    Retain all original sequences and duplicate additional copies according to importance weights (only with --weight_by)
   --plot_kde_comparison Save KDE comparison plot as <out_basename>_kde_comparison.pdf
   --exclude_missing_ltr_len  Exclude intact LTR elements that are missing LTR length info (~LTRlen) from output
-
-Functions:
-  parse_line           Parse a BED line into fields
-  parse_attributes     Split NAME field into feature_id and attributes
-  extract_TE_info      Decode feature_id into (name, class, superfamily, ltr_len)
-  process_bed_file     Classify BED records into intact/fragmented TEs & genes
-  load_genome          Load genome FASTA into a dict
-  extract_intact_TEs   Extract and LTR-fix intact TE sequences
-  process_library_fasta  Fix LTR ends in an existing library FASTA
-  write_fasta          Write sequences to FASTA with line-wrapping
-  weighted_resample    KDE-based importance sampling & optional plotting
-  main                 Entry point: parse args and dispatch modes
+  --exclude_truncated   Exclude intact TEs that are <90%% of the length of the
+                        matching TE in --weight_by (matched by feature_id)
 """
+
 import argparse
 import os
 import sys
@@ -186,9 +180,6 @@ def extract_intact_TEs(records, genome):
       - The feature_id contains an LTR length field (e.g., ~LTRlen:4).
       - The extracted sequence is assumed to consist of a 5' LTR, an internal region,
         and a 3' LTR. The script will replace the 3' LTR with a copy of the 5' LTR.
-        For example, if the sequence is "GCTAGCGGCACG" with LTRlen 4, then the 5' LTR is "GCTA"
-        and the internal region is "GCGG", and the 3' LTR ("CACG") is replaced by "GCTA"
-        yielding a final sequence of "GCTAGCGGGCTA".
     
     Returns a list of tuples: (fasta_header, sequence)
     """
@@ -208,7 +199,6 @@ def extract_intact_TEs(records, genome):
             internal = seq[ltr_len:-ltr_len]
             seq = five + internal + five
 
-#       out.append((rec['name'], seq))
         out.append((rec['feature_id'], seq))
     return out
 
@@ -219,22 +209,19 @@ def process_library_fasta(lib_fasta):
     fix LTR entries by copying 5' LTR to 3' end.
     """
     out = []
-#   for rec in SeqIO.parse(lib_fasta, "fasta"):
-#       header = rec.description
     for rec in SeqIO.parse(lib_fasta, "fasta"):
         # pull only the first token of the header, then strip any ";"-attrs
         name = rec.description.split()[0]
         feature_id, _ = parse_attributes(name)
         seq = str(rec.seq)
-#       _, te_class, _, ltr_len = extract_TE_info(header.split()[0])
         _, te_class, _, ltr_len = extract_TE_info(feature_id)
         if te_class == "LTR" and ltr_len and len(seq) >= 2 * ltr_len:
             five = seq[:ltr_len]
             internal = seq[ltr_len:-ltr_len]
             seq = five + internal + five
-#       out.append((header, seq))
         out.append((feature_id, seq))
     return out
+
 
 def write_fasta(entries, out_file):
     """Write (header, seq) pairs to FASTA, wrapping at 60 bp."""
@@ -326,8 +313,8 @@ def weighted_resample(entries, guide_fasta, out_base, *,
                         max(te_lengths.max(), guide_lengths.max()), 1000)
 
         plt.figure()
-        plt.plot(x, kde_te(x),                       label="Original TE")
-        plt.plot(x, kde_guide(x),                    label="Guide")
+        plt.plot(x, kde_te(x),                        label="Original TE")
+        plt.plot(x, kde_guide(x),                     label="Guide")
         plt.plot(x, gaussian_kde(sampled_lengths)(x), label="Resampled")
         plt.xlabel("Sequence length")
         plt.ylabel("Density")
@@ -338,6 +325,22 @@ def weighted_resample(entries, guide_fasta, out_base, *,
         print(f"KDE plot saved to {pdf}", flush=True)
 
     return resampled
+
+
+# ========= NEW helper: build guide length dict =========
+def build_guide_lengths(guide_fasta):
+    """
+    Build a dict: feature_id -> length from the guide (weight_by) FASTA.
+    Uses the same feature_id parsing logic (first token, strip ';' attrs).
+    """
+    guide_lengths = {}
+    for rec in SeqIO.parse(guide_fasta, "fasta"):
+        name = rec.description.split()[0]
+        feature_id, _ = parse_attributes(name)
+        guide_lengths[feature_id] = len(rec.seq)
+    return guide_lengths
+# =======================================================
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -352,13 +355,17 @@ def main():
 
     parser.add_argument('--genome', help='Genome FASTA (required with --bed)')
     parser.add_argument('--out_fasta', required=True, help='Output FASTA path')
-    parser.add_argument('--weight_by', help='Guide FASTA for length-weighted sampling')
+    parser.add_argument('--weight_by', help='Guide FASTA for length-weighted sampling and truncation checking')
     parser.add_argument('--duplication_mode', action='store_true',
                         help='Retain all original sequences and duplicate additional copies according to importance weights (only with --weight_by)')
     parser.add_argument('--plot_kde_comparison', action='store_true',
                         help='Save KDE comparison plot to PDF')
     parser.add_argument('--exclude_missing_ltr_len', action='store_true',
                         help='Exclude intact LTR elements missing LTR length info (~LTRlen)')
+    # ========= NEW flag =========
+    parser.add_argument('--exclude_truncated', action='store_true',
+                        help='Exclude intact TEs that are <90%% of the length of the matching TE in --weight_by')
+    # ============================
 
     args = parser.parse_args()
 
@@ -388,8 +395,40 @@ def main():
             filtered.append((header, seq))
         entries = filtered
 
-    # Genome-mode: weighted resampling
-    if not args.lib and args.weight_by:
+    # ========= NEW: exclude_truncated (requires weight_by) =========
+    if args.exclude_truncated:
+        if not args.weight_by:
+            parser.error('--exclude_truncated requires --weight_by')
+
+        guide_lengths = build_guide_lengths(args.weight_by)
+        kept = []
+        dropped = 0
+        missing_guide = 0
+
+        for header, seq in entries:
+            guide_len = guide_lengths.get(header)
+            if guide_len is None:
+                # No reference in weight_by → keep (cannot judge truncation)
+                missing_guide += 1
+                kept.append((header, seq))
+                continue
+
+            if len(seq) >= 0.9 * guide_len:
+                kept.append((header, seq))
+            else:
+                dropped += 1
+
+        entries = kept
+        print(
+            f"exclude_truncated: removed {dropped} sequences <90% of guide length; "
+            f"{missing_guide} sequences had no guide match and were kept.",
+            file=sys.stderr,
+            flush=True
+        )
+    # ===============================================================
+
+    # Genome-mode: weighted resampling (applied *after* truncation filter)
+    if (not args.lib) and args.weight_by:
         base = os.path.splitext(os.path.basename(args.out_fasta))[0]
         entries = weighted_resample(
             entries,
@@ -401,6 +440,7 @@ def main():
 
     write_fasta(entries, args.out_fasta)
     print(f"Processed {len(entries)} entries → {args.out_fasta}", flush=True)
+
 
 if __name__ == '__main__':
     main()

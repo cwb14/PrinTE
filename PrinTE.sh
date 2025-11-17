@@ -28,7 +28,7 @@
 #  (6) New options -tk/--TE_mut_k and -tmx/--TE_mut_Mmax replace the old TE_mut_in parameter.
 #
 #  (7) New parallel versions of internal scripts:
-#         - Use 'shared_ltr_inserter_parallel.py' (updated CLI: -n_intact/-p_intact plus -n_frag/-p_frag)
+#         - Use 'shared_ltr_inserter_parallel2.py' (updated CLI: -n_intact/-p_intact plus -n_frag/-p_frag)
 #         - Use 'nest_inserter_parallel.py' with '-m' for threads and optional --disable_genes (-dg).
 #
 #  (8) New flag -bo, --burnin_only:
@@ -207,6 +207,7 @@ TE_mut_k=10
 TE_mut_Mmax=20
 sel_coeff=0
 TsTv=1.0
+mutation_bins=""
 
 while [[ $# -gt 0 ]]; do
   key="$1"
@@ -309,6 +310,9 @@ while [[ $# -gt 0 ]]; do
       shift; shift;;
     -tmx|--TE_mut_Mmax)
       TE_mut_Mmax="$2"
+      shift; shift;;
+    -mb|--mutation_bins)
+      mutation_bins="$2"
       shift; shift;;
     -bo|--burnin_only)
       burnin_only=1
@@ -504,11 +508,18 @@ if [[ "$skip_burnin" -eq 0 ]]; then
     
     cmd+=" -TsTv ${TsTv}"
     cmd+=" -bed backbone.bed -output burnin -seed ${seed} -TE_ratio ${TE_ratio} -stat_out burnin.stat"
-    cmd+=" -k ${TE_mut_k} -Mmax ${TE_mut_Mmax} -pdf_out burnin_mut_dist.pdf -m ${threads}"
+
+    if [[ -n "$mutation_bins" ]]; then
+        # Use user-provided bins: script will ignore k/Mmax and disable the decay plot internally
+        cmd+=" -mutation_bins ${mutation_bins} -m ${threads}"
+    else
+        # Default behavior: exponential decay model + PDF plot
+        cmd+=" -k ${TE_mut_k} -Mmax ${TE_mut_Mmax} -pdf_out burnin_mut_dist.pdf -m ${threads}"
+    fi
     echo "Running: $cmd" | tee -a "$LOG"
     eval $cmd >> "$LOG" 2>> "$ERR"
     if [ $? -ne 0 ]; then
-        echo "Error running shared_ltr_inserter_parallel.py" | tee -a "$ERR"
+        echo "Error running shared_ltr_inserter_parallel2.py" | tee -a "$ERR"
         exit 1
     fi
 fi
@@ -671,6 +682,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
     --genome gen${current_gen}_final.fasta \
     --bed    gen${current_gen}_final.bed \
     --weight_by lib_clean.fa --exclude_missing_ltr_len \
+    --exclude_truncated \
     --out_fasta gen${current_gen}_final.lib"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"

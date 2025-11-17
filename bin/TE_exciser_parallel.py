@@ -426,6 +426,7 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
             # **tag test**: only if both flanks agree (both have tag, or both None)
             and (group[0].tag == group[2].tag)
         )
+
         if can_consolidate:
             rem_len = group[1].length()
             chrom = group[1].chrom
@@ -442,14 +443,30 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
                                  new_strand, new_tsd, -1, tag=new_tag)
             new_entry.subtype = "CONSOLIDATED_NEST"
             new_entries.append(new_entry)
+
         else:
             # either not eligible or tags disagree → process each member individually
+
+            ### NEW: determine which TE flanks (if any) are fully removed
+            flank1 = group[0] if is_te_group else None
+            mid    = group[1]
+            flank2 = group[2] if is_te_group else None
+
+            # treat a flank as "removed" only if it is in to_remove and NOT a partial excision
+            flank1_removed = (
+                is_te_group and flank1 in to_remove and id(flank1) not in partial_info
+            )
+            flank2_removed = (
+                is_te_group and flank2 in to_remove and id(flank2) not in partial_info
+            )
+            ### END NEW
+
             for e in group:
                 if e in to_remove:
                     if id(e) in partial_info:
                         ltr_val = partial_info[id(e)]
                         rem_len = e.end - (e.start + ltr_val)
-                        removals_by_chrom[e.chrom].append( (e.start + ltr_val, e.end, rem_len) )
+                        removals_by_chrom[e.chrom].append((e.start + ltr_val, e.end, rem_len))
                         print(f"Partial excision in group {gid}: {e.chrom}:{e.start}-{e.end} reduced to {e.start}-{e.start+ltr_val} (removed {rem_len} bases)")
                         e.end = e.start + ltr_val
                         new_feature_id = e.feature_id + "_SOLO"
@@ -462,9 +479,25 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
                     else:
                         tsd_len = len(e.tsd) if e.tsd != "NA" else 0
                         rem_len = e.length() - tsd_len
-                        removals_by_chrom[e.chrom].append( (e.start, e.end - tsd_len, rem_len) )
+                        removals_by_chrom[e.chrom].append((e.start, e.end - tsd_len, rem_len))
                         print(f"Full excision in nest group {gid}: {e.chrom}:{e.start}-{e.end} (removed {rem_len} bases)")
                 else:
+                    ### NEW: if this is the surviving flank of a TE nest group, mark it as _FRAG
+                    if is_te_group and e.subtype in ("CUT_PAIR_TE_1", "CUT_PAIR_TE_2"):
+                        make_frag = (
+                            (e is flank1 and flank2_removed) or
+                            (e is flank2 and flank1_removed)
+                        )
+                        if make_frag:
+                            base, sep, rest = e.feature_id.partition('#')
+                            if not base.endswith("_FRAG"):
+                                new_feature_id = base + "_FRAG" + (sep + rest if sep else "")
+                                e.feature_id = new_feature_id
+                                if e.supp:
+                                    e.name = new_feature_id + ";" + ";".join(e.supp)
+                                else:
+                                    e.name = new_feature_id
+                    ### END NEW
                     new_entries.append(e)
                     
     # Process non-group entries.
@@ -491,6 +524,61 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
                     print(f"Full excision: {e.chrom}:{e.start}-{e.end} (removed {rem_len} bases)")
             else:
                 new_entries.append(e)
+ 
+     # -------------------------------------------------------------------------
+    # Second-layer FRAG logic for multi-nesting:
+    # If an entry has "partner" TE(s) with same TSD & strand and NAME exact/prefix
+    # match within 100 lines, and at least one partner was fully excised (not partial),
+    # then the surviving entry is marked as _FRAG.
+    # This captures outer multi-nest pairs like the Os0632 example.
+    # -------------------------------------------------------------------------
+    def mark_frag_multinest(all_entries, removed_set, partial_info):
+        # Only count fully-removed entries (not partial SOLO events)
+        full_removed_ids = {id(e) for e in removed_set if id(e) not in partial_info}
+
+        for e in all_entries:
+            # Skip entries that were fully removed
+            if id(e) in full_removed_ids:
+                continue
+            # Only consider TEs, not genes
+            if e.feature_id.startswith("gene"):
+                continue
+            # Must have supplemental fields to qualify as a multi-nest candidate
+            if not e.supp:
+                continue
+
+            has_removed_partner = False
+            for other in all_entries:
+                if other is e:
+                    continue
+                # Neighborhood check (100 lines)
+                if abs(other.lineno - e.lineno) > 100:
+                    continue
+                # Must share TSD and strand
+                if other.tsd != e.tsd or other.strand != e.strand:
+                    continue
+                # NAME exact or prefix match
+                if not (e.name.startswith(other.name) or other.name.startswith(e.name)):
+                    continue
+                # Partner must have been fully removed
+                if id(other) in full_removed_ids:
+                    has_removed_partner = True
+                    break
+
+            if has_removed_partner:
+                base, sep, rest = e.feature_id.partition('#')
+                # Avoid double-tagging or tagging SOLOs
+                if not base.endswith("_FRAG"):
+                    new_feature_id = base + "_FRAG" + (sep + rest if sep else "")
+                    e.feature_id = new_feature_id
+                    if e.supp:
+                        e.name = new_feature_id + ";" + ";".join(e.supp)
+                    else:
+                        e.name = new_feature_id
+
+    # Apply multi-nest FRAG tagging (works for both outer and inner pairs)
+    mark_frag_multinest(entries, to_remove, partial_info)
+
     
     updated_genome = {}
     for chrom, rec in genome_records.items():
@@ -832,3 +920,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
