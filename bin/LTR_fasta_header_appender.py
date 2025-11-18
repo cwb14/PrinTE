@@ -10,9 +10,12 @@ def main():
     parser.add_argument('-domains', required=True, help='Domains TSV file')
     parser.add_argument('-div_type', default='K2P', choices=['raw', 'K2P', 'JC69', 'none'],
                         help='Divergence type (raw, K2P, JC69, none)')
-    # New flag to exclude records with no hits in the domains file
-    parser.add_argument('-exclude_no_hits', action='store_true',
-                        help='Exclude FASTA sequences that do not occur in domains file')
+    # Only applies to LTR elements
+    parser.add_argument(
+        '-exclude_no_hits',
+        action='store_true',
+        help='Exclude LTR-RT FASTA sequences (class_part=LTR) that do not occur in domains file'
+    )
     args = parser.parse_args()
 
     # Read domains data into a dictionary using original headers as keys
@@ -39,6 +42,7 @@ def main():
     # Process each FASTA record to correct headers and ensure unique names
     corrected_records = []
     original_headers = []
+    class_parts = []  # track class_part for each record
     name_counts = {}
 
     for record in SeqIO.parse(args.fasta, 'fasta'):
@@ -58,6 +62,9 @@ def main():
             if remaining_after_class:
                 super_match = re.match(r'^([^\s]*)', remaining_after_class)
                 superfamily_part = super_match.group(1).strip() if super_match and super_match.group(1).strip() else 'Unknown'
+
+        class_parts.append(class_part)
+
         # Generate corrected header (without uniqueness yet)
         corrected_header = f"{name_part}#{class_part}/{superfamily_part}"
 
@@ -78,12 +85,16 @@ def main():
 
     # Prepare final records list based on the -exclude_no_hits flag
     final_records = []
-    for original_header, record in zip(original_headers, corrected_records):
-        if args.exclude_no_hits and original_header not in domains_data:
-            # Skip records that don't have a corresponding domain hit
+    for original_header, record, class_part in zip(original_headers, corrected_records, class_parts):
+
+        # Only exclude if:
+        #   - -exclude_no_hits is set
+        #   - this is an LTR element
+        #   - and the original header has no domain hit
+        if args.exclude_no_hits and class_part == 'LTR' and original_header not in domains_data:
             continue
 
-        # Append LTR information if available
+        # Append LTR information if available (for any class where there *is* a hit)
         if original_header in domains_data:
             data = domains_data[original_header]
             if args.div_type == 'none':
