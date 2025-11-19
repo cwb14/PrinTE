@@ -151,7 +151,8 @@ Options:
 
 ########## GENERAL USE ##########
   -m,  --mutation_rate       DNA Mutation rate (default: 1.3e-8)
-  -mgs, --max_size           Maximum genome size allowed before breaking loop in bytes (e.g., 100M, 1G)
+  -mxgs, --max_size           Maximum genome size allowed before breaking loop in bytes (e.g., 100M, 1G)
+  -mngs, --min_size           Minimum genome size allowed before breaking loop in bytes (e.g., 50M, 200M)
   -s,  --seed                Random seed (default: 42)
   -r,  --TE_ratio            TE ratio file (default: ${TOOL_DIR}/ratios.tsv)
   -t,  --threads             Number of threads (default: 4)
@@ -323,8 +324,11 @@ while [[ $# -gt 0 ]]; do
     -dg|--disable_genes)
       disable_genes=1
       shift;;
-    -mgs|--max_size)
+    -mxgs|--max_size)
       max_size="$2"
+      shift; shift;;
+    -mngs|--min_size)
+      min_size="$2"
       shift; shift;;
     -sf|--sel_coeff)
       sel_coeff="$2"
@@ -358,6 +362,7 @@ solo_rate="${solo_rate:-95}"
 k="${k:-10}"
 sigma="${sigma:-1.0}"
 max_size="${max_size:-}" # If not set, remains empty
+min_size="${min_size:-}" # If not set, remains empty
 TsTv="${TsTv:-1.0}"
 pergen_select="${pergen_select:-2}"   # how many evenly spaced generations to select (incl. burnin and max)
 if [[ -z "$intact_TE_num" && -z "$intact_TE_percent" ]]; then
@@ -553,6 +558,52 @@ if [[ -n "$max_size" ]]; then
   echo "Max genome size set to $raw → $max_bytes bytes" | tee -a "$LOG"
 fi
 
+if [[ -n "$max_size" ]]; then
+  raw="$max_size"
+  unit="${raw: -1}"              # last character: M, G, or digit
+  num="${raw%[MGmg]}"            # strip a possible M/G
+  case "$unit" in
+    [Mm]) max_bytes=$(( num * 1024 * 1024 )) ;;
+    [Gg]) max_bytes=$(( num * 1024 * 1024 * 1024 )) ;;
+    *)    # assume bytes if purely numeric
+      if [[ "$raw" =~ ^[0-9]+$ ]]; then
+        max_bytes=$raw
+      else
+        echo "Error: invalid format for --max_size: $raw" | tee -a "$ERR"
+        exit 1
+      fi
+      ;;
+  esac
+  echo "Max genome size set to $raw → $max_bytes bytes" | tee -a "$LOG"
+fi
+
+if [[ -n "$min_size" ]]; then
+  raw="$min_size"
+  unit="${raw: -1}"              # last character: M, G, or digit
+  num="${raw%[MGmg]}"            # strip a possible M/G
+  case "$unit" in
+    [Mm]) min_bytes=$(( num * 1024 * 1024 )) ;;
+    [Gg]) min_bytes=$(( num * 1024 * 1024 * 1024 )) ;;
+    *)    # assume bytes if purely numeric
+      if [[ "$raw" =~ ^[0-9]+$ ]]; then
+        min_bytes=$raw
+      else
+        echo "Error: invalid format for --min_size: $raw" | tee -a "$ERR"
+        exit 1
+      fi
+      ;;
+  esac
+  echo "Min genome size set to $raw → $min_bytes bytes" | tee -a "$LOG"
+fi
+
+# If both are set, make sure the interval makes sense.
+if [[ -n "$min_size" && -n "$max_size" ]]; then
+  if (( min_bytes > max_bytes )); then
+    echo "Error: --min_size ($min_bytes bytes) cannot be greater than --max_size ($max_bytes bytes)." | tee -a "$ERR"
+    exit 1
+  fi
+fi
+
 echo "=== Phase 2: Looping Generations ===" | tee -a "$LOG"
 
 # Calculate the total number of iterations.
@@ -712,8 +763,8 @@ for (( i=start_iter; i<=iterations; i++ )); do
   # record that we successfully reached this generation
   last_gen_done=$current_gen
   
-  # Check if max_size is exceeded. 
-  if [[ -n "$max_size" ]]; then
+  # Check if genome size is outside the allowed bounds (if any were provided).
+  if [[ -n "$max_size" || -n "$min_size" ]]; then
     fasta="gen${current_gen}_final.fasta"
     if [[ -f "$fasta" ]]; then
       if [[ "$OS" == "Darwin" ]]; then
@@ -721,9 +772,15 @@ for (( i=start_iter; i<=iterations; i++ )); do
       else
           actual_bytes=$(stat -c%s "$fasta")  # Linux
       fi
-      
-      if (( actual_bytes > max_bytes )); then
+
+      if [[ -n "$max_size" && $actual_bytes -gt $max_bytes ]]; then
         echo "Maximum genome size exceeded: $actual_bytes bytes > $max_bytes bytes" | tee -a "$LOG"
+        echo "Stopping at generation ${current_gen}." | tee -a "$LOG"
+        break
+      fi
+
+      if [[ -n "$min_size" && $actual_bytes -lt $min_bytes ]]; then
+        echo "Minimum genome size reached: $actual_bytes bytes < $min_bytes bytes" | tee -a "$LOG"
         echo "Stopping at generation ${current_gen}." | tee -a "$LOG"
         break
       fi
@@ -761,7 +818,7 @@ echo "Running: $cmd" | tee -a "$LOG"
 eval $cmd
 
 # 3. Generate overall statistics report.
-cmd="python ${UTIL_DIR}/stats_report.py --bed \$(ls gen*_final.bed | sort -V) --out_prefix stat"
+cmd="python ${UTIL_DIR}/stats_report.py --bed \$(ls gen*_final.bed burnin.bed | sort -V) --out_prefix stat"
 echo "Running: $cmd" | tee -a "$LOG"
 eval $cmd
 
