@@ -43,15 +43,27 @@ def parse_pass(path):
                 continue
             parts = line.split()
             loc = parts[0]
-            if ':' not in loc or '..' not in loc:
+            # Expect something like:
+            #   chr:start..end   OR   chr:start-end
+            if ':' not in loc:
                 continue
             chrom, coords = loc.split(':', 1)
-            start_str, end_str = coords.split('..', 1)
+
+            # Support both ".." and "-" as range separators
+            if '..' in coords:
+                start_str, end_str = coords.split('..', 1)
+            elif '-' in coords:
+                start_str, end_str = coords.split('-', 1)
+            else:
+                # Unknown format
+                continue
+
             try:
                 start = int(start_str)
                 end = int(end_str)
             except ValueError:
                 continue
+
             # normalize coordinates
             if start > end:
                 start, end = end, start
@@ -67,9 +79,11 @@ def parse_pass_scn(path):
             if not line_strip or line_strip.startswith('#'):
                 continue
             first = line_strip.split()[0]
-            if ':' in first and '..' in first:
+            # PASS-like formats: chr:start..end or chr:start-end
+            if ':' in first and ('..' in first or '-' in first):
                 return parse_pass(path)
             else:
+                # SCN-like formats where the first column is numeric coordinate
                 return parse_scn(path)
     return []
 
