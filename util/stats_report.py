@@ -156,10 +156,15 @@ def main():
     frag_TE_list = []
     file_bases = []
 
-    # Process each BED file
     for bed_file in args.bed:
         file_base = os.path.splitext(os.path.basename(bed_file))[0]
+
+        # Treat burnin.bed as generation 0
+        if file_base == "burnin":
+            file_base = "gen0000000_final"
+
         file_bases.append(file_base + "_Count")
+
         overall, intact_TE, frag_TE = process_bed_file(bed_file)
         overall_list.append(overall)
         intact_TE_list.append(intact_TE)
