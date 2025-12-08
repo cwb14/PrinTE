@@ -690,8 +690,13 @@ for (( i=start_iter; i<=iterations; i++ )); do
   fi
 
   # strip out column 7 from the .bed in-place
-  tmp="${prev_bed}.tmp"
-  cut -f1-6 "${prev_bed}" > "$tmp" && mv "$tmp" "${prev_bed}"
+  # BUT do not do this on the user-provided BED passed via --bed
+  if [[ -z "$input_bed" || "$prev_bed" != "$input_bed" ]]; then
+    tmp="${prev_bed}.tmp"
+    cut -f1-6 "${prev_bed}" > "$tmp" && mv "$tmp" "${prev_bed}"
+  else
+    echo "Skipping column 7 stripping for user-provided BED file: ${prev_bed}" | tee -a "$LOG"
+  fi
 
   # (2b) Insert new TEs (allowing for nesting) using the parallel nest inserter.
   # Now using nest_inserter_parallel.py and adding --disable_genes if specified.
