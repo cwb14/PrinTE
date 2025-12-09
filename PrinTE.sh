@@ -990,7 +990,7 @@ for i_idx in "${desc_idx[@]}"; do
   eval $cmd
 
   # (b2) Kmer2LTR
-  cmd="python ${TOOL_DIR}/Kmer2LTR/Kmer2LTR.py -p ${threads} -i ${final_prefix}_LTR.fasta -D ${final_prefix}_LTR.domain -o ${final_prefix}_LTR.tsv -u ${mutation_rate} --no-plot"
+  cmd="python ${TOOL_DIR}/Kmer2LTR/Kmer2LTR.py -p ${threads} -i ${final_prefix}_LTR.fasta -D ${final_prefix}_LTR.domain -o ${final_prefix}_LTR.tsv -u ${mutation_rate} --no-plot --purge-subdirs"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd
 
