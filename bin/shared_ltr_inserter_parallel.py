@@ -248,6 +248,7 @@ def mutate_sequence(seq, mutation_rate, ts_tv_ratio):
 
     transitioned = 0
     transverted = 0
+    mutated_bases = 0
     mutated = []
 
     for base in seq:
@@ -261,13 +262,14 @@ def mutate_sequence(seq, mutation_rate, ts_tv_ratio):
                 else:
                     new = random.choice(tv_map[b])
                     transverted += 1
+                mutated_bases += 1
                 mutated.append(new if base.isupper() else new.lower())
             else:
                 mutated.append(base)
         else:
             mutated.append(base)
 
-    return ''.join(mutated)
+    return ''.join(mutated), mutated_bases, transitioned, transverted
 
 def plot_decay_function(k, Mmax, pdf_out):
     M_values = np.linspace(0, Mmax, 500)
@@ -284,6 +286,87 @@ def plot_decay_function(k, Mmax, pdf_out):
     plt.savefig(pdf_out, format='pdf')
     plt.close()
     print(f"Decay function plot saved to {pdf_out}.")
+
+def plot_decay_with_empirical(k, Mmax, mutation_bins, intact_percents, frag_percents, pdf_out):
+    # Decide x-range (in percent units)
+    if mutation_bins is not None:
+        xmax = max(1.0, max(b['end'] for b in mutation_bins) * 100.0)  # rates -> %
+    else:
+        xmax = max(1.0, float(Mmax))
+
+    plt.figure(figsize=(6,4))
+
+    # Use a common plotting grid so "target" and "empirical" are comparable
+    plot_edges = np.linspace(0.0, xmax, 60)
+    plot_widths = np.diff(plot_edges)
+    plot_mids = (plot_edges[:-1] + plot_edges[1:]) / 2.0
+
+    if mutation_bins is not None:
+        # Convert original bins (in 0–1 rate space) into a smooth density on plot_edges
+        # by distributing each bin's probability mass into overlapping plot bins.
+        target_mass = np.zeros(len(plot_widths), dtype=float)
+
+        prev = 0.0
+        for b in mutation_bins:
+            w = b['cum'] - prev   # probability mass in this original bin
+            prev = b['cum']
+            if w <= 0:
+                continue
+
+            s = b['start'] * 100.0  # to %
+            e = b['end']   * 100.0
+            if e <= s:
+                continue
+
+            # distribute mass proportional to overlap length
+            # find overlap with each plot bin
+            for i in range(len(plot_widths)):
+                a = plot_edges[i]
+                c = plot_edges[i+1]
+                overlap = max(0.0, min(e, c) - max(s, a))
+                if overlap > 0:
+                    target_mass[i] += w * (overlap / (e - s))
+
+        # Convert mass per plot bin to density per percent
+        target_density = np.divide(
+            target_mass, plot_widths,
+            out=np.zeros_like(target_mass),
+            where=plot_widths > 0
+        )
+
+        plt.plot(plot_mids, target_density, lw=2, label="Target (bins)")
+
+    else:
+        # Original exponential mode (as before)
+        M_values = np.linspace(0, xmax, 500)
+        norm_const = 1 - math.exp(-k)
+        f_values = (k / (xmax * norm_const)) * np.exp(-k * (M_values / xmax))
+        plt.plot(M_values, f_values, lw=2, label="Target (exponential)")
+
+    # Helper for empirical curves (histogram density -> line) using the SAME plot_edges
+    def plot_empirical(data, label):
+        if not data:
+            return
+        data = np.array(data, dtype=float)
+        data = data[(data >= 0) & (data <= xmax)]
+        if data.size == 0:
+            return
+        hist, _ = np.histogram(data, bins=plot_edges, density=True)
+        plt.plot(plot_mids, hist, lw=2, label=label)
+
+    plot_empirical(intact_percents, "Empirical intact")
+    plot_empirical(frag_percents, "Empirical fragmented")
+
+    plt.xlabel("Mutation Percent (%)", fontsize=12)
+    plt.ylabel("Probability Density", fontsize=12)
+    plt.title("Target vs Empirical Mutation Distributions", fontsize=14)
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(pdf_out, format='pdf')
+    plt.close()
+    print(f"Target + empirical mutation plot saved to {pdf_out}.")
+
 
 def parse_mutation_bins(file_path):
     """
@@ -358,6 +441,82 @@ def sample_mutation_rate(mutation_bins, k, Mmax):
     u = random.random()
     mutation_percent = - (Mmax / k) * math.log(1 - u * (1 - math.exp(-k)))
     return mutation_percent / 100.0
+
+def extract_ltr_length(header):
+    """
+    Extract LTR length from TE header metadata like:
+      ...#LTR/Copia~LTRlen:1000~LTRlen:1000
+    Returns an int or None if not found / invalid.
+    If multiple LTRlen values exist, uses the first but warns if they disagree.
+    """
+    matches = re.findall(r"LTRlen:(\d+)", header)
+    if not matches:
+        return None
+    vals = [int(x) for x in matches if x.isdigit()]
+    if not vals:
+        return None
+    if len(set(vals)) > 1:
+        print(f"Warning: Multiple different LTRlen values in header '{header}'. Using first: {vals[0]}")
+    return vals[0]
+
+
+def mutate_ltr3_from_ltr5(ltr5, target_divergence_percent, ts_tv_ratio):
+    """
+    Create a mutated 3' LTR by copying the 5' LTR and mutating EXACTLY
+    round(LTRlen * divergence%) positions.
+
+    Returns: (ltr3_mut, n_mut, n_ts, n_tv)
+    """
+    ltr5 = ltr5.upper()
+    L = len(ltr5)
+    if L == 0:
+        return ltr5, 0, 0, 0
+
+    # exact number of differences
+    n_mut = int(round(L * (target_divergence_percent / 100.0)))
+    n_mut = max(0, min(L, n_mut))
+    if n_mut == 0:
+        return ltr5, 0, 0, 0
+
+    ts_map = {'A': 'G', 'G': 'A', 'C': 'T', 'T': 'C'}
+    tv_map = {
+        'A': ['C', 'T'], 'G': ['C', 'T'],
+        'C': ['A', 'G'], 'T': ['A', 'G']
+    }
+
+    transitioned = 0
+    transverted = 0
+
+    ltr3 = list(ltr5)
+    positions = random.sample(range(L), k=n_mut)
+
+    p_ts = ts_tv_ratio / (ts_tv_ratio + 1.0) if (ts_tv_ratio is not None) else 0.5
+
+    for i in positions:
+        b = ltr5[i]
+        if b not in ts_map:
+            # For non-ACGT, leave it unchanged (and reduce actual divergence by 1)
+            # Alternatively, you could force-change N to A/C/G/T, but this keeps it conservative.
+            continue
+
+        if random.random() < p_ts:
+            new = ts_map[b]
+            transitioned += 1
+        else:
+            new = random.choice(tv_map[b])
+            transverted += 1
+
+        # Ensure we actually change the base (should always be true here)
+        if new == b:
+            # ultra-defensive fallback
+            choices = [x for x in "ACGT" if x != b]
+            new = random.choice(choices)
+
+        ltr3[i] = new
+
+    # NOTE: If some chosen positions were non-ACGT, true divergence may be slightly < requested.
+    # If you want to guarantee EXACT divergence even with Ns, we can re-sample positions until n_mut changes occur.
+    return ''.join(ltr3), n_mut, transitioned, transverted
 
 def add_frag_tag(header):
     """
@@ -434,6 +593,7 @@ def process_chromosome(task):
      mode_intact, target_intact, mode_frag, target_frag,
      te_headers, te_info_dict, te_dict,
      te_type_to_headers, intact_weights, frag_weights,
+     mutation_bins,
      k, Mmax, seed_offset, ts_tv_ratio) = task
 
     if seed_offset is not None:
@@ -444,6 +604,8 @@ def process_chromosome(task):
     chr_length = data['length']
     exclusion_intervals = list(data['exclusion'])
     local_te_bed_entries = []
+    empirical_intact = []
+    empirical_frag = []
 
     total_TE_bp_inserted_intact = 0
     total_insertions_done_intact = 0
@@ -515,9 +677,40 @@ def process_chromosome(task):
                 te_sequence = te_dict[selected_te]
                 # mutation
                 u = random.random()
-                mutation_percent = - (Mmax / k) * math.log(1 - u * (1 - math.exp(-k))) if Mmax > 0 else 0.0
-                mutation_rate = mutation_percent / 100.0
-                te_sequence = mutate_sequence(te_sequence, mutation_rate, ts_tv_ratio)
+                # mutation_percent = - (Mmax / k) * math.log(1 - u * (1 - math.exp(-k))) if Mmax > 0 else 0.0
+                # mutation (rate is 0–1)
+                mutation_rate = sample_mutation_rate(mutation_bins, k, Mmax)
+
+                te_sequence_before = te_sequence
+
+                # NEW: LTRlen-aware mutation for intact LTRs
+                ltr_len = None
+                if (te_class or "").strip().lower() == "ltr":
+                    ltr_len = extract_ltr_length(selected_te)
+
+                if ltr_len is not None and ltr_len > 0 and len(te_sequence_before) >= 2 * ltr_len:
+                    five_ltr = te_sequence_before[:ltr_len]
+                    internal = te_sequence_before[ltr_len:len(te_sequence_before) - ltr_len]
+
+                    # target divergence percent comes from the SAME distribution you already use
+                    target_div_pct = mutation_rate * 100.0
+
+                    three_ltr_mut, n_mut, n_ts, n_tv = mutate_ltr3_from_ltr5(
+                        five_ltr, target_div_pct, ts_tv_ratio
+                    )
+
+                    te_sequence = five_ltr + internal + three_ltr_mut
+
+                    # empirical percent: divergence within the 3' LTR relative to 5' LTR
+                    emp_pct = (n_mut / float(ltr_len)) * 100.0 if ltr_len > 0 else 0.0
+                    empirical_intact.append(emp_pct)
+
+                else:
+                    # fallback: original behavior (mutate entire TE)
+                    te_sequence, n_mut, n_ts, n_tv = mutate_sequence(te_sequence_before, mutation_rate, ts_tv_ratio)
+
+                    emp_pct = (n_mut / len(te_sequence_before) * 100.0) if len(te_sequence_before) > 0 else 0.0
+                    empirical_intact.append(emp_pct)
 
                 TE_length = len(te_sequence)
                 deletion_length = TE_length + tsd_length
@@ -580,9 +773,14 @@ def process_chromosome(task):
 
                 # mutation
                 u = random.random()
-                mutation_percent = - (Mmax / k) * math.log(1 - u * (1 - math.exp(-k))) if Mmax > 0 else 0.0
-                mutation_rate = mutation_percent / 100.0
-                te_sequence = mutate_sequence(te_sequence, mutation_rate, ts_tv_ratio)
+                # mutation_percent = - (Mmax / k) * math.log(1 - u * (1 - math.exp(-k))) if Mmax > 0 else 0.0
+                # mutation (rate is 0–1)
+                mutation_rate = sample_mutation_rate(mutation_bins, k, Mmax)
+                te_sequence_before = te_sequence
+                te_sequence, n_mut, n_ts, n_tv = mutate_sequence(te_sequence_before, mutation_rate, ts_tv_ratio)
+
+                emp_pct = (n_mut / len(te_sequence_before) * 100.0) if len(te_sequence_before) > 0 else 0.0
+                empirical_frag.append(emp_pct)
 
                 tsd_length = 0
                 TE_length = len(te_sequence)  # no TSD
@@ -653,7 +851,8 @@ def process_chromosome(task):
     modified_seq = ''.join(seq)
     return (chrom, modified_seq, local_te_bed_entries,
             total_insertions_done_intact, total_TE_bp_inserted_intact,
-            total_insertions_done_frag, total_TE_bp_inserted_frag)
+            total_insertions_done_frag, total_TE_bp_inserted_frag,
+            empirical_intact, empirical_frag)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -726,13 +925,7 @@ def main():
         mutation_bins = parse_mutation_bins(args.mutation_bins)
 
     # Plot decay function only if we're using the exponential mode
-    if mutation_bins is not None:
-        print("Mutation bin file provided. Ignoring -k and -Mmax and skipping exponential decay plot.")
-    else:
-        if args.Mmax > 0:
-            plot_decay_function(args.k, args.Mmax, args.pdf_out)
-        else:
-            print("Mmax is 0. Skipping mutation decay plot since mutation is disabled.")
+    # Do NOT plot yet; empirical lists are only available after insertions.
 
     genome_path = args.genome
     te_path = args.TE
@@ -889,6 +1082,7 @@ def main():
              mode_frag, t_frag,
              te_headers, te_info_dict, te_dict,
              te_type_to_headers, intact_weights, frag_weights,
+             mutation_bins,
              k, Mmax,
              (args.seed + idx) if args.seed is not None else None,
              args.TsTv)
@@ -907,17 +1101,34 @@ def main():
     total_TE_bp_inserted_intact_global = 0
     total_insertions_done_frag_global = 0
     total_TE_bp_inserted_frag_global = 0
+    
+    empirical_intact_all = []
+    empirical_frag_all = []
 
     for res in results:
         (chrom, mod_seq, chrom_te_entries,
          ins_done_intact, te_bp_intact,
-         ins_done_frag, te_bp_frag) = res
+         ins_done_frag, te_bp_frag,
+         emp_i, emp_f) = res
+
         modified_genome[chrom] = mod_seq
         te_bed_entries.extend(chrom_te_entries)
         total_insertions_done_intact_global += ins_done_intact
         total_TE_bp_inserted_intact_global += te_bp_intact
         total_insertions_done_frag_global += ins_done_frag
         total_TE_bp_inserted_frag_global += te_bp_frag
+
+        empirical_intact_all.extend(emp_i)
+        empirical_frag_all.extend(emp_f)
+
+    print(f"Empirical counts: intact={len(empirical_intact_all)} frag={len(empirical_frag_all)}")
+
+    if args.Mmax > 0 or mutation_bins is not None:
+        plot_decay_with_empirical(args.k, args.Mmax, mutation_bins,
+                                  empirical_intact_all, empirical_frag_all,
+                                  args.pdf_out)
+    else:
+        print("Mmax is 0 and no mutation bins provided. Skipping mutation plot.")
 
     # Combine gene BED entries and TE BED entries.
     output_bed_entries = gene_bed_entries + te_bed_entries
