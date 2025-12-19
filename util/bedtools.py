@@ -72,20 +72,78 @@ def parse_pass(path):
 
 
 def parse_pass_scn(path):
-    # detect format by first non-comment line
+    entries = []
     with open(path) as f:
+        # find first non-comment line
+        first_raw = None
+        first_line = None
         for line in f:
-            line_strip = line.strip()
-            if not line_strip or line_strip.startswith('#'):
+            raw = line.rstrip("\n")
+            s = line.strip()
+            if not s or s.startswith("#"):
                 continue
-            first = line_strip.split()[0]
-            # PASS-like formats: chr:start..end or chr:start-end
-            if ':' in first and ('..' in first or '-' in first):
-                return parse_pass(path)
+            first_raw = raw
+            first_line = s
+            break
+
+        if first_line is None:
+            return []
+
+        first_tok = first_line.split()[0]
+        is_pass = (':' in first_tok) and ('..' in first_tok or '-' in first_tok)
+
+        # helper: parse one PASS line (raw + stripped)
+        def parse_pass_line(raw, s):
+            parts = s.split()
+            loc = parts[0]
+            if ':' not in loc:
+                return None
+            chrom, coords = loc.split(':', 1)
+            if '..' in coords:
+                start_str, end_str = coords.split('..', 1)
+            elif '-' in coords:
+                start_str, end_str = coords.split('-', 1)
             else:
-                # SCN-like formats where the first column is numeric coordinate
-                return parse_scn(path)
-    return []
+                return None
+            try:
+                start = int(start_str); end = int(end_str)
+            except ValueError:
+                return None
+            if start > end:
+                start, end = end, start
+            return (chrom, start, end, raw)
+
+        # helper: parse one SCN line
+        def parse_scn_line(raw, s):
+            parts = s.split()
+            if len(parts) < 12:
+                return None
+            try:
+                start = int(parts[0]); end = int(parts[1])
+            except ValueError:
+                return None
+            chrom = parts[11]
+            if start > end:
+                start, end = end, start
+            return (chrom, start, end, raw)
+
+        # parse the first line + the rest from the same stream
+        parser = parse_pass_line if is_pass else parse_scn_line
+
+        first_parsed = parser(first_raw, first_line)
+        if first_parsed:
+            entries.append(first_parsed)
+
+        for line in f:
+            raw = line.rstrip("\n")
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            parsed = parser(raw, s)
+            if parsed:
+                entries.append(parsed)
+
+    return entries
 
 
 def parse_bed(path):
