@@ -25,7 +25,7 @@ def parse_scn(path):
                 end = int(parts[1])
             except ValueError:
                 continue
-            chrom = parts[11]
+            chrom = parts[-1]
             # normalize coordinates
             if start > end:
                 start, end = end, start
@@ -122,7 +122,7 @@ def parse_pass_scn(path):
                 start = int(parts[0]); end = int(parts[1])
             except ValueError:
                 return None
-            chrom = parts[11]
+            chrom = parts[-1]
             if start > end:
                 start, end = end, start
             return (chrom, start, end, raw)
