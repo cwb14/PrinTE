@@ -91,6 +91,7 @@ python synLTR/module2/ltrharvest.py \
     --tesorter-rule 100-100-10000000 \
     --size 500000
 
+# Checking quality of result. 
 python ./PrinTE/util/bedtools.py -pass_scn <( awk 'BEGIN{OFS="\t"} { sub(/#.*/, "", $1); print }' burnin_ltr2_kmer2ltr_dedup) -bed <(grep LTR  burnin.bed) -r 0.9
 Overlapping entries: 2094 (2094 unique)
 Entries unique to SCN/PASS file: 8
@@ -100,19 +101,11 @@ cat burnin_ltr2_kmer2ltr_dedup | cut -f 1 | awk -F '[:-]' '{sum += ($3 - $2)} EN
 10154145 / 168530035 = 6.025%
 # We targeted 6.645%... we got  6.025%. pretty close.
 
-# Grid PrinTE for optimal parameters. 
-nohup python PrinTE_gridsearch2.py --max-procs 8 --k-start 0 --k-end 10 --k-step 1 --ins-start 0.01 --ins-end 10.0 --ins-step 0.01 --del-start 0.001 --del-end 1.0 --del-step 0.001 --sr-start 5 --sr-end 95 --sr-step 5 --samples 500 &
-
+# Grid search (start broad).
+nohup python gridsearch.py --max-procs 8 --k-start 0 --k-end 10 --k-step 1 --ins-start 1e-10 --ins-end 1e-14 --ins-count 100 --del-start 1e-10 --del-end 1e-14 --del-count 100 --sr-start 5 --sr-end 95 --sr-step 5 --samples 100 &
 # Classify LTR-RTs de novo. 
-nohup bash run_module2_in_subdirs2.sh &
- 
-# Build matrix using results. 
-python build_composite_matrix5.py --ref-tsv Athal_ltr_kmer2ltr_dedup2 --ref-fasta Athal.fa --compare-script compare_genomes3.py --output composite_matrix_rms_1_1_1_1.tsv --alphas 1 1 1 1 --dist-metric rms --threads 50
- 
-python contour_plot2.py --input composite_matrix_rms_1_1_1_1.tsv
-
-
-# Second pass. 
-nohup python PrinTE_gridsearch3.py --max-procs 8 --k-start 0 --k-end 10 --k-step 1 --ins-start 1e-10 --ins-end 1e-14 --ins-count 100 --del-start 1e-10 --del-end 1e-14 --del-count 100 --sr-start 5 --sr-end 95 --sr-step 5 --samples 100 &
-python build_composite_matrix5.py --ref-tsv Athal_ltr_kmer2ltr_dedup2 --ref-fasta Athal.fa --compare-script compare_genomes3.py --output composite_matrix_rms_1_1_1_1.tsv --alphas 1 1 1 1 --dist-metric rms --threads 50
-python contour_plot5.py --input composite_matrix_rms_1_1_1_1.tsv
+discover_ltr.sh
+# Compile results.
+python build_composite_matrix.py --ref-tsv Athal_ltr_kmer2ltr_dedup2 --ref-fasta Athal.fa --compare-script compare_genomes3.py --output composite_matrix_rms_1_1_1_1.tsv --alphas 1 1 1 1 --dist-metric rms --threads 50
+# Sensittivey anaylsis.
+python contour_plot.py --input composite_matrix_rms_1_1_1_1.tsv
