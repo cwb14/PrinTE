@@ -106,6 +106,6 @@ nohup python gridsearch.py --max-procs 8 --k-start 0 --k-end 10 --k-step 1 --ins
 # Classify LTR-RTs de novo. 
 discover_ltr.sh
 # Compile results.
-python build_composite_matrix.py --ref-tsv Athal_ltr_kmer2ltr_dedup2 --ref-fasta Athal.fa --compare-script compare_genomes3.py --output composite_matrix_rms_1_1_1_1.tsv --alphas 1 1 1 1 --dist-metric rms --threads 50
+python build_composite_matrix.py --ref-tsv Athal_ltr_kmer2ltr_dedup --ref-fasta Athal.fa --compare-script compare_genomes.py --output composite_matrix_rms_1_1_1_1.tsv --alphas 1 1 1 1 --dist-metric rms --threads 50
 # Sensittivey anaylsis.
 python contour_plot.py --input composite_matrix_rms_1_1_1_1.tsv
