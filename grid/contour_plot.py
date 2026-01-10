@@ -14,7 +14,9 @@ Example usage:
       --output sensitivity_contours.pdf \
       --min_insertion_rate 0.2e-12 --max_insertion_rate 0.1e-11 \
       --min_solo_ratio 30 --max_solo_ratio 70 \
-      --min_deletion_rate 0.06e-12 --max_deletion_rate 0.06e-11
+      --min_deletion_rate 0.06e-12 --max_deletion_rate 0.06e-11 \
+      --log_params \
+      --highlight_top_pct 5
 """
 
 import argparse
@@ -47,7 +49,6 @@ def parse_args():
     )
 
     # --- Parameter range filters ---
-    # insertion_rate
     parser.add_argument(
         "--min_insertion_rate", type=float, default=None,
         help="Minimum insertion_rate to include (optional)"
@@ -57,7 +58,6 @@ def parse_args():
         help="Maximum insertion_rate to include (optional)"
     )
 
-    # deletion_rate
     parser.add_argument(
         "--min_deletion_rate", type=float, default=None,
         help="Minimum deletion_rate to include (optional)"
@@ -67,7 +67,6 @@ def parse_args():
         help="Maximum deletion_rate to include (optional)"
     )
 
-    # solo_ratio
     parser.add_argument(
         "--min_solo_ratio", type=float, default=None,
         help="Minimum solo_ratio to include (optional)"
@@ -77,7 +76,6 @@ def parse_args():
         help="Maximum solo_ratio to include (optional)"
     )
 
-    # length_bias
     parser.add_argument(
         "--min_length_bias", type=float, default=None,
         help="Minimum length_bias to include (optional)"
@@ -85,6 +83,53 @@ def parse_args():
     parser.add_argument(
         "--max_length_bias", type=float, default=None,
         help="Maximum length_bias to include (optional)"
+    )
+
+    parser.add_argument(
+        "--no_points", action="store_true",
+        help="Do not overlay individual sample points on contour plots."
+    )
+
+    # --- Log scaling options ---
+    parser.add_argument(
+        "--log_x", action="store_true",
+        help="Plot x-axes on log10 scale (for rate-like params)."
+    )
+    parser.add_argument(
+        "--log_y", action="store_true",
+        help="Plot y-axes on log10 scale (for rate-like params)."
+    )
+    parser.add_argument(
+        "--log_params", action="store_true",
+        help="Automatically use log10 axes for any parameter containing 'rate'."
+    )
+    parser.add_argument(
+        "--log_epsilon", type=float, default=1e-300,
+        help="Small value to guard log10(0); values <= 0 are dropped anyway. Default: 1e-300"
+    )
+
+    # --- NEW: highlight best region ---
+    parser.add_argument(
+        "--highlight_top_pct", type=float, default=None,
+        help=(
+            "Highlight region corresponding to best (lowest-metric) PCT%% of runs "
+            "(e.g., 5 for best 5%%). If omitted, no highlighting."
+        )
+    )
+    parser.add_argument(
+        "--highlight_hatch", type=str, default="////",
+        help="Hatch pattern for highlighted region overlay (default: '////')."
+    )
+    parser.add_argument(
+        "--highlight_alpha", type=float, default=0.0,
+        help=(
+            "Fill alpha for highlight overlay (default: 0.0). "
+            "Keep 0.0 if you only want hatch without fill."
+        )
+    )
+    parser.add_argument(
+        "--highlight_linewidth", type=float, default=1.2,
+        help="Line width for highlight boundary (default: 1.2)."
     )
 
     return parser.parse_args()
@@ -136,7 +181,6 @@ def main():
     # --- Apply global parameter filters before plotting and correlations ---
     mask = np.ones(len(df), dtype=bool)
 
-    # Helper: apply one parameter's min/max filter if provided
     def apply_filter(col_name, min_val, max_val, current_mask):
         col = df[col_name]
         if min_val is not None:
@@ -162,23 +206,35 @@ def main():
             "Not enough valid points after filtering to make contour plots (need >= 3)."
         )
 
-    # Metric (already numeric by construction)
+    # --- Parameter ranges after filtering ---
+    print("\n=== Parameter ranges after filtering ===")
+    for param in ["insertion_rate", "deletion_rate", "solo_ratio", "length_bias"]:
+        vals = df[param].dropna()
+        if len(vals) == 0:
+            print(f"{param:20s}: no valid values")
+        else:
+            print(
+                f"{param:20s}: "
+                f"min = {vals.min():.6g}, "
+                f"max = {vals.max():.6g}, "
+                f"(n={len(vals)})"
+            )
+    print("========================================")
+
     metric_col = args.metric
     df_metric = df[metric_col]
-    # === Optimal parameter CI (profile-based, empirical 95%) ===
 
-    # Find best (minimum) composite score
+    # === Optimal parameter CI (profile-based, empirical 95%) ===
     best_idx = df_metric.idxmin()
     best_row = df.loc[best_idx]
     best_score = df_metric.loc[best_idx]
 
     # Define 95% threshold as top 5% best scores
     threshold = df_metric.quantile(0.05)
-
     df_top = df[df_metric <= threshold]
 
     print("\n=== Optimal parameter estimates (profile-based 95% CI) ===")
-    print(f"Best Composite score: {best_score:.6g}")
+    print(f"Best {metric_col} score: {best_score:.6g}")
     print(f"95% threshold (5th percentile): {threshold:.6g}\n")
 
     for param in ["insertion_rate", "deletion_rate", "solo_ratio", "length_bias"]:
@@ -195,11 +251,9 @@ def main():
 
     print("==========================================================")
 
-
-    # --- Simple sensitivity summary (correlation) ---
+    # --- Sensitivity summary (correlation) ---
     print("=== Sensitivity summary (Pearson correlation w/ metric; after filtering) ===")
     print("    (R² = % variance in metric explained by a single parameter; linear, univariate)")
-    numeric_cols = df.select_dtypes(include=[np.number]).columns
 
     params_of_interest = [
         "insertion_rate",
@@ -221,10 +275,7 @@ def main():
             r = df_metric[valid].corr(df[col][valid])
             lo, hi = pearson_ci(r, n)
 
-            # Univariate variance explained
             r2 = r ** 2
-
-            # CI for R² by transforming r CI endpoints
             r2_endpoints = np.array([lo ** 2, hi ** 2], dtype=float)
             r2_lo = np.nanmin(r2_endpoints)
             r2_hi = np.nanmax(r2_endpoints)
@@ -239,20 +290,62 @@ def main():
 
     print("==================================================================")
 
+    # --- Determine highlight threshold (best PCT%) if requested ---
+    highlight_enabled = args.highlight_top_pct is not None
+    if highlight_enabled:
+        if not (0 < args.highlight_top_pct < 100):
+            raise ValueError("--highlight_top_pct must be between 0 and 100 (exclusive).")
+        highlight_threshold = df_metric.quantile(args.highlight_top_pct / 100.0)
+        n_best = int((df_metric <= highlight_threshold).sum())
+        print(
+            f"\n=== Highlighting best {args.highlight_top_pct:.3g}% region on plots ===\n"
+            f"Highlight threshold ({args.highlight_top_pct:.3g}th percentile of {metric_col}): "
+            f"{highlight_threshold:.6g}  (n={n_best} points)\n"
+            "==============================================================="
+        )
+    else:
+        highlight_threshold = None
+
     # --- Multi-page PDF with contour plots for each parameter pair ---
     figures_made = 0
 
     with PdfPages(args.output) as pdf:
         for x_param, y_param in param_pairs:
-            x = df[x_param]
-            y = df[y_param]
-            z = df[metric_col]
+            x_series = df[x_param].copy()
+            y_series = df[y_param].copy()
+            z_series = df[metric_col].copy()
 
-            # Drop rows with NaNs for this pair + metric
-            valid = ~(x.isna() | y.isna() | z.isna())
-            x = x[valid].values
-            y = y[valid].values
-            z = z[valid].values
+            # Decide log usage for this pair
+            use_log_x = args.log_x or (args.log_params and ("rate" in x_param))
+            use_log_y = args.log_y or (args.log_params and ("rate" in y_param))
+
+            # Base validity (NaNs)
+            valid = ~(x_series.isna() | y_series.isna() | z_series.isna())
+
+            # If log axis, we must drop non-positive values
+            if use_log_x:
+                valid &= (x_series > 0)
+            if use_log_y:
+                valid &= (y_series > 0)
+
+            # Subset arrays
+            x = x_series[valid].values
+            y = y_series[valid].values
+            z = z_series[valid].values
+
+            # Also compute "best" mask on this subset (pre-transform)
+            if highlight_enabled:
+                best_mask = z <= highlight_threshold
+                n_best_pair = int(best_mask.sum())
+            else:
+                best_mask = None
+                n_best_pair = 0
+
+            # Apply log10 transform for plotting/triangulation
+            if use_log_x:
+                x = np.log10(np.maximum(x, args.log_epsilon))
+            if use_log_y:
+                y = np.log10(np.maximum(y, args.log_epsilon))
 
             if len(x) < 3:
                 print(
@@ -265,21 +358,62 @@ def main():
 
             fig, ax = plt.subplots(figsize=(6, 5))
 
-            # Filled contour
+            # Filled contour of the metric
             contour = ax.tricontourf(
                 triang, z,
                 levels=args.levels
             )
 
-            # Overlay points: size shrunk to 1/5 (from 10 to 2)
-            ax.scatter(x, y, s=2, alpha=0.7, edgecolor="k", linewidth=0.3)
+            # --- Highlight best region (best PCT%) ---
+            # We overlay a hatched region where z <= threshold and draw a boundary.
+            # This is computed over the interpolated surface defined by the triangulation.
+            if highlight_enabled and highlight_threshold is not None:
+                # Need at least some best points; otherwise skip overlay for this pair
+                if n_best_pair >= 1:
+                    # Hatched overlay (no fill by default)
+                    ax.tricontourf(
+                        triang, z,
+                        levels=[z.min(), highlight_threshold],
+                        alpha=args.highlight_alpha,
+                        hatches=[args.highlight_hatch]
+                    )
+                    # Boundary line at the threshold
+                    ax.tricontour(
+                        triang, z,
+                        levels=[highlight_threshold],
+                        linewidths=args.highlight_linewidth
+                    )
+                else:
+                    # If none are under threshold for this pair (can happen with filtering/NaNs),
+                    # just don't overlay.
+                    pass
+
+            # Overlay all points unless disabled
+            if not args.no_points:
+                ax.scatter(
+                    x, y,
+                    s=2,
+                    alpha=0.7,
+                    edgecolor="k",
+                    linewidth=0.3
+                )
+
+            # Optionally also emphasize the best points themselves (small but visible)
+            # This helps confirm the highlighted region matches the samples.
+            if highlight_enabled and (best_mask is not None) and (n_best_pair >= 1):
+                ax.scatter(
+                    x[best_mask],
+                    y[best_mask],
+                    s=8,
+                    alpha=0.9,
+                    edgecolor="k",
+                    linewidth=0.4
+                )
 
             # Axis labels & title
-            ax.set_xlabel(x_param)
-            ax.set_ylabel(y_param)
-            ax.set_title(
-                f"{metric_col} vs {x_param} & {y_param}\n(lower is better)"
-            )
+            ax.set_title(f"{metric_col} vs {x_param} & {y_param}\n(lower is better)")
+            ax.set_xlabel(f"log10({x_param})" if use_log_x else x_param)
+            ax.set_ylabel(f"log10({y_param})" if use_log_y else y_param)
 
             # Colorbar
             cbar = fig.colorbar(contour, ax=ax)
@@ -298,7 +432,5 @@ def main():
 
     print(f"Saved {figures_made} contour plots to multi-page PDF: {args.output}")
 
-
 if __name__ == "__main__":
     main()
-
