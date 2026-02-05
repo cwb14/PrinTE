@@ -4,6 +4,7 @@
 # For each tip taxon, run summary_stats.py on column 7 from:
 #   <taxon><suffix>
 # Then reconstruct ancestral totals + per-bin counts at internal nodes via fastAnc.
+# Rscript ancestral_reconstruction_ltr_age.R  --newick subset.nwk --suffix _ltr_kmer2ltr_dedup 
 
 suppressPackageStartupMessages({
   library(ape)
