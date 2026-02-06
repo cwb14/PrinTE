@@ -1,37 +1,31 @@
 #!/usr/bin/env Rscript
 
 # ancestral_reconstruction_flexible.R
-## Ancestral genome size. 
-# Rscript PrinTE/grid/ancestral_reconstruction_gs.R --suffix .fa --newick subset.nwk --abrev abrev.tsv --out ancestral_genome_size
-# 
-## Ancestral LTR-RT size. 
-# Rscript PrinTE/grid/ancestral_reconstruction_gs.R --suffix _ltr.ltrharvest.full_length.dedup.fa.rexdb-plant.cls.lib.fa --newick subset.nwk --abrev abrev.tsv --out ancestral_ltrrt_size
+## Ancestral genome size (remove --label_nodes for prettier tree. 
+# Rscript PrinTE/grid/ancestral_reconstruction_gs.R --suffix .fa --newick subset.nwk --abrev abrev.tsv --out ancestral_genome_size --label_nodes
+#
+## Ancestral LTR-RT size.
+# Rscript PrinTE/grid/ancestral_reconstruction_gs.R --suffix _ltr.ltrharvest.full_length.dedup.fa.rexdb-plant.cls.lib.fa --newick subset.nwk --abrev abrev.tsv --out ancestral_ltrrt_size --label_nodes
+#
+## Peak at the PDF to figure out with nodes youre interested in. Im interested in 20.
+## Ancestral LTR-RT or genome size of node 20.
+# cat ancestral_genome_size.ancestral_genome_sizes.tsv | awk '$1 == 20' | cut -f 6
 #
 # Flexible ancestral genome size reconstruction from FASTA files + Newick tree.
 #
 # Key behavior:
 #   - Taxon IDs (prefix/abbreviations) are inferred directly from the Newick tip labels.
 #   - FASTA filenames are constructed as:  <tip_label><suffix>
-#     Example: tip "Cribi" + suffix ".genome.fa" -> "Cribi.genome.fa"
 #
 # Options:
-#   --suffix  Filename suffix appended to each tip label to locate FASTA files (required)
-#   --newick  Newick tree file (required)
-#   --abrev   OPTIONAL TSV mapping abbreviations -> full names (2 columns)
-#   --out     OPTIONAL output stem for files (default: "ancestral_genome_size")
-#   --res     OPTIONAL contMap resolution (default: 200)
-#
-# Example:
-#   Rscript ancestral_reconstruction_flexible.R \
-#     --suffix .genome.fa \
-#     --newick subset.nwk
-#
-# With abbreviation mapping:
-#   Rscript ancestral_reconstruction_flexible.R \
-#     --suffix .genome.fa \
-#     --newick subset.nwk \
-#     --abrev abrev.tsv \
-#     --out rust_demo
+#   --suffix        Filename suffix appended to each tip label to locate FASTA files (required)
+#   --newick        Newick tree file (required)
+#   --abrev         OPTIONAL TSV mapping abbreviations -> full names (2 columns)
+#   --out           OPTIONAL output stem for files (default: "ancestral_genome_size")
+#   --res           OPTIONAL contMap resolution (default: 200)
+#   --label_nodes   OPTIONAL flag: add internal node numbers to the output PDF (default: off)
+#   --node_cex      OPTIONAL: size of node-number labels (default: 0.65)
+#   --node_adj      OPTIONAL: comma-separated adj for node labels (default: 1.2,-0.2)
 #
 # Notes:
 # - Genome size is computed as the total number of non-whitespace characters
@@ -64,7 +58,15 @@ option_list <- list(
               metavar = "STEM"),
   make_option(c("--res"), type = "integer", default = 200,
               help = "contMap resolution (default: 200).",
-              metavar = "INT")
+              metavar = "INT"),
+  make_option(c("--label_nodes"), action = "store_true", default = FALSE,
+              help = "If set, draw internal node numbers on the contMap PDF."),
+  make_option(c("--node_cex"), type = "double", default = 0.65,
+              help = "Size (cex) of node-number labels when --label_nodes is set (default: 0.65).",
+              metavar = "FLOAT"),
+  make_option(c("--node_adj"), type = "character", default = "1.2,-0.2",
+              help = "Comma-separated adj for node labels (x,y). Default: 1.2,-0.2",
+              metavar = "X,Y")
 )
 
 opt <- parse_args(OptionParser(option_list = option_list))
@@ -87,7 +89,6 @@ read_abbrev_tsv <- function(path) {
   ab <- trimws(x[[1]])
   full <- trimws(x[[2]])
   if (any(ab == "" | full == "")) stop("--abrev has empty abbreviation or full-name entries.")
-  # names = abbreviation, values = full name
   stats::setNames(full, ab)
 }
 
@@ -109,6 +110,16 @@ get_desc_tip_names <- function(tree, node) {
   all_desc <- phytools::getDescendants(tree, node)
   tip_idx <- all_desc[all_desc <= length(tree$tip.label)]
   tree$tip.label[tip_idx]
+}
+
+# Parse "x,y" into numeric length-2 vector
+parse_adj <- function(adj_string) {
+  parts <- strsplit(adj_string, ",", fixed = TRUE)[[1]]
+  parts <- trimws(parts)
+  if (length(parts) != 2) stop("--node_adj must be two comma-separated numbers, e.g. 1.2,-0.2")
+  out <- suppressWarnings(as.numeric(parts))
+  if (any(is.na(out))) stop("--node_adj must be numeric, e.g. 1.2,-0.2")
+  out
 }
 
 # -------------------------- read tree --------------------------------------
@@ -148,15 +159,12 @@ cat("\n")
 
 # --------------------- optional abbreviation mapping -----------------------
 
-# If provided, we do file lookup by original tips, then relabel tips (and rename genome_bp)
-# to full names for downstream reconstruction/plotting.
 if (!is.null(opt$abrev)) {
   if (!file.exists(opt$abrev)) stop(paste("Abbrev TSV not found:", opt$abrev))
   abbr_to_full <- read_abbrev_tsv(opt$abrev)
 
   tree_tips <- tree$tip.label
 
-  # Require that every tree tip exists in abbreviation column, so mapping is deterministic.
   if (!all(tree_tips %in% names(abbr_to_full))) {
     missing <- setdiff(tree_tips, names(abbr_to_full))
     cat("ERROR: Some tree tips are not present in the abbreviation column of --abrev:\n")
@@ -166,10 +174,7 @@ if (!is.null(opt$abrev)) {
 
   cat("Relabeling tree tips using --abrev (abbrev -> full name).\n")
 
-  # Relabel tree tips to full names
   tree$tip.label <- unname(abbr_to_full[tree$tip.label])
-
-  # Rename genome_bp to full names (keeping values aligned)
   names(genome_bp) <- unname(abbr_to_full[names(genome_bp)])
 
   cat("\nTip labels after relabeling:\n")
@@ -197,7 +202,6 @@ if (!all(tree$tip.label %in% names(genome_bp))) {
   stop("Tip labels in the tree do not match genome-size names.")
 }
 
-# Reorder to tree tip order
 genome_bp <- genome_bp[tree$tip.label]
 
 cat("Genome sizes (bp) in tree order:\n")
@@ -287,6 +291,28 @@ plot(
 )
 
 mtext("Genome size (bp)", side = 3, line = 1)
+
+# ---- OPTIONAL: node numbers on the plot ----
+if (isTRUE(opt$label_nodes)) {
+  adj_xy <- parse_adj(opt$node_adj)
+
+  n_tips <- length(cont_obj$tree$tip.label)
+  n_nodes <- cont_obj$tree$Nnode
+  internal_nodes <- (n_tips + 1):(n_tips + n_nodes)
+
+  # Draw internal node numbers
+  nodelabels(
+    text  = internal_nodes,
+    node  = internal_nodes,
+    frame = "none",
+    cex   = opt$node_cex,
+    adj   = adj_xy
+  )
+
+  # Also add a small note so you remember the scheme
+  mtext("Internal node numbers shown", side = 1, line = 2, cex = 0.7)
+}
+
 dev.off()
 
 cat("Contour map phylogeny written to ", pdf_file, "\n", sep = "")
