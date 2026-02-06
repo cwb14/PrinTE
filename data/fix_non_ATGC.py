@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 
-import os
-import glob
+import sys
 import gzip
-import subprocess
 
 ALLOWED = set("ATGCatgc")
-SKIP_FILE = "TAIR10.pep.fa.gz"
 
 
-def sanitize_sequence(seq):
+def sanitize_sequence(seq: str):
     """
     Replace any non-ATGC character with 'T'.
     Return the cleaned sequence and the count of replaced bases.
@@ -28,83 +25,92 @@ def sanitize_sequence(seq):
     return "".join(cleaned), replaced
 
 
-def process_fasta_gz(in_gz):
-    base_name = os.path.basename(in_gz)
-    if base_name == SKIP_FILE:
-        print(f"[SKIP] {base_name} is a protein file; leaving it unchanged.")
-        return
+def open_maybe_gzip(path: str):
+    """
+    Open plain FASTA or gzipped FASTA as text.
+    '-' means stdin (assumed plain text).
+    """
+    if path == "-":
+        return sys.stdin
+    if path.endswith(".gz"):
+        return gzip.open(path, "rt")
+    return open(path, "rt")
 
-    # Strip .gz, then add a suffix so we don't overwrite original
-    out_plain = in_gz[:-3] + ".ATGCfixed.fa"
-    out_gz = out_plain + ".gz"
 
-    if os.path.exists(out_gz):
-        print(f"[WARN] Output {out_gz} already exists; skipping to avoid overwrite.")
-        return
-
-    print(f"[INFO] Processing {in_gz} -> {out_gz}")
-
+def process_fasta_stream(fin, fout):
+    """
+    Read FASTA from fin, write cleaned FASTA to fout.
+    Writes sequences unwrapped (single line per record), like your original script.
+    Prints stats to stderr.
+    """
     total_seqs = 0
     modified_seqs = 0
     total_replaced_bases = 0
 
-    with gzip.open(in_gz, "rt") as fin, open(out_plain, "w") as fout:
-        header = None
-        seq_chunks = []
+    header = None
+    seq_chunks = []
 
-        def flush_record():
-            nonlocal header, seq_chunks, total_seqs, modified_seqs, total_replaced_bases
-            if header is None:
-                return
-            total_seqs += 1
-            raw_seq = "".join(seq_chunks)
-            cleaned_seq, replaced = sanitize_sequence(raw_seq)
-            if replaced > 0:
-                modified_seqs += 1
-                total_replaced_bases += replaced
-            # Write header and *unwrapped* sequence (single line)
-            fout.write(header + "\n")
-            fout.write(cleaned_seq + "\n")
+    def flush_record():
+        nonlocal header, seq_chunks, total_seqs, modified_seqs, total_replaced_bases
+        if header is None:
+            return
+        total_seqs += 1
+        raw_seq = "".join(seq_chunks)
+        cleaned_seq, replaced = sanitize_sequence(raw_seq)
+        if replaced > 0:
+            modified_seqs += 1
+            total_replaced_bases += replaced
 
-        for line in fin:
-            line = line.rstrip("\n")
-            if line.startswith(">"):
-                # New record
-                flush_record()
-                header = line
-                seq_chunks = []
-            else:
-                # Sequence line; strip spaces/tabs, no wrapping kept
-                seq_chunks.append(line.strip())
+        fout.write(header + "\n")
+        fout.write(cleaned_seq + "\n")
 
-        # Flush last record
-        flush_record()
+    for line in fin:
+        line = line.rstrip("\n")
+        if line.startswith(">"):
+            flush_record()
+            header = line
+            seq_chunks = []
+        else:
+            # Strip spaces/tabs; keep no wrapping
+            seq_chunks.append(line.strip())
 
-    print(f"[STATS] {in_gz}")
-    print(f"        Total sequences:       {total_seqs}")
-    print(f"        Sequences modified:    {modified_seqs}")
-    print(f"        Bases replaced with T: {total_replaced_bases}")
-    print(f"[INFO] Compressing {out_plain} -> {out_gz} with gzip -9")
+    flush_record()
 
-    # Compress with gzip -9
-    subprocess.run(["gzip", "-9", out_plain], check=True)
+    print("[STATS]", file=sys.stderr)
+    print(f"  Total sequences:       {total_seqs}", file=sys.stderr)
+    print(f"  Sequences modified:    {modified_seqs}", file=sys.stderr)
+    print(f"  Bases replaced with T: {total_replaced_bases}", file=sys.stderr)
 
-    print(f"[DONE] Wrote cleaned file: {out_gz}\n")
+
+def usage():
+    msg = (
+        "Usage:\n"
+        "  python fix_non_ATGC.py input.fa > output.fa\n"
+        "  python fix_non_ATGC.py input.fa.gz > output.fa\n"
+        "  cat input.fa | python fix_non_ATGC.py - > output.fa\n"
+    )
+    print(msg, file=sys.stderr)
 
 
 def main():
-    gz_files = sorted(glob.glob("*.gz"))
-    if not gz_files:
-        print("[INFO] No .gz files found in current directory.")
-        return
+    if len(sys.argv) != 2 or sys.argv[1] in ("-h", "--help"):
+        usage()
+        sys.exit(0 if (len(sys.argv) == 2 and sys.argv[1] in ("-h", "--help")) else 1)
 
-    print("[INFO] Found .gz files:")
-    for f in gz_files:
-        print(f"   - {f}")
-    print("")
+    in_path = sys.argv[1]
 
-    for f in gz_files:
-        process_fasta_gz(f)
+    try:
+        with open_maybe_gzip(in_path) as fin:
+            process_fasta_stream(fin, sys.stdout)
+    except BrokenPipeError:
+        # Allows piping into `head` etc. without stacktrace
+        sys.exit(0)
+    except FileNotFoundError:
+        print(f"[ERROR] File not found: {in_path}", file=sys.stderr)
+        sys.exit(2)
+    except gzip.BadGzipFile:
+        print(f"[ERROR] Input ends with .gz but is not a valid gzip file: {in_path}", file=sys.stderr)
+        sys.exit(3)
 
 
 if __name__ == "__main__":
