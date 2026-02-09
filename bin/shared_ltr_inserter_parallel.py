@@ -760,8 +760,8 @@ def process_chromosome(task):
             else:  # 'frag'
                 selected_te = pick_header(frag_weights if frag_weights is not None else None)
                 te_sequence_full = te_dict[selected_te]
-                # fragmenting: chop between 10% and 50% from one end
-                pct_chop = random.randint(10, 50) / 100.0
+                # fragmenting: chop between 50% and 90% from one end
+                pct_chop = random.randint(50, 90) / 100.0
                 chop_left = random.choice([True, False])
                 cut = int(round(len(te_sequence_full) * pct_chop))
                 if chop_left:
@@ -769,7 +769,7 @@ def process_chromosome(task):
                 else:
                     te_sequence = te_sequence_full[:len(te_sequence_full) - cut]
                 if len(te_sequence) <= 0:
-                    continue  # extremely unlikely with 10–50 range, but guard anyway
+                    continue  # extremely unlikely with 50–90 range, but guard anyway
 
                 # mutation
                 u = random.random()
