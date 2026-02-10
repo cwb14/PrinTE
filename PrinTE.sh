@@ -131,6 +131,7 @@ Options:
   -sz, --size                Genome size in kb, Mb, or Gb (default: 400Mb)
   -tk, --TE_mut_k            Slope of exponential decay for TE mutation (default: 10)
   -tmx, --TE_mut_Mmax         X-limit for exponential decay function (default: 20)
+  -mb, --mutation_bins       Comma-separated bins for TE mutation distribution (overrides -tk/-tmx; disables decay PDF inside inserter)
   -bo, --burnin_only         Run burn-in phase only and then exit.
   -i,  --TE_lib              TE library file (default: ${TOOL_DIR}/data/maize_rice_arab_curated_TE.lib.gz)
 
@@ -148,6 +149,7 @@ Options:
   -cbi, --chromatin_bias_insert   Chromatin bias for TE insertion (default: 1.0)
   -cbd, --chromatin_bias_delete   Chromatin bias for TE deletion (default: 1.0)
   -cb,  --chromatin_buffer         Interval upstream/downstream used for chromatin bias (default: 10000)
+  -pb, --promoter-boundary   bp upstream/downstream of genes to treat TE insertions as function-disrupting (rate mode only; default: 0)
 
 ########## GENERAL USE ##########
   -m,  --mutation_rate       DNA Mutation rate (default: 1.3e-8)
@@ -208,6 +210,7 @@ TE_mut_k=10
 TE_mut_Mmax=20
 sel_coeff=0
 TsTv=1.0
+promoter_boundary=0
 mutation_bins=""
 
 while [[ $# -gt 0 ]]; do
@@ -335,6 +338,9 @@ while [[ $# -gt 0 ]]; do
       shift; shift;;
     -pgs|--pergen_select)
       pergen_select="$2"
+      shift; shift;;
+    -pb|--promoter-boundary)
+      promoter_boundary="$2"
       shift; shift;;
     -h|--help)
       print_help
@@ -715,7 +721,8 @@ for (( i=start_iter; i<=iterations; i++ )); do
 
   # (2c) Purge some TEs and convert intact TEs to soloLTRs using TE excision.
   # Updated to use TE_exciser_parallel.py with new parameters.
-  cmd="python ${BIN_DIR}/TE_exciser_parallel.py --genome ${nest_prefix}.fasta --bed ${nest_prefix}.bed --rate ${delete_rate} --generations ${step} --soloLTR_freq ${solo_rate} ${extra_fix_ex} --output gen${current_gen}_final --seed ${current_seed} --sigma ${sigma} --k ${k} --sel_coeff ${sel_coeff} -m ${threads} --euch_het_buffer ${euch_buffer} --euch_het_bias ${euch_bias_excise}"
+  cmd="python ${BIN_DIR}/TE_exciser_parallel.py --genome ${nest_prefix}.fasta --bed ${nest_prefix}.bed --rate ${delete_rate} --generations ${step} --soloLTR_freq ${solo_rate} ${extra_fix_ex} --output gen${current_gen}_final --seed ${current_seed} --sigma ${sigma} --k ${k} --sel_coeff ${sel_coeff} -m ${threads} --euch_het_buffer ${euch_buffer} --euch_het_bias ${euch_bias_excise} --promoter-boundary ${promoter_boundary}"
+
   if [ $i -ne 1 ]; then
     cmd+=" --no_fig"
   fi
