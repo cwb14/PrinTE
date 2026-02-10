@@ -283,9 +283,13 @@ cont_obj <- contMap(
 pdf_file <- paste0(opt$out, ".contMap.pdf")
 pdf(pdf_file, width = 7, height = 4)
 
+# longest root-to-tip distance (tree "height") in branch-length units
+tree_height <- max(phytools::nodeHeights(cont_obj$tree)[, 2])
+tree_height_legend <- as.integer(round(tree_height))  # nearest whole number
+
 plot(
   cont_obj,
-  legend  = TRUE,
+  legend  = tree_height_legend,
   fsize   = 0.8,
   outline = FALSE
 )
@@ -317,3 +321,4 @@ dev.off()
 
 cat("Contour map phylogeny written to ", pdf_file, "\n", sep = "")
 cat("Done.\n")
+
