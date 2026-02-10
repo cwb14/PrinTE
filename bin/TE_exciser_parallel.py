@@ -200,23 +200,85 @@ def classify_entries(entries):
                 ent.subtype = "NON_NEST_GROUP_TE"
     return entries, nest_groups
 
+def get_disrupted_genes(entries, promoter_boundary=0):
+    """
+    A gene is disrupted if:
+      (1) feature_id starts with 'gene' AND ';' in name  (original rule), OR
+      (2) promoter_boundary > 0 AND any TE overlaps [gene.start-boundary, gene.end+boundary].
+
+    Returns: set of disrupted gene feature_ids.
+    """
+    # Genes by chrom
+    genes_by_chrom = defaultdict(list)
+    # TEs by chrom (anything not starting with 'gene')
+    tes_by_chrom = defaultdict(list)
+
+    for e in entries:
+        if e.feature_id.startswith("gene"):
+            genes_by_chrom[e.chrom].append(e)
+        else:
+            tes_by_chrom[e.chrom].append(e)
+
+    disrupted = set()
+
+    # Rule (1): current behavior
+    for chrom, genes in genes_by_chrom.items():
+        for g in genes:
+            if ";" in g.name:
+                disrupted.add(g.feature_id)
+
+    # Rule (2): boundary-based proximity disruption
+    if promoter_boundary <= 0:
+        return disrupted
+
+    for chrom, genes in genes_by_chrom.items():
+        if chrom not in tes_by_chrom or not genes:
+            continue
+
+        genes_sorted = sorted(genes, key=lambda x: x.start)
+        tes_sorted = sorted(tes_by_chrom[chrom], key=lambda x: x.start)
+
+        # Sweep-pointer over sorted TEs for each gene interval (expanded)
+        j = 0
+        for g in genes_sorted:
+            g_start = max(0, g.start - promoter_boundary)
+            g_end = g.end + promoter_boundary
+
+            # advance TE pointer until TE.end could overlap gene interval
+            while j < len(tes_sorted) and tes_sorted[j].end < g_start:
+                j += 1
+
+            # check overlap among nearby TEs
+            k = j
+            while k < len(tes_sorted) and tes_sorted[k].start <= g_end:
+                te = tes_sorted[k]
+                # overlap test: te.start < g_end AND te.end > g_start
+                if te.end > g_start and te.start < g_end:
+                    disrupted.add(g.feature_id)
+                    break
+                k += 1
+
+    return disrupted
+
+
 # =============================================================================
 # Calculate number of TE excisions to make
 # =============================================================================
 
-def calculate_excision_count(entries, rate, generations, gene_weights):
+def calculate_excision_count(entries, rate, generations, gene_weights, promoter_boundary=0):
     """
-    For disrupted genes, use the disrupted_gene_weight from gene_weights instead of counting each as 1.
-    A gene is considered disrupted if its feature_ID starts with 'gene' and its NAME contains a semicolon.
-    Sum the weights of all unique disrupted genes and calculate:
-         lambda_val = rate * generations * (sum of disrupted gene weights)
-    Then sample the number of TE excisions from a Poisson distribution with lambda_val.
+    Disrupted genes are computed by get_disrupted_genes(), which includes:
+      - original rule: ';' in gene name
+      - optional boundary rule: TE overlap within ±promoter_boundary of gene interval
     """
-    disrupted_genes = {e.feature_id for e in entries if e.feature_id.startswith("gene") and (';' in e.name)}
+    disrupted_genes = get_disrupted_genes(entries, promoter_boundary=promoter_boundary)
+
     weight_sum = sum(gene_weights.get(gene, 1) for gene in disrupted_genes)
     print(f"Disrupted genes (unique): {len(disrupted_genes)}")
     print(f"Sum of disrupted gene weights: {weight_sum:.4f}")
-    
+    if promoter_boundary > 0:
+        print(f"Promoter boundary enabled: ±{promoter_boundary} bp")
+
     lambda_val = rate * generations * weight_sum
     excision_count = np.random.poisson(lambda_val)
     print(f"Lambda for Poisson (rate mode): {lambda_val:.4f}")
@@ -788,6 +850,14 @@ def main():
     parser.add_argument("--euch_het_buffer", type=int, default=0, help="Buffer (bp) around genes for euchromatin.")
     parser.add_argument("--euch_het_bias", type=float, default=1.0, help="Bias factor for euchromatic excision.")
     parser.add_argument("-m", "--max-chrom", type=int, default=1, help="Max number of chromosomes to process in parallel.")
+    parser.add_argument(
+        "--promoter-boundary",
+        type=int,
+        default=0,
+        help="bp upstream/downstream of genes to also treat TE insertions as function-disrupting (rate mode only). "
+         "0 keeps current behavior (only ';' in gene name counts)."
+    )
+
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -838,7 +908,10 @@ def main():
         lambda_val = args.fix_ex * genome_size * args.generations
         excision_count = np.random.poisson(lambda_val)
     else:
-        excision_count = calculate_excision_count(entries, args.rate, args.generations, gene_weights)
+        excision_count = calculate_excision_count(
+            entries, args.rate, args.generations, gene_weights,
+            promoter_boundary=args.promoter_boundary
+        )
 
     print(f"Calculated number of TE excisions: {excision_count}")
 
@@ -920,4 +993,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
