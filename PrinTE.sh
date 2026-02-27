@@ -74,6 +74,56 @@ case "$OS" in
     ;;
 esac
 
+# --- Verify mutator binary works; recompile from source if not ---
+# Called once after LOG/ERR are initialised (see Change 2).
+ensure_mutator() {
+  local bin="${BIN_DIR}/${mutator_exec}"
+  local src="${BIN_DIR}/ltr_mutator.cpp"
+
+  # Try to execute the binary. Any exit that isn't a clean run
+  # (loader errors, GLIBC mismatches, wrong ELF class, etc.) will
+  # produce a non-zero exit before main() even starts.
+  local probe_out probe_exit
+  probe_out=$( "$bin" </dev/null 2>&1 )
+  probe_exit=$?
+
+  # Exit 0 or a "usage / help" style non-zero (e.g. 1) where the binary
+  # actually printed something to stdout/stderr means it loaded fine.
+  # We distinguish a loader failure by checking for known error phrases.
+  if echo "$probe_out" | grep -qiE \
+       'not found|cannot execute|exec format|no such file|illegal instruction|GLIBC|version.*required'; then
+    :  # fall through to recompile
+  elif [[ $probe_exit -eq 126 || $probe_exit -eq 127 ]]; then
+    :  # permission denied / command not found → fall through
+  else
+    echo "Mutator binary OK: ${bin}" | tee -a "$LOG"
+    return 0
+  fi
+
+  echo "WARNING: Pre-compiled binary '${bin}' does not run on this system." | tee -a "$LOG"
+  echo "  Reason hint: $(echo "$probe_out" | head -3)" | tee -a "$LOG"
+  echo "Attempting to recompile from source: ${src}" | tee -a "$LOG"
+
+  if [[ ! -f "$src" ]]; then
+    echo "Error: Source file '${src}' not found. Cannot recompile ltr_mutator." | tee -a "$ERR"
+    exit 1
+  fi
+
+  if ! command -v g++ &>/dev/null; then
+    echo "Error: 'g++' is not available on PATH. Cannot recompile ltr_mutator." | tee -a "$ERR"
+    exit 1
+  fi
+
+  local recompile_cmd="g++ -std=c++17 -O3 -fopenmp \"${src}\" -o \"${bin}\""
+  echo "Running: ${recompile_cmd}" | tee -a "$LOG"
+  if eval "$recompile_cmd" >> "$LOG" 2>> "$ERR"; then
+    echo "Recompile succeeded. Pipeline will use the freshly built binary." | tee -a "$LOG"
+  else
+    echo "Error: Recompile of ltr_mutator failed. See ${ERR} for details." | tee -a "$ERR"
+    exit 1
+  fi
+}
+
 # --- Temporary files array (for unzipped inputs) ---
 temp_files=()
 cleanup() {
@@ -193,6 +243,8 @@ echo "Pipeline started at $(date)" > "$LOG"
 echo "Pipeline started at $(date)" > "$ERR"
 # --- Modification (1): Log the command used to run the script ---
 echo "Command: $0 $@" >> "$LOG"
+
+ensure_mutator   # verify / recompile ltr_mutator before anything else runs
 
 # --- Parse command-line options ---
 # Initialize flags and new parameters with defaults.
