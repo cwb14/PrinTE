@@ -199,8 +199,8 @@ def main():
 
         exp_fasta = os.path.join(d, args.gen_prefix)
         # Derive exp_tsv from exp_fasta, e.g.
-        #   gen5100000_final.fasta -> gen5100000_ltrharvest_kmer2ltr
-        #   gen5100000.fasta       -> gen5100000_ltrharvest_kmer2ltr
+        #   gen5100000_final.fasta -> gen5100000_ltr_r1_kmer2ltr
+        #   gen5100000.fasta       -> gen5100000_ltr_r1_kmer2ltr
         base = os.path.basename(exp_fasta)
 
         # Remove extension (.fasta/.fa) if present
@@ -209,7 +209,7 @@ def main():
         # Remove trailing "_final" if present
         base_noext = re.sub(r"_final$", "", base_noext)
 
-        exp_tsv = os.path.join(d, base_noext + "_ltrharvest_kmer2ltr_dedup")
+        exp_tsv = os.path.join(d, base_noext + "_ltr_r1_kmer2ltr_dedup")
 
         missing = False
         if not os.path.exists(exp_fasta):
