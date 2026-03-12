@@ -6,6 +6,8 @@ from a random grid search sample.
 Requires:
   - pandas
   - matplotlib
+  - scipy
+  - scikit-learn  (for multiple R²)
 
 Example usage:
   python plot_sensitivity_contour.py \
@@ -25,6 +27,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from scipy.interpolate import griddata
+from scipy.stats import spearmanr
+from sklearn.linear_model import LinearRegression
 
 
 def parse_args():
@@ -121,19 +125,33 @@ def parse_args():
         )
     )
     parser.add_argument(
-        "--highlight_hatch", type=str, default="////",
-        help="Hatch pattern for highlighted region overlay (default: '////')."
-    )
-    parser.add_argument(
-        "--highlight_alpha", type=float, default=0.0,
+        "--highlight_color", type=str, default="#FFD700",
         help=(
-            "Fill alpha for highlight overlay (default: 0.0). "
-            "Keep 0.0 if you only want hatch without fill."
+            "Color for the highlight boundary and fill "
+            "(default: '#FFD700' gold). Use any matplotlib color string."
         )
     )
     parser.add_argument(
-        "--highlight_linewidth", type=float, default=1.2,
-        help="Line width for highlight boundary (default: 1.2)."
+        "--highlight_linewidth", type=float, default=2.0,
+        help="Line width for highlight boundary (default: 2.0)."
+    )
+    parser.add_argument(
+        "--highlight_linestyle", type=str, default="--",
+        help="Line style for highlight boundary (default: '--' dashed)."
+    )
+    parser.add_argument(
+        "--highlight_fill_alpha", type=float, default=0.12,
+        help=(
+            "Fill alpha for highlight region overlay (default: 0.12). "
+            "Set to 0.0 to disable the fill entirely."
+        )
+    )
+    parser.add_argument(
+        "--highlight_marker_color", type=str, default="#FFD700",
+        help=(
+            "Color for highlighted scatter points "
+            "(default: '#FFD700' gold)."
+        )
     )
 
     # --- Report scope control ---
@@ -165,6 +183,24 @@ def pearson_ci(r, n, alpha=0.05):
     return np.tanh(lo_z), np.tanh(hi_z)
 
 
+def r2_ci_from_r_ci(r_lo, r_hi):
+    """
+    Compute R² CI from the endpoints of a Pearson r CI.
+    If the r CI spans zero, the minimum possible R² is 0.
+    """
+    if np.isnan(r_lo) or np.isnan(r_hi):
+        return np.nan, np.nan
+
+    # If the CI for r contains zero, R² can be as low as 0
+    if r_lo <= 0 <= r_hi:
+        r2_lo = 0.0
+    else:
+        r2_lo = min(r_lo ** 2, r_hi ** 2)
+
+    r2_hi = max(r_lo ** 2, r_hi ** 2)
+    return r2_lo, r2_hi
+
+
 def apply_filter(df, col_name, min_val, max_val, current_mask):
     col = df[col_name]
     if min_val is not None:
@@ -175,7 +211,7 @@ def apply_filter(df, col_name, min_val, max_val, current_mask):
 
 
 def print_report(df, metric_col, label, params_of_interest):
-    """Print parameter ranges, optimal estimates, and correlations."""
+    """Print parameter ranges, optimal estimates, correlations, and multiple R²."""
     df_metric = df[metric_col]
 
     print(f"\n=== Parameter ranges ({label}) ===")
@@ -218,9 +254,17 @@ def print_report(df, metric_col, label, params_of_interest):
 
     print("==========================================================")
 
-    # --- Sensitivity summary (correlation) ---
-    print(f"=== Sensitivity summary – Pearson r ({label}) ===")
-    print("    (R² = % variance in metric explained by a single parameter; linear, univariate)")
+    # --- Sensitivity summary (Pearson + Spearman) ---
+    print(f"\n=== Sensitivity summary – Pearson & Spearman ({label}) ===")
+    print(
+        "    Pearson r  = linear correlation "
+        "(R² = fraction of variance explained, linear & univariate)"
+    )
+    print(
+        "    Spearman ρ = rank correlation "
+        "(detects monotonic nonlinear relationships)"
+    )
+    print()
 
     for col in params_of_interest:
         valid = ~(df_metric.isna() | df[col].isna())
@@ -228,24 +272,70 @@ def print_report(df, metric_col, label, params_of_interest):
 
         if n < 4:
             r = np.nan
-            lo, hi = np.nan, np.nan
+            r_lo, r_hi = np.nan, np.nan
             r2 = np.nan
             r2_lo, r2_hi = np.nan, np.nan
+            rho = np.nan
+            sp_pval = np.nan
         else:
-            r = df_metric[valid].corr(df[col][valid])
-            lo, hi = pearson_ci(r, n)
+            metric_valid = df_metric[valid].values
+            col_valid = df[col][valid].values
 
+            # Pearson
+            r = float(pd.Series(metric_valid).corr(pd.Series(col_valid)))
+            r_lo, r_hi = pearson_ci(r, n)
             r2 = r ** 2
-            r2_endpoints = np.array([lo ** 2, hi ** 2], dtype=float)
-            r2_lo = np.nanmin(r2_endpoints)
-            r2_hi = np.nanmax(r2_endpoints)
+            r2_lo, r2_hi = r2_ci_from_r_ci(r_lo, r_hi)
+
+            # Spearman
+            rho, sp_pval = spearmanr(col_valid, metric_valid)
 
         print(
-            f"{col:20s}: r = {r: .4f}  "
-            f"[95% CI: {lo: .4f}, {hi: .4f}]  "
+            f"  {col:20s}:  "
+            f"Pearson r = {r: .4f}  "
+            f"[95% CI: {r_lo: .4f}, {r_hi: .4f}]  "
             f"R² = {r2: .4f} ({r2*100:5.1f}%)  "
-            f"[95% CI: {r2_lo: .4f}, {r2_hi: .4f}]  "
+            f"[95% CI: {r2_lo: .4f}, {r2_hi: .4f}]"
+        )
+        print(
+            f"  {'':20s}   "
+            f"Spearman ρ = {rho: .4f}  "
+            f"(p = {sp_pval:.2e})  "
             f"(n={n})"
+        )
+
+    # --- Multiple R² (joint linear model) ---
+    valid_all = np.ones(len(df), dtype=bool)
+    for col in params_of_interest:
+        valid_all &= ~df[col].isna()
+    valid_all &= ~df_metric.isna()
+    n_joint = int(valid_all.sum())
+
+    if n_joint >= len(params_of_interest) + 1:
+        X = df.loc[valid_all, params_of_interest].values
+        y = df_metric[valid_all].values
+
+        model = LinearRegression().fit(X, y)
+        r2_multi = model.score(X, y)
+
+        # Adjusted R²
+        p = X.shape[1]
+        r2_adj = 1.0 - (1.0 - r2_multi) * (n_joint - 1) / (n_joint - p - 1)
+
+        print(f"\n=== Multiple linear regression ({label}) ===")
+        print(f"  Predictors: {', '.join(params_of_interest)}")
+        print(f"  R²          = {r2_multi:.4f} ({r2_multi*100:.1f}%)")
+        print(f"  Adjusted R² = {r2_adj:.4f} ({r2_adj*100:.1f}%)")
+        print(f"  (n={n_joint}, p={p})")
+        print()
+        print("  Coefficients:")
+        for name, coef in zip(params_of_interest, model.coef_):
+            print(f"    {name:20s}: {coef: .6g}")
+        print(f"    {'(intercept)':20s}: {model.intercept_: .6g}")
+    else:
+        print(
+            f"\n=== Multiple linear regression ({label}) ===\n"
+            f"  Skipped: not enough complete cases (n={n_joint})\n"
         )
 
     print("==================================================================")
@@ -459,36 +549,48 @@ def main():
                 extend="both",
             )
 
-            # Highlight best region
+            # Highlight best region — publication-quality contrasting style
             if highlight_enabled and highlight_threshold is not None:
-                # Only draw if the threshold falls within the view's z range;
-                # otherwise the entire view is already "best" (or none of it is).
                 if n_best_pair >= 1 and z_min < highlight_threshold < z_max:
-                    ax.contourf(
-                        Xi, Yi, Zi,
-                        levels=[z_min, highlight_threshold],
-                        alpha=args.highlight_alpha,
-                        hatches=[args.highlight_hatch]
-                    )
-                    ax.contour(
+                    # Subtle semi-transparent fill to tint the best region
+                    if args.highlight_fill_alpha > 0:
+                        ax.contourf(
+                            Xi, Yi, Zi,
+                            levels=[z_min, highlight_threshold],
+                            colors=[args.highlight_color],
+                            alpha=args.highlight_fill_alpha,
+                        )
+
+                    # Bold contrasting boundary line
+                    cs_line = ax.contour(
                         Xi, Yi, Zi,
                         levels=[highlight_threshold],
-                        linewidths=args.highlight_linewidth
+                        colors=[args.highlight_color],
+                        linewidths=args.highlight_linewidth,
+                        linestyles=args.highlight_linestyle,
                     )
 
             # Scatter filtered points only
             if not args.no_points:
                 ax.scatter(
                     x_filt, y_filt,
-                    s=2, alpha=0.7,
-                    edgecolor="k", linewidth=0.3
+                    s=2, alpha=0.7, color="0.35",
+                    edgecolor="k", linewidth=0.3,
+                    zorder=3,
                 )
 
             if highlight_enabled and (best_mask is not None) and (n_best_pair >= 1):
                 ax.scatter(
                     x_filt[best_mask], y_filt[best_mask],
-                    s=8, alpha=0.9,
-                    edgecolor="k", linewidth=0.4
+                    s=12, alpha=0.95,
+                    facecolor=args.highlight_marker_color,
+                    edgecolor="k", linewidth=0.4,
+                    zorder=4,
+                    label=f"Top {args.highlight_top_pct:.3g}%",
+                )
+                ax.legend(
+                    loc="best", fontsize=8, framealpha=0.85,
+                    edgecolor="0.6", fancybox=False,
                 )
 
             ax.set_title(f"{metric_col} vs {x_param} & {y_param}\n(lower is better)")
@@ -497,6 +599,14 @@ def main():
 
             cbar = fig.colorbar(contour, ax=ax)
             cbar.set_label(metric_col)
+
+            # Draw the highlight threshold on the colorbar for reference
+            if highlight_enabled and highlight_threshold is not None:
+                if z_min < highlight_threshold < z_max:
+                    cbar.ax.axhline(
+                        y=highlight_threshold, color=args.highlight_color,
+                        linewidth=1.5, linestyle=args.highlight_linestyle,
+                    )
 
             plt.tight_layout()
             pdf.savefig(fig)
