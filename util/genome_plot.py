@@ -44,6 +44,12 @@ parser.add_argument("reference", nargs="?", default=None,
                     help="Optional reference genome FASTA for a horizontal line.")
 parser.add_argument("--zero-y", action="store_true",
                     help="Start the Y-axis at zero.")
+parser.add_argument("--flip-x", action="store_true",
+                    help="Flip the X-axis tick labels. If a reference genome is "
+                         "also provided, plot it as a red point at generation 0 "
+                         "instead of a dashed line.")
+parser.add_argument("--no-legend", action="store_true",
+                    help="Hide the legend.")
 args = parser.parse_args()
 
 reference_fasta = args.reference
@@ -88,24 +94,58 @@ plt.plot(
     markersize=8,
 )
 
-# Optional reference genome horizontal line
+# Reference genome handling
+ref_size_scaled = None
 if reference_fasta:
     ref_size = calculate_genome_size(reference_fasta)
     ref_size_scaled = ref_size / bp_divisor
-    plt.axhline(y=ref_size_scaled, color="red", linestyle="--", linewidth=1.5,
-                label=f"Reference ({ref_size_scaled:.2f} {bp_unit})")
-    plt.legend(fontsize=12)
+
+    if args.flip_x:
+        # Plot reference as a red point at generation 0 (rightmost after flip)
+        tick_positions = list(df["Generation Scaled"])
+        if len(tick_positions) >= 2:
+            step = tick_positions[1] - tick_positions[0]
+        else:
+            step = tick_positions[0]
+        ref_x = tick_positions[-1] + step
+        # Dashed red line connecting last data point to reference point
+        last_x = tick_positions[-1]
+        last_y = df["Genome Size Scaled"].iloc[-1]
+        plt.plot([last_x, ref_x], [last_y, ref_size_scaled],
+                 linestyle="--", color="red", linewidth=1.5, zorder=4)
+        plt.plot(ref_x, ref_size_scaled, marker="o", color="red", markersize=8,
+                 zorder=5, label=f"Reference ({ref_size_scaled:.2f} {bp_unit})")
+        if not args.no_legend:
+            plt.legend(fontsize=12)
+    else:
+        # Plot reference as a horizontal dashed line
+        plt.axhline(y=ref_size_scaled, color="red", linestyle="--", linewidth=1.5,
+                     label=f"Reference ({ref_size_scaled:.2f} {bp_unit})")
+        if not args.no_legend:
+            plt.legend(fontsize=12)
 
 # Ensure some headroom above the highest visible element
 y_max = df["Genome Size Scaled"].max()
-if reference_fasta:
+if ref_size_scaled is not None:
     y_max = max(y_max, ref_size_scaled)
 plt.ylim(top=y_max * 1.05)
 
+if args.flip_x:
+    gen_label = gen_label.replace("Generation count", "Generations in past count")
 plt.xlabel(gen_label, fontsize=14)
 plt.ylabel(f"Genome size ({bp_unit})", fontsize=14)
 plt.title("Genome Size Distribution", fontsize=16)
-plt.xticks(df["Generation Scaled"])
+
+# X-axis ticks: flip labels if requested
+tick_positions = list(df["Generation Scaled"])
+if args.flip_x:
+    flipped_labels = list(reversed(tick_positions))
+    if reference_fasta:
+        tick_positions.append(ref_x)
+        flipped_labels.append(0)
+    plt.xticks(tick_positions, [f"{v:g}" for v in flipped_labels])
+else:
+    plt.xticks(tick_positions)
 plt.grid(True, linestyle="--", alpha=0.6)
 if args.zero_y:
     plt.ylim(bottom=0)
