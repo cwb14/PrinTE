@@ -124,11 +124,28 @@ if reference_fasta:
         if not args.no_legend:
             plt.legend(fontsize=12)
 
-# Ensure some headroom above the highest visible element
-y_max = df["Genome Size Scaled"].max()
+# ── Y-axis limits (single authoritative block) ──────────────────────
+# 1. Collect the extreme plotted values.
+y_data_max = df["Genome Size Scaled"].max()
+y_data_min = df["Genome Size Scaled"].min()
 if ref_size_scaled is not None:
-    y_max = max(y_max, ref_size_scaled)
-plt.ylim(top=y_max * 1.05)
+    y_data_max = max(y_data_max, ref_size_scaled)
+    y_data_min = min(y_data_min, ref_size_scaled)
+
+# 2. Determine the bottom boundary first (--zero-y may override).
+y_bottom = 0 if args.zero_y else y_data_min
+
+# 3. Compute padding as 5% of the *visible* range (bottom → data max),
+#    so headroom stays visually consistent regardless of --zero-y.
+visible_range = y_data_max - y_bottom
+padding = visible_range * 0.05 if visible_range > 0 else y_data_max * 0.05
+
+# 4. Apply: pull bottom down (unless pinned at 0), push top up.
+if not args.zero_y:
+    y_bottom -= padding
+y_top = y_data_max + padding
+
+plt.ylim(bottom=y_bottom, top=y_top)
 
 if args.flip_x:
     gen_label = gen_label.replace("Generation count", "Generations in past count")
@@ -147,7 +164,5 @@ if args.flip_x:
 else:
     plt.xticks(tick_positions)
 plt.grid(True, linestyle="--", alpha=0.6)
-if args.zero_y:
-    plt.ylim(bottom=0)
 plt.savefig("genome_size_plot.pdf", bbox_inches="tight")
 print("Genome size plot saved as 'genome_size_plot.pdf'.")
