@@ -18,28 +18,21 @@ DIR_REGEX = re.compile(
 # Allow floats and scientific notation
 FLOAT_RE = r"([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
 
-# Updated to use the new density metric line: d_distribution (...)
 METRIC_PATTERNS = {
     "d_sample_count":      re.compile(r"d_sample_count.*?"      + FLOAT_RE),
     "d_cumulative_length": re.compile(r"d_cumulative_length.*?" + FLOAT_RE),
     "d_genome_size":       re.compile(r"d_genome_size.*?"       + FLOAT_RE),
-    # This line looks like:
-    #   d_distribution (Kolmogorov–Smirnov): 0.134263
-    #   d_distribution (Wasserstein): 0.00976438
-    #   d_distribution (RMS (binned density)): 2.66063
     "d_distribution":      re.compile(r"d_distribution.*?"      + FLOAT_RE),
-    # Assuming Composite is still printed in compare_genomes2.py
     "Composite":           re.compile(r"Composite\s*=\s*Σ[^=]*=\s*" + FLOAT_RE),
 }
 
 
 def parse_compare_output(stdout_text):
-    """Extract numeric metrics from compare_genomes2.py output."""
     metrics = {}
     for key, pattern in METRIC_PATTERNS.items():
         m = pattern.search(stdout_text)
         if not m:
-            return None  # missing something, treat as failure
+            return None
         try:
             metrics[key] = float(m.group(1))
         except ValueError:
@@ -48,21 +41,13 @@ def parse_compare_output(stdout_text):
 
 
 def run_compare_job(job):
-    """
-    Run compare_genomes2.py for one simulation directory.
-
-    job is a tuple:
-      (d, insertion_rate, deletion_rate, solo_ratio, length_bias,
-       exp_fasta, exp_tsv,
-       compare_script, ref_tsv, ref_fasta, dist_metric, alphas)
-    """
     (d,
      insertion_rate, deletion_rate, solo_ratio, length_bias,
      exp_fasta, exp_tsv,
      compare_script, ref_tsv, ref_fasta, dist_metric, alphas) = job
 
     cmd = [
-        sys.executable,  # same python interpreter
+        sys.executable,
         compare_script,
         "--ref-tsv", ref_tsv,
         "--exp-tsv", exp_tsv,
@@ -73,14 +58,9 @@ def run_compare_job(job):
         *(str(a) for a in alphas),
     ]
 
-    # Note: stderr prints may interleave when using multiple threads, which is fine for a log.
     print(f"Running ({os.path.basename(d)}): {' '.join(cmd)}", file=sys.stderr)
 
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-    )
+    result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
         print(
@@ -99,10 +79,7 @@ def run_compare_job(job):
         return None
 
     return [
-        insertion_rate,
-        deletion_rate,
-        solo_ratio,
-        length_bias,
+        insertion_rate, deletion_rate, solo_ratio, length_bias,
         metrics["d_sample_count"],
         metrics["d_cumulative_length"],
         metrics["d_genome_size"],
@@ -115,62 +92,41 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run compare_genomes2.py over all simulation dirs and build a composite matrix."
     )
-    parser.add_argument(
-        "--compare-script",
-        default="compare_genomes2.py",
-        help="Path to compare_genomes2.py (default: compare_genomes2.py in $PWD)",
-    )
-    parser.add_argument(
-        "--ref-tsv",
-        required=True,
-        help="Reference TSV path (e.g. ../Athal.fa_Kmer2LTR_TSD_class_purge)",
-    )
-    parser.add_argument(
-        "--ref-fasta",
-        required=True,
-        help="Reference FASTA path (e.g. ../Athal.fa)",
-    )
-    parser.add_argument(
-        "--output",
-        default="composite_matrix.tsv",
-        help="Output TSV file (default: composite_matrix.tsv)",
-    )
+    parser.add_argument("--compare-script", default="compare_genomes2.py")
+    parser.add_argument("--ref-tsv", required=True)
+    parser.add_argument("--ref-fasta", required=True)
+    parser.add_argument("--output", default="composite_matrix.tsv")
     parser.add_argument(
         "--pattern",
         default="insertion_rates_*_deletion_rates_*_solo_ratio_*_length_bias_*",
-        help="Glob pattern for simulation dirs (default: insertion_rates_*_deletion_rates_*_solo_ratio_*_length_bias_*)",
+    )
+    parser.add_argument("--gen-prefix", default="gen5100000_final.fasta")
+    parser.add_argument(
+        "--tsv-suffix",
+        default="_ltrharvest_kmer2ltr_dedup",
+        help="Suffix appended to the FASTA base name (minus extension and '_final') "
+             "to form the experimental TSV filename. "
+             "Ignored when --exp-tsv-name is provided.",
     )
     parser.add_argument(
-        "--gen-prefix",
-        default="gen5100000_final.fasta",
-        help="Base name of generated FASTA/TSV prefix (default: gen5100000_final.fasta)",
+        "--exp-tsv-name",
+        default=None,
+        help="Exact base name of the experimental TSV file inside each simulation dir "
+             "(e.g. ltrharvest_r1_kmer2ltr_dedup). "
+             "When provided, overrides --tsv-suffix and any name derived from --gen-prefix.",
     )
     parser.add_argument(
-        "--dist-metric",
-        choices=["wasserstein", "ks", "rms"],
-        default="wasserstein",
-        help="Distribution distance metric to use in compare_genomes2.py "
-             "(default: wasserstein).",
+        "--dist-metric", choices=["wasserstein", "ks", "rms"], default="wasserstein",
     )
     parser.add_argument(
-        "--alphas",
-        nargs=4,
-        type=float,
+        "--alphas", nargs=4, type=float,
         metavar=("ALPHA_SAMPLE", "ALPHA_LENGTH", "ALPHA_GENOME", "ALPHA_DISTRIBUTION"),
         default=[0.0, 0.0, 10.0, 1.0],
-        help="Four alpha weights passed to compare_genomes2.py via --alphas "
-             "(default: 0 0 10 1).",
     )
-    parser.add_argument(
-        "--threads",
-        type=int,
-        default=1,
-        help="Number of simulation dirs to process in parallel (default: 1)",
-    )
+    parser.add_argument("--threads", type=int, default=1)
 
     args = parser.parse_args()
 
-    # Find all candidate directories
     candidate_dirs = sorted(
         d for d in glob.glob(args.pattern) if os.path.isdir(d)
     )
@@ -179,37 +135,34 @@ def main():
         print("No matching directories found.", file=sys.stderr)
         sys.exit(1)
 
-    rows = []  # successfully parsed rows
-    skipped_param_rows = []  # dirs missing prereq files but with valid params
-    jobs = []  # jobs for parallel compare runs
+    rows = []
+    skipped_param_rows = []
+    jobs = []
 
-    # First pass: gather parameters, check required files, build jobs list
     for d in candidate_dirs:
         base = os.path.basename(d)
         m = DIR_REGEX.match(base)
         if not m:
-            # Not exactly in the expected format; skip quietly
             print(f"Skipping {d}: name doesn't match expected pattern", file=sys.stderr)
             continue
 
         insertion_rate = m.group("insertion_rate")
-        deletion_rate = m.group("deletion_rate")
-        solo_ratio = m.group("solo_ratio")
-        length_bias = m.group("length_bias")
+        deletion_rate  = m.group("deletion_rate")
+        solo_ratio     = m.group("solo_ratio")
+        length_bias    = m.group("length_bias")
 
         exp_fasta = os.path.join(d, args.gen_prefix)
-        # Derive exp_tsv from exp_fasta, e.g.
-        #   gen5100000_final.fasta -> gen5100000_ltr_r1_kmer2ltr
-        #   gen5100000.fasta       -> gen5100000_ltr_r1_kmer2ltr
-        base = os.path.basename(exp_fasta)
 
-        # Remove extension (.fasta/.fa) if present
-        base_noext = re.sub(r"\.(?:fasta|fa)$", "", base)
-
-        # Remove trailing "_final" if present
-        base_noext = re.sub(r"_final$", "", base_noext)
-
-        exp_tsv = os.path.join(d, base_noext + "_ltr_r1_kmer2ltr_dedup")
+        # Determine exp_tsv:
+        #   --exp-tsv-name  ->  use exactly that filename (no derivation)
+        #   otherwise       ->  strip ext + "_final" from gen-prefix, append --tsv-suffix
+        if args.exp_tsv_name:
+            exp_tsv = os.path.join(d, args.exp_tsv_name)
+        else:
+            base_name  = os.path.basename(exp_fasta)
+            base_noext = re.sub(r"\.(?:fasta|fa)$", "", base_name)
+            base_noext = re.sub(r"_final$", "", base_noext)
+            exp_tsv    = os.path.join(d, base_noext + args.tsv_suffix)
 
         missing = False
         if not os.path.exists(exp_fasta):
@@ -220,40 +173,20 @@ def main():
             missing = True
 
         if missing:
-            # store just the parameter part; metrics will be filled later
-            skipped_param_rows.append([
-                insertion_rate,
-                deletion_rate,
-                solo_ratio,
-                length_bias,
-            ])
+            skipped_param_rows.append([insertion_rate, deletion_rate, solo_ratio, length_bias])
             continue
 
-        # Build a job tuple for this directory
         jobs.append((
             d,
-            insertion_rate,
-            deletion_rate,
-            solo_ratio,
-            length_bias,
-            exp_fasta,
-            exp_tsv,
-            args.compare_script,
-            args.ref_tsv,
-            args.ref_fasta,
-            args.dist_metric,
-            args.alphas,
+            insertion_rate, deletion_rate, solo_ratio, length_bias,
+            exp_fasta, exp_tsv,
+            args.compare_script, args.ref_tsv, args.ref_fasta,
+            args.dist_metric, args.alphas,
         ))
 
-    # Second pass: run compare_genomes2.py over all jobs, possibly in parallel
     if jobs:
-        if args.threads is None or args.threads < 1:
-            max_workers = 1
-        else:
-            max_workers = args.threads
-
+        max_workers = max(1, args.threads or 1)
         if max_workers == 1:
-            # Serial execution (original behavior)
             for job in jobs:
                 row = run_compare_job(job)
                 if row is not None:
@@ -267,37 +200,18 @@ def main():
                     if row is not None:
                         rows.append(row)
 
-    # If we have at least one valid row, compute max metrics and
-    # impute values for skipped_param_rows as max + 0.1
     if rows and skipped_param_rows:
-        # metric indices in rows: 4..8
-        max_d_sample_count = max(r[4] for r in rows)
-        max_d_cumulative_length = max(r[5] for r in rows)
-        max_d_genome_size = max(r[6] for r in rows)
-        max_d_distribution = max(r[7] for r in rows)
-        max_composite = max(r[8] for r in rows)
-
         offset = 0.1
-
-        imputed_sample = max_d_sample_count + offset
-        imputed_cumulative_length = max_d_cumulative_length + offset
-        imputed_genome_size = max_d_genome_size + offset
-        imputed_distribution = max_d_distribution + offset
-        imputed_composite = max_composite + offset
-
+        imputed = [
+            max(r[4] for r in rows) + offset,
+            max(r[5] for r in rows) + offset,
+            max(r[6] for r in rows) + offset,
+            max(r[7] for r in rows) + offset,
+            max(r[8] for r in rows) + offset,
+        ]
         for params in skipped_param_rows:
-            rows.append(params + [
-                imputed_sample,
-                imputed_cumulative_length,
-                imputed_genome_size,
-                imputed_distribution,
-                imputed_composite,
-            ])
-
+            rows.append(params + imputed)
     elif not rows and skipped_param_rows:
-        # Edge case: everything was skipped due to missing files.
-        # We can still emit rows with a small constant (0.1) so the
-        # matrix isn't empty. Adjust if you prefer a different behavior.
         print(
             "Warning: no successful compare_genomes2.py runs; "
             "imputing all metrics as 0.1 for skipped dirs.",
@@ -306,17 +220,10 @@ def main():
         for params in skipped_param_rows:
             rows.append(params + [0.1, 0.1, 0.1, 0.1, 0.1])
 
-    # Write output matrix
     header = [
-        "insertion_rate",
-        "deletion_rate",
-        "solo_ratio",
-        "length_bias",
-        "d_sample_count",
-        "d_cumulative_length",
-        "d_genome_size",
-        "d_distribution",   # generic for ks/wasserstein/rms
-        "Composite",
+        "insertion_rate", "deletion_rate", "solo_ratio", "length_bias",
+        "d_sample_count", "d_cumulative_length", "d_genome_size",
+        "d_distribution", "Composite",
     ]
 
     with open(args.output, "w", newline="") as out_f:
