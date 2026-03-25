@@ -253,12 +253,21 @@ def main():
     parser.add_argument(
         "--pattern",
         default="insertion_rates_*_deletion_rates_*_solo_ratio_*_length_bias_*",
-        help="Glob pattern for simulation dirs (default: insertion_rates_*_deletion_rates_*_solo_ratio_*_length_bias_*)",
+        help="Glob pattern for simulation dirs "
+             "(default: insertion_rates_*_deletion_rates_*_solo_ratio_*_length_bias_*)",
     )
     parser.add_argument(
         "--gen-prefix",
         default="gen5100000_final.fasta",
-        help="Base name of generated FASTA/TSV prefix (default: gen5100000_final.fasta)",
+        help="Base name of generated FASTA/TSV prefix (default: gen5100000_final.fasta). "
+             "Ignored when --exp-tsv-name is set.",
+    )
+    parser.add_argument(
+        "--exp-tsv-name",
+        default=None,
+        help="Fixed filename for the exp TSV inside each simulation directory "
+             "(e.g. ltrharvest_r1_kmer2ltr_dedup). "
+             "When set, overrides the TSV name that would otherwise be derived from --gen-prefix.",
     )
     parser.add_argument(
         "--dist-metric",
@@ -308,20 +317,21 @@ def main():
             continue
 
         insertion_rate = m.group("insertion_rate")
-        deletion_rate = m.group("deletion_rate")
-        solo_ratio = m.group("solo_ratio")
-        length_bias = m.group("length_bias")
+        deletion_rate  = m.group("deletion_rate")
+        solo_ratio     = m.group("solo_ratio")
+        length_bias    = m.group("length_bias")
 
         exp_fasta = os.path.join(d, args.gen_prefix)
-        base = os.path.basename(exp_fasta)
 
-        # Remove extension (.fasta/.fa) if present
-        base_noext = re.sub(r"\.(?:fasta|fa)$", "", base)
-
-        # Remove trailing "_final" if present
-        base_noext = re.sub(r"_final$", "", base_noext)
-
-        exp_tsv = os.path.join(d, base_noext + "_ltr_r1_kmer2ltr_dedup")
+        # --- Determine exp TSV path ---
+        if args.exp_tsv_name:
+            # User explicitly provided a fixed TSV filename; use it directly.
+            exp_tsv = os.path.join(d, args.exp_tsv_name)
+        else:
+            # Derive TSV name from gen_prefix (original behaviour).
+            base_noext = re.sub(r"\.(?:fasta|fa)$", "", os.path.basename(exp_fasta))
+            base_noext = re.sub(r"_final$", "", base_noext)
+            exp_tsv = os.path.join(d, base_noext + "_ltr_r1_kmer2ltr_dedup")
 
         missing = False
         if not os.path.exists(exp_fasta):
@@ -388,25 +398,13 @@ def main():
     # If we have at least one valid row, compute max metrics and
     # impute values for skipped_param_rows as max + 0.1
     if rows and skipped_param_rows:
-        # For imputation, only use the distance / composite columns
-        # (indices relative to row list)
-        #   idx  4-5:  ref/exp LTR-RT count       (int, skip for imputation)
-        #   idx  6-7:  ref/exp cumulative length   (int, skip for imputation)
-        #   idx  8-9:  ref/exp genome size         (int, skip for imputation)
-        #   idx 10:    raw_distribution            (skip)
-        #   idx 11-14: d_sample_count .. d_distribution
-        #   idx 15-18: alpha weights               (skip)
-        #   idx 19:    Composite
-
-        # For imputed rows: raw counts get 0, distances get max+0.1,
-        # weights mirror the alphas used.
         offset = 0.1
 
-        imputed_d_sample      = max(r[11] for r in rows) + offset
-        imputed_d_cumlength   = max(r[12] for r in rows) + offset
-        imputed_d_genome      = max(r[13] for r in rows) + offset
+        imputed_d_sample       = max(r[11] for r in rows) + offset
+        imputed_d_cumlength    = max(r[12] for r in rows) + offset
+        imputed_d_genome       = max(r[13] for r in rows) + offset
         imputed_d_distribution = max(r[14] for r in rows) + offset
-        imputed_composite     = max(r[19] for r in rows) + offset
+        imputed_composite      = max(r[19] for r in rows) + offset
 
         for params in skipped_param_rows:
             rows.append(params + [
