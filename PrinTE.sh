@@ -204,7 +204,9 @@ Options:
 ########## GENERAL USE ##########
   -m,  --mutation_rate       DNA Mutation rate (default: 1.3e-8)
   -mxgs, --max_size           Maximum genome size allowed before breaking loop in bytes (e.g., 100M, 1G)
-  -mngs, --min_size           Minimum genome size allowed before breaking loop in bytes (e.g., 50M, 200M)
+  -mngs, --min_size           Minimum projected final genome size; uses trend-based linear regression
+                               after 5 iterations to predict final size and terminates early if
+                               projection falls below this value (e.g., 700M, 1G)
   -s,  --seed                Random seed (default: 42)
   -r,  --TE_ratio            TE ratio file (default: ${TOOL_DIR}/ratios.tsv)
   -t,  --threads             Number of threads (default: 4)
@@ -700,6 +702,10 @@ echo "Seed list for Phase 2 iterations: ${seed_list[@]}" | tee -a "$LOG"
 prev_lib="lib_clean.fa"
 
 last_gen_done=0
+# Arrays to track genome sizes across iterations for trend-based mngs projection
+genome_size_iters=()    # iteration indices
+genome_size_bytes=()    # corresponding genome sizes in bytes
+
 for (( i=start_iter; i<=iterations; i++ )); do
   # Calculate the true generation number for file naming.
   current_gen=$(( i * step ))
@@ -842,16 +848,46 @@ for (( i=start_iter; i<=iterations; i++ )); do
           actual_bytes=$(stat -c%s "$fasta")  # Linux
       fi
 
+      # Track genome size for trend projection
+      genome_size_iters+=("$i")
+      genome_size_bytes+=("$actual_bytes")
+
       if [[ -n "$max_size" && $actual_bytes -gt $max_bytes ]]; then
         echo "Maximum genome size exceeded: $actual_bytes bytes > $max_bytes bytes" | tee -a "$LOG"
         echo "Stopping at generation ${current_gen}." | tee -a "$LOG"
         break
       fi
 
-      if [[ -n "$min_size" && $actual_bytes -lt $min_bytes ]]; then
-        echo "Minimum genome size reached: $actual_bytes bytes < $min_bytes bytes" | tee -a "$LOG"
-        echo "Stopping at generation ${current_gen}." | tee -a "$LOG"
-        break
+      # Trend-based minimum genome size check: use linear regression to project
+      # the genome size at the final iteration. If the projection is below min_bytes,
+      # the simulation is unlikely to reach the target and we terminate early.
+      if [[ -n "$min_size" && ${#genome_size_iters[@]} -ge 5 ]]; then
+        projected=$(python3 -c "
+import sys
+xs = [int(x) for x in sys.argv[1].split(',')]
+ys = [int(y) for y in sys.argv[2].split(',')]
+target_x = int(sys.argv[3])
+n = len(xs)
+sum_x = sum(xs)
+sum_y = sum(ys)
+sum_xy = sum(x*y for x, y in zip(xs, ys))
+sum_x2 = sum(x*x for x in xs)
+denom = n * sum_x2 - sum_x * sum_x
+if denom == 0:
+    print(int(sum_y / n))
+else:
+    slope = (n * sum_xy - sum_x * sum_y) / denom
+    intercept = (sum_y - slope * sum_x) / n
+    print(int(slope * target_x + intercept))
+" "$(IFS=,; echo "${genome_size_iters[*]}")" "$(IFS=,; echo "${genome_size_bytes[*]}")" "$iterations")
+
+        echo "Trend projection at gen${generation_end}: ${projected} bytes (target min: ${min_bytes} bytes)" | tee -a "$LOG"
+
+        if [[ $projected -lt $min_bytes ]]; then
+          echo "Projected final genome size (${projected} bytes) is below minimum (${min_bytes} bytes)." | tee -a "$LOG"
+          echo "Genome size trend indicates target will not be reached. Stopping at generation ${current_gen}." | tee -a "$LOG"
+          break
+        fi
       fi
     else
       echo "Warning: expected output '$fasta' not found." | tee -a "$ERR"
