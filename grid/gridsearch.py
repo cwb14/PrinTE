@@ -129,6 +129,7 @@ def build_printe_cmd(
         "-k", str(lb),
         "-TsTv", str(args.tstv),
         "--ex_LTR",
+        "--no_postproc",
         "--TE_lib", str(te_lib),
         "-t", str(args.threads),
         "--bed", str(bed),
@@ -290,6 +291,11 @@ def run_one_combo_from_file(args):
     ir, dr, sr, lb = combo
     dname = dir_name_from_combo(ir, dr, sr, lb)
     workdir = Path(dname)
+
+    if workdir.exists():
+        print(f"[SKIP] {dname} already exists; presumed complete.")
+        raise SystemExit(0)
+
     workdir.mkdir(exist_ok=True)
 
     cmd = build_printe_cmd(combo, args, workdir, base_cwd)

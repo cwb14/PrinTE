@@ -154,6 +154,18 @@ def parse_args():
         )
     )
 
+    # --- Color scale ceiling ---
+    parser.add_argument(
+        "--color_ceiling", type=float, default=None,
+        help=(
+            "Cap the color scale at this composite score value. "
+            "The full color gradient is compressed into [min, ceiling]; "
+            "any data point above the ceiling is rendered at the top color (yellow). "
+            "Useful when a small fraction of high-scoring runs would otherwise "
+            "dominate the scale and wash out variation near the optimum."
+        )
+    )
+
     # --- Report scope control ---
     parser.add_argument(
         "--report_on_filtered", action="store_true",
@@ -537,11 +549,18 @@ def main():
             # ---- Plot ----
             fig, ax = plt.subplots(figsize=(6, 5))
 
-            # Color scale spans the view window's interpolated range
+            # Color scale spans the view window's interpolated range,
+            # optionally capped at --color_ceiling.
             z_min, z_max = float(Zi.min()), float(Zi.max())
             if z_min == z_max:
                 z_max = z_min + 1e-6
-            contour_levels = np.linspace(z_min, z_max, args.levels)
+
+            if args.color_ceiling is not None and args.color_ceiling > z_min:
+                z_max_plot = args.color_ceiling
+            else:
+                z_max_plot = z_max
+
+            contour_levels = np.linspace(z_min, z_max_plot, args.levels)
 
             contour = ax.contourf(
                 Xi, Yi, Zi,
@@ -598,11 +617,14 @@ def main():
             ax.set_ylabel(f"log10({y_param})" if use_log_y else y_param)
 
             cbar = fig.colorbar(contour, ax=ax)
-            cbar.set_label(metric_col)
+            cbar_label = metric_col
+            if args.color_ceiling is not None and args.color_ceiling > z_min:
+                cbar_label += f" (ceiling={args.color_ceiling:g})"
+            cbar.set_label(cbar_label)
 
             # Draw the highlight threshold on the colorbar for reference
             if highlight_enabled and highlight_threshold is not None:
-                if z_min < highlight_threshold < z_max:
+                if z_min < highlight_threshold < z_max_plot:
                     cbar.ax.axhline(
                         y=highlight_threshold, color=args.highlight_color,
                         linewidth=1.5, linestyle=args.highlight_linestyle,

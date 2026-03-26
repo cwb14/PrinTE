@@ -217,6 +217,7 @@ Options:
   -md, --model               DNA mutation model for LTR dating (choose from: raw, K2P, JC69; default: K2P)
   -TsTv, --TsTv              Transition/transversion ratio (default: 1.0)
   -ex, --ex_LTR              Exclude LTR sequences without a domain hit (passed as '-exclude_no_hits' to LTR_fasta_header_appender.py)
+  -np, --no_postproc         Skip all post-processing steps; exit after generating the final gen<N>_final.bed and gen<N>_final.fasta files
   -h,  --help                Display this help message and exit
 
 Example:
@@ -251,6 +252,7 @@ ensure_mutator   # verify / recompile ltr_mutator before anything else runs
 cont_flag=0
 keep_temps=0
 burnin_only=0
+no_postproc=0
 euch_bias_insert=1.0
 euch_bias_excise=1.0
 euch_buffer=10000
@@ -375,6 +377,9 @@ while [[ $# -gt 0 ]]; do
       shift;;
     -ex|--ex_LTR)
       ex_ltr=1
+      shift;;
+    -np|--no_postproc)
+      no_postproc=1
       shift;;
     -dg|--disable_genes)
       disable_genes=1
@@ -856,6 +861,11 @@ for (( i=start_iter; i<=iterations; i++ )); do
 done
 
 echo "Pipeline completed at $(date)" | tee -a "$LOG"
+
+if [[ "$no_postproc" -eq 1 ]]; then
+  echo "Skipping post-processing due to --no_postproc." | tee -a "$LOG"
+  exit 0
+fi
 
 ###############################################################################
 # Supplemental Post-Processing (Global)
