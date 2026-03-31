@@ -818,6 +818,9 @@ for (( i=start_iter; i<=iterations; i++ )); do
       exit 1
   fi
 
+  # Remove .fai index created by pysam (temp artifact)
+  rm -f "gen${current_gen}_final.fasta.fai"
+
   # (2e) Update pipeline report
   echo "=== Step 2e: Updating insertion/deletion pipeline report ===" | tee -a "$LOG"
   cmd="python ${UTIL_DIR}/log_to_report.py -in ${LOG} -out pipeline.report"
