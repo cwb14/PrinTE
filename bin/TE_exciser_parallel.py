@@ -46,6 +46,7 @@ import random
 import copy
 import os
 import math
+import bisect
 from collections import defaultdict
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -113,6 +114,56 @@ def parse_fasta(fasta_file):
     for rec in SeqIO.parse(fasta_file, "fasta"):
         recs[rec.id] = rec
     return recs
+
+# Subtypes eligible for excision (used in select_removals and main)
+_ELIGIBLE_SUBTYPES = frozenset([
+    "NON_NEST_GROUP_TE", "CUT_PAIR_TE_1", "CUT_PAIR_TE_2",
+    "NEST_TE_IN_TE", "NEST_TE_IN_GENE",
+])
+
+class _FenwickTree:
+    """Binary Indexed Tree for O(log n) weighted sampling without replacement."""
+    __slots__ = ('n', 'tree')
+
+    def __init__(self, weights):
+        self.n = len(weights)
+        self.tree = [0.0] * (self.n + 1)  # 1-indexed
+        for i in range(self.n):
+            self.tree[i + 1] = weights[i]
+        for i in range(1, self.n + 1):
+            parent = i + (i & -i)
+            if parent <= self.n:
+                self.tree[parent] += self.tree[i]
+
+    def update(self, i, delta):
+        i += 1
+        while i <= self.n:
+            self.tree[i] += delta
+            i += i & (-i)
+
+    def total(self):
+        s = 0.0
+        i = self.n
+        while i > 0:
+            s += self.tree[i]
+            i -= i & (-i)
+        return s
+
+    def find(self, target):
+        """Smallest 0-indexed position whose prefix sum >= target."""
+        pos = 0
+        bit = 1
+        while bit <= self.n:
+            bit <<= 1
+        bit >>= 1
+        cur = 0.0
+        while bit > 0:
+            nxt = pos + bit
+            if nxt <= self.n and cur + self.tree[nxt] < target:
+                cur += self.tree[nxt]
+                pos = nxt
+            bit >>= 1
+        return pos
 
 def build_euchromatin_intervals(entries, buffer):
     intervals_by_chrom = defaultdict(list)
@@ -319,82 +370,86 @@ def select_removals(entries, nest_groups, num_excision, seed, k, gene_weights, g
     # Build eligible candidate list
     eligible = []
     for e in entries:
-        if e.subtype in ["NON_NEST_GROUP_TE", "CUT_PAIR_TE_1", "CUT_PAIR_TE_2",
-                         "NEST_TE_IN_TE", "NEST_TE_IN_GENE"]:
+        if e.subtype in _ELIGIBLE_SUBTYPES:
             eligible.append(e)
-    
+
     if not eligible:
         return set()
-    
-    # Determine L95 (95th percentile) among eligible entries to mitigate long‐outliers
+
+    # Determine L95 (95th percentile) among eligible entries to mitigate long-outliers
     lengths = [e.length() for e in eligible]
     L95 = float(np.percentile(lengths, 95))
 
+    # Pre-compute sorted interval starts per chrom for O(log n) euchromatin lookup
+    euch_starts = {}
+    if euch_intervals is not None:
+        for chrom, intervals in euch_intervals.items():
+            euch_starts[chrom] = [iv[0] for iv in intervals]
+
     # Pre-calculate weights for each eligible candidate, clamping lengths > L95 to L95
-    weights = {}
+    weight_vals = []
     for e in eligible:
         L_eff = min(e.length(), L95)
         base_weight = math.exp(-k * (1 - (L_eff / L95)))
-        # Apply chromatin state bias if euch_intervals is provided.
+        # Apply chromatin state bias via binary search on merged intervals.
         if euch_intervals is not None:
-            # Use the midpoint of the TE candidate.
             mid = (e.start + e.end) // 2
             if e.chrom in euch_intervals:
-                for (istart, iend) in euch_intervals[e.chrom]:
-                    if istart <= mid <= iend:
-                        base_weight *= euch_het_bias
-                        break
+                starts = euch_starts[e.chrom]
+                idx = bisect.bisect_right(starts, mid) - 1
+                if idx >= 0 and euch_intervals[e.chrom][idx][0] <= mid <= euch_intervals[e.chrom][idx][1]:
+                    base_weight *= euch_het_bias
         # If the candidate is gene-disrupting, further weight it.
         if e.subtype == "NEST_TE_IN_GENE" and e.group is not None:
-            # For nest groups with gene disruption, use the gene ID from one of the flanking entries.
             group = nest_groups.get(e.group)
             if group:
-                # Assume the first flanking entry (CUT_PAIR_GENE_1) has the gene ID.
                 gene_id = group[0].feature_id
                 gene_weight = gene_weights.get(gene_id, 1)
                 multiplier = 1 + sel_coeff * gene_weight * generations
                 base_weight *= multiplier
-        weights[id(e)] = base_weight
+        weight_vals.append(base_weight)
+
+    # Fenwick tree for O(log n) weighted sampling without replacement
+    tree = _FenwickTree(weight_vals)
+
+    # Map group_id -> list of indices in eligible for fast group-member removal
+    group_indices = defaultdict(list)
+    for i, e in enumerate(eligible):
+        if e.group is not None:
+            group_indices[e.group].append(i)
 
     removals = set()
     group_removed = {}
-    
-    # Perform weighted sampling without replacement.
-    # Continue until we have num_excision events or no eligible candidates remain.
-    while len(removals) < num_excision and eligible:
-        total_weight = sum(weights[id(e)] for e in eligible)
-        # Pick a random threshold in [0, total_weight)
-        r = random.uniform(0, total_weight)
-        cumulative = 0.0
-        chosen = None
-        for e in eligible:
-            cumulative += weights[id(e)]
-            if cumulative >= r:
-                chosen = e
-                break
-        if chosen is None:
-            chosen = eligible[-1]
-                        
+
+    while len(removals) < num_excision:
+        total_w = tree.total()
+        if total_w <= 0:
+            break
+
+        r = random.uniform(0, total_w)
+        idx = tree.find(r)
+        if idx >= len(eligible):
+            idx = len(eligible) - 1
+        chosen = eligible[idx]
+
         if chosen.group is not None:
-            # detect TE‐only nest groups by inspecting the flanking subtype
             grp = nest_groups.get(chosen.group)
             is_te_group = grp and grp[0].subtype.startswith("CUT_PAIR_TE")
 
             if is_te_group:
-                # TE‐nest groups remain fully eligible: just remove the chosen entry
-                eligible = [e for e in eligible if e is not chosen]
+                tree.update(idx, -weight_vals[idx])
             else:
-                # gene‐nest groups: keep the old behavior
                 if chosen.group in group_removed:
-                    eligible = [e for e in eligible if e is not chosen]
+                    tree.update(idx, -weight_vals[idx])
                     continue
                 group_removed[chosen.group] = ("middle"
                                                if chosen.subtype == "NEST_TE_IN_GENE"
                                                else "flank")
-                eligible = [e for e in eligible if e.group != chosen.group]
+                for gi in group_indices.get(chosen.group, []):
+                    tree.update(gi, -weight_vals[gi])
         else:
-            eligible = [e for e in eligible if e is not chosen]
-        
+            tree.update(idx, -weight_vals[idx])
+
         removals.add(chosen)
     print(f"Selected {len(removals)} removal events.")
     return removals
@@ -436,20 +491,25 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
          end becomes (start+LTRlen) and '_SOLO' is appended to the feature_ID while preserving supplemental info.
          Note: No consolidation is performed after a partial excision.
     """
-    def qualifies_as_intact_ltr(e, all_entries):
+    # Pre-sort entries by lineno for O(log n) neighborhood lookups
+    _sorted_by_ln = sorted(entries, key=lambda x: x.lineno)
+    _ln_arr = [x.lineno for x in _sorted_by_ln]
+
+    def qualifies_as_intact_ltr(e):
         # Condition (a): if the first supplemental attribute contains "CUT_BY", reject.
         if e.supp and "CUT_BY" in e.supp[0]:
             return False
         # Condition (b): if there is at least one supplemental field, check nearby entries.
         if e.supp:
-            for other in all_entries:
+            lo = bisect.bisect_left(_ln_arr, e.lineno - 100)
+            hi = bisect.bisect_right(_ln_arr, e.lineno + 100)
+            for i in range(lo, hi):
+                other = _sorted_by_ln[i]
                 if other is e:
                     continue
-                if abs(other.lineno - e.lineno) <= 100:
-                    if other.tsd == e.tsd and other.strand == e.strand:
-                        # Check if the NAMEs have an exact or prefix match.
-                        if e.name.startswith(other.name) or other.name.startswith(e.name):
-                            return False
+                if other.tsd == e.tsd and other.strand == e.strand:
+                    if e.name.startswith(other.name) or other.name.startswith(e.name):
+                        return False
         return True
 
     # Iterate over removals in a deterministic order.
@@ -462,7 +522,7 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
         if e.subtype in ["NEST_TE_IN_TE", "NON_NEST_GROUP_TE"]:
 #           if ("LTRlen" in e.feature_id) and ("_SOLO" not in e.feature_id):
             if ("LTRlen" in e.feature_id) and ("_SOLO" not in e.feature_id) and ("_FRAG" not in e.feature_id):
-                if not qualifies_as_intact_ltr(e, entries):
+                if not qualifies_as_intact_ltr(e):
                     continue
                 m = re.search(r"LTRlen:(\d+)", e.feature_id)
                 if m:
@@ -588,48 +648,39 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
                 new_entries.append(e)
  
      # -------------------------------------------------------------------------
-    # Second-layer FRAG logic for multi-nesting:
-    # If an entry has "partner" TE(s) with same TSD & strand and NAME exact/prefix
-    # match within 100 lines, and at least one partner was fully excised (not partial),
-    # then the surviving entry is marked as _FRAG.
-    # This captures outer multi-nest pairs like the Os0632 example.
+    # Second-layer FRAG logic for multi-nesting (binary-search neighborhood):
     # -------------------------------------------------------------------------
     def mark_frag_multinest(all_entries, removed_set, partial_info):
-        # Only count fully-removed entries (not partial SOLO events)
         full_removed_ids = {id(e) for e in removed_set if id(e) not in partial_info}
+        # Re-use the pre-sorted lineno arrays for O(log n) neighborhood lookups
+        by_ln = _sorted_by_ln
+        ln_arr = _ln_arr
 
         for e in all_entries:
-            # Skip entries that were fully removed
             if id(e) in full_removed_ids:
                 continue
-            # Only consider TEs, not genes
             if e.feature_id.startswith("gene"):
                 continue
-            # Must have supplemental fields to qualify as a multi-nest candidate
             if not e.supp:
                 continue
 
+            lo = bisect.bisect_left(ln_arr, e.lineno - 100)
+            hi = bisect.bisect_right(ln_arr, e.lineno + 100)
             has_removed_partner = False
-            for other in all_entries:
+            for i in range(lo, hi):
+                other = by_ln[i]
                 if other is e:
                     continue
-                # Neighborhood check (100 lines)
-                if abs(other.lineno - e.lineno) > 100:
-                    continue
-                # Must share TSD and strand
                 if other.tsd != e.tsd or other.strand != e.strand:
                     continue
-                # NAME exact or prefix match
                 if not (e.name.startswith(other.name) or other.name.startswith(e.name)):
                     continue
-                # Partner must have been fully removed
                 if id(other) in full_removed_ids:
                     has_removed_partner = True
                     break
 
             if has_removed_partner:
                 base, sep, rest = e.feature_id.partition('#')
-                # Avoid double-tagging or tagging SOLOs
                 if not base.endswith("_FRAG"):
                     new_feature_id = base + "_FRAG" + (sep + rest if sep else "")
                     e.feature_id = new_feature_id
@@ -638,32 +689,46 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
                     else:
                         e.name = new_feature_id
 
-    # Apply multi-nest FRAG tagging (works for both outer and inner pairs)
     mark_frag_multinest(entries, to_remove, partial_info)
 
-    
+    # Pre-sort removal events per chromosome (shared by genome editing & coord adjustment)
+    sorted_events_by_chrom = {}
+    for chrom in removals_by_chrom:
+        sorted_events_by_chrom[chrom] = sorted(removals_by_chrom[chrom], key=lambda x: x[0])
+
+    # --- Genome editing: join kept segments (O(n) instead of O(n*k) list deletions) ---
     updated_genome = {}
     for chrom, rec in genome_records.items():
-        seq = list(str(rec.seq))
-        events = sorted(removals_by_chrom.get(chrom, []), key=lambda x: x[0])
-        total_shift = 0
+        seq_str = str(rec.seq)
+        events = sorted_events_by_chrom.get(chrom, [])
+        parts = []
+        prev_end = 0
         for (rstart, rend, rlen) in events:
-            adj_start = rstart - total_shift
-            adj_end = rend - total_shift
-            del seq[adj_start:adj_end]
-            total_shift += rlen
-        updated_seq = "".join(seq)
+            parts.append(seq_str[prev_end:rstart])
+            prev_end = rend
+        parts.append(seq_str[prev_end:])
+        updated_seq = "".join(parts)
         new_rec = SeqRecord(Seq(updated_seq), id=rec.id, description="")
         updated_genome[chrom] = new_rec
 
+    # --- Coordinate adjustment: prefix-sum + bisect (O(n log k) instead of O(n*k)) ---
+    shift_data = {}
+    for chrom, events in sorted_events_by_chrom.items():
+        positions = [rstart for rstart, rend, rlen in events]
+        prefix = []
+        running = 0
+        for rstart, rend, rlen in events:
+            running += rlen
+            prefix.append(running)
+        shift_data[chrom] = (positions, prefix)
+
     for entry in new_entries:
-        shift = 0
-        events = sorted(removals_by_chrom.get(entry.chrom, []), key=lambda x: x[0])
-        for (rstart, rend, rlen) in events:
-            if rstart < entry.start:
-                shift += rlen
-        entry.start -= shift
-        entry.end -= shift
+        if entry.chrom in shift_data:
+            positions, prefix = shift_data[entry.chrom]
+            idx = bisect.bisect_left(positions, entry.start)
+            shift = prefix[idx - 1] if idx > 0 else 0
+            entry.start -= shift
+            entry.end -= shift
 
     new_entries.sort(key=lambda x: (x.chrom, x.start))
     return updated_genome, new_entries
@@ -894,10 +959,7 @@ def main():
     entries, nest_groups = classify_entries(entries)
 
     # Weighted candidate curve
-    eligible_entries = [e for e in entries if e.subtype in [
-        "NON_NEST_GROUP_TE", "CUT_PAIR_TE_1", "CUT_PAIR_TE_2",
-        "NEST_TE_IN_TE", "NEST_TE_IN_GENE"
-    ]]
+    eligible_entries = [e for e in entries if e.subtype in _ELIGIBLE_SUBTYPES]
     if eligible_entries and not args.no_fig:
         lengths = [e.length() for e in eligible_entries]
         L95 = float(np.percentile(lengths, 95))
@@ -933,10 +995,8 @@ def main():
             nest_by_chrom[c][gid] = grp
 
         # Count eligible per chrom
-        elig_counts = {c: sum(1 for e in entries_by_chrom[c] if e.subtype in [
-            "NON_NEST_GROUP_TE", "CUT_PAIR_TE_1", "CUT_PAIR_TE_2",
-            "NEST_TE_IN_TE", "NEST_TE_IN_GENE"
-        ]) for c in chroms}
+        elig_counts = {c: sum(1 for e in entries_by_chrom[c]
+                           if e.subtype in _ELIGIBLE_SUBTYPES) for c in chroms}
         total_elig = sum(elig_counts.values()) or 1
 
         # Allocate per-chrom excisions
