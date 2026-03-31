@@ -1,6 +1,6 @@
 #!/bin/bash
 ###############################################################################
-# prinTE.sh
+# PrinTE.sh
 #
 # A wrapper to run the TE evolution simulation pipeline in two phases,
 # and then perform supplemental post-processing.
@@ -203,10 +203,12 @@ Options:
 
 ########## GENERAL USE ##########
   -m,  --mutation_rate       DNA Mutation rate (default: 1.3e-8)
-  -mxgs, --max_size           Maximum genome size allowed before breaking loop in bytes (e.g., 100M, 1G)
-  -mngs, --min_size           Minimum projected final genome size; uses trend-based linear regression
-                               after 5 iterations to predict final size and terminates early if
-                               projection falls below this value (e.g., 700M, 1G)
+  -mxgs, --max_size           Maximum genome size bound (e.g., 100M, 1G). Used in regression-based
+                               early termination: projected final size with 95% prediction interval
+                               must fall below this value or simulation stops early
+  -mngs, --min_size           Minimum genome size bound (e.g., 700M, 1G). Used in regression-based
+                               early termination: projected final size with 95% prediction interval
+                               must fall above this value or simulation stops early
   -s,  --seed                Random seed (default: 42)
   -r,  --TE_ratio            TE ratio file (default: ${TOOL_DIR}/ratios.tsv)
   -t,  --threads             Number of threads (default: 4)
@@ -623,25 +625,6 @@ if [[ -n "$max_size" ]]; then
   echo "Max genome size set to $raw → $max_bytes bytes" | tee -a "$LOG"
 fi
 
-if [[ -n "$max_size" ]]; then
-  raw="$max_size"
-  unit="${raw: -1}"              # last character: M, G, or digit
-  num="${raw%[MGmg]}"            # strip a possible M/G
-  case "$unit" in
-    [Mm]) max_bytes=$(( num * 1024 * 1024 )) ;;
-    [Gg]) max_bytes=$(( num * 1024 * 1024 * 1024 )) ;;
-    *)    # assume bytes if purely numeric
-      if [[ "$raw" =~ ^[0-9]+$ ]]; then
-        max_bytes=$raw
-      else
-        echo "Error: invalid format for --max_size: $raw" | tee -a "$ERR"
-        exit 1
-      fi
-      ;;
-  esac
-  echo "Max genome size set to $raw → $max_bytes bytes" | tee -a "$LOG"
-fi
-
 if [[ -n "$min_size" ]]; then
   raw="$min_size"
   unit="${raw: -1}"              # last character: M, G, or digit
@@ -702,9 +685,27 @@ echo "Seed list for Phase 2 iterations: ${seed_list[@]}" | tee -a "$LOG"
 prev_lib="lib_clean.fa"
 
 last_gen_done=0
-# Arrays to track genome sizes across iterations for trend-based mngs projection
-genome_size_iters=()    # iteration indices
-genome_size_bytes=()    # corresponding genome sizes in bytes
+# Arrays to track genome sizes across iterations for regression-based bounds checking.
+# On resume, backfill from existing gen*_final.fasta files so regression has history.
+genome_size_iters=()
+genome_size_bytes=()
+if [[ "$cont_flag" -eq 1 && $start_iter -gt 1 ]]; then
+  echo "Backfilling genome size history from existing generations for regression..." | tee -a "$LOG"
+  for (( bi=1; bi<start_iter; bi++ )); do
+    bf="gen$(( bi * step ))_final.fasta"
+    if [[ -f "$bf" ]]; then
+      if [[ "$OS" == "Darwin" ]]; then
+        bsz=$(stat -f%z "$bf")
+      else
+        bsz=$(stat -c%s "$bf")
+      fi
+      genome_size_iters+=("$bi")
+      genome_size_bytes+=("$bsz")
+      echo "  iteration $bi (gen$(( bi * step ))): ${bsz} bytes" | tee -a "$LOG"
+    fi
+  done
+  echo "Backfilled ${#genome_size_iters[@]} data points for regression." | tee -a "$LOG"
+fi
 
 for (( i=start_iter; i<=iterations; i++ )); do
   # Calculate the true generation number for file naming.
@@ -838,7 +839,10 @@ for (( i=start_iter; i<=iterations; i++ )); do
   # record that we successfully reached this generation
   last_gen_done=$current_gen
   
-  # Check if genome size is outside the allowed bounds (if any were provided).
+  # --- Regression-based genome size bounds checking ---
+  # After accumulating >= 3 data points, project the final genome size via
+  # linear regression every iteration. The projection must fall between
+  # min_size and max_size (whichever are set) or we terminate early.
   if [[ -n "$max_size" || -n "$min_size" ]]; then
     fasta="gen${current_gen}_final.fasta"
     if [[ -f "$fasta" ]]; then
@@ -852,42 +856,85 @@ for (( i=start_iter; i<=iterations; i++ )); do
       genome_size_iters+=("$i")
       genome_size_bytes+=("$actual_bytes")
 
-      if [[ -n "$max_size" && $actual_bytes -gt $max_bytes ]]; then
-        echo "Maximum genome size exceeded: $actual_bytes bytes > $max_bytes bytes" | tee -a "$LOG"
-        echo "Stopping at generation ${current_gen}." | tee -a "$LOG"
-        break
-      fi
+      # Run regression with 95% prediction interval once we have >= 3 data points.
+      # Termination requires the ENTIRE interval to fall outside bounds:
+      #   too small → upper bound of interval < min_bytes
+      #   too large → lower bound of interval > max_bytes
+      # This prevents premature termination when the fit is noisy.
+      if [[ ${#genome_size_iters[@]} -ge 3 ]]; then
+        regression_result=$(python -c "
+import sys, math
 
-      # Trend-based minimum genome size check: use linear regression to project
-      # the genome size at the final iteration. If the projection is below min_bytes,
-      # the simulation is unlikely to reach the target and we terminate early.
-      if [[ -n "$min_size" && ${#genome_size_iters[@]} -ge 5 ]]; then
-        projected=$(python3 -c "
-import sys
 xs = [int(x) for x in sys.argv[1].split(',')]
 ys = [int(y) for y in sys.argv[2].split(',')]
 target_x = int(sys.argv[3])
 n = len(xs)
-sum_x = sum(xs)
-sum_y = sum(ys)
+
+# Linear regression
+sum_x  = sum(xs)
+sum_y  = sum(ys)
 sum_xy = sum(x*y for x, y in zip(xs, ys))
 sum_x2 = sum(x*x for x in xs)
-denom = n * sum_x2 - sum_x * sum_x
+denom  = n * sum_x2 - sum_x * sum_x
+
 if denom == 0:
-    print(int(sum_y / n))
+    y_hat = int(sum_y / n)
+    # No variance info — report point estimate with zero margin
+    print(f'{y_hat} {y_hat} {y_hat} 0.0')
+    sys.exit(0)
+
+slope     = (n * sum_xy - sum_x * sum_y) / denom
+intercept = (sum_y - slope * sum_x) / n
+y_hat     = slope * target_x + intercept
+
+# Residual standard error
+x_bar   = sum_x / n
+ss_res  = sum((y - (slope * x + intercept))**2 for x, y in zip(xs, ys))
+se      = math.sqrt(ss_res / (n - 2))    # n >= 3 so n-2 >= 1
+
+# Extrapolation penalty
+ss_xx   = sum((x - x_bar)**2 for x in xs)
+h       = 1.0 + 1.0/n + (target_x - x_bar)**2 / ss_xx if ss_xx > 0 else 1.0 + 1.0/n
+margin  = se * math.sqrt(h)
+
+# Student's t critical value for 95% two-sided (alpha/2 = 0.025)
+# Exact lookup for small df; Cornish-Fisher approximation for df >= 8
+df = n - 2
+_t_table = {1:12.706, 2:4.303, 3:3.182, 4:2.776, 5:2.571, 6:2.447, 7:2.365}
+if df in _t_table:
+    t_crit = _t_table[df]
 else:
-    slope = (n * sum_xy - sum_x * sum_y) / denom
-    intercept = (sum_y - slope * sum_x) / n
-    print(int(slope * target_x + intercept))
+    z = 1.959964
+    t_crit = z + (z**3+z)/(4*df) + (5*z**5+16*z**3+3*z)/(96*df*df)
+
+pred_margin = t_crit * margin
+
+# R-squared for logging
+ss_tot = sum((y - sum_y/n)**2 for y in ys)
+r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
+
+lo = int(y_hat - pred_margin)
+hi = int(y_hat + pred_margin)
+print(f'{int(y_hat)} {lo} {hi} {r2:.4f}')
 " "$(IFS=,; echo "${genome_size_iters[*]}")" "$(IFS=,; echo "${genome_size_bytes[*]}")" "$iterations")
 
-        echo "Trend projection at gen${generation_end}: ${projected} bytes (target min: ${min_bytes} bytes)" | tee -a "$LOG"
+        read -r proj_point proj_lo proj_hi proj_r2 <<< "$regression_result"
 
-        if [[ $projected -lt $min_bytes ]]; then
-          echo "Projected final genome size (${projected} bytes) is below minimum (${min_bytes} bytes)." | tee -a "$LOG"
-          echo "Genome size trend indicates target will not be reached. Stopping at generation ${current_gen}." | tee -a "$LOG"
+        echo "Regression (iteration $i, n=${#genome_size_iters[@]}, R²=${proj_r2}): projected=${proj_point}, 95% PI=[${proj_lo}..${proj_hi}]" | tee -a "$LOG"
+
+        if [[ -n "$min_size" && $proj_hi -lt $min_bytes ]]; then
+          echo "95% prediction interval upper bound (${proj_hi} bytes) is below minimum (${min_bytes} bytes)." | tee -a "$LOG"
+          echo "Confidently below target. Stopping at generation ${current_gen}." | tee -a "$LOG"
           break
         fi
+
+        if [[ -n "$max_size" && $proj_lo -gt $max_bytes ]]; then
+          echo "95% prediction interval lower bound (${proj_lo} bytes) exceeds maximum (${max_bytes} bytes)." | tee -a "$LOG"
+          echo "Confidently above target. Stopping at generation ${current_gen}." | tee -a "$LOG"
+          break
+        fi
+
+        echo "Projection within bounds [${min_bytes:-0}..${max_bytes:-inf}]. Continuing." | tee -a "$LOG"
       fi
     else
       echo "Warning: expected output '$fasta' not found." | tee -a "$ERR"
