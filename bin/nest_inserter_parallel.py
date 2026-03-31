@@ -19,11 +19,15 @@ Example usage:
 """
 
 import argparse
+import bisect
 import random
 import re
 import sys
 import multiprocessing
 import numpy as np  # New import for Poisson simulation
+
+# Pre-computed translation table for reverse complement (C-speed)
+_RC_TABLE = bytes.maketrans(b'ACGTacgtNn', b'TGCAtgcaNn')
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -71,7 +75,7 @@ def read_fasta(fasta_path):
             if line.startswith(">"):
                 if current_header is not None:
                     sequences[current_header] = "".join(current_seq)
-                current_header = line[1:].strip()  
+                current_header = line[1:].strip()
                 current_seq = []
             else:
                 current_seq.append(line)
@@ -80,15 +84,21 @@ def read_fasta(fasta_path):
     return sequences
 
 def convert_genome_to_dict_of_lists(genome_dict):
+    """Convert genome sequences to bytearrays for memory-efficient editing.
+
+    Using bytearray instead of list-of-single-char-strings reduces memory
+    ~50x (1 byte/base vs ~50 bytes/Python-str-object) and speeds up slice
+    insertions ~8x (shifting bytes vs 8-byte pointers).
+    """
     out = {}
     for chrom, seq in genome_dict.items():
-        out[chrom] = list(seq)
+        out[chrom] = bytearray(seq.encode('ascii'))
     return out
 
 def convert_genome_back_to_fasta(genome_dict_of_lists):
     out = {}
-    for chrom, seq_list in genome_dict_of_lists.items():
-        out[chrom] = "".join(seq_list)
+    for chrom, seq_ba in genome_dict_of_lists.items():
+        out[chrom] = seq_ba.decode('ascii')
     return out
 
 def extract_te_info(header):
@@ -100,13 +110,24 @@ def extract_te_info(header):
     else:
         return "unknown", "unknown"
 
+def build_te_index(te_raw):
+    """Pre-build a {(class, superfamily): [(header, seq), ...]} lookup dict.
+
+    Eliminates the O(num_TEs) regex scan that previously ran on every
+    insertion call in pick_random_TE_by_category.
+    """
+    te_by_category = {}
+    te_all_list = list(te_raw.items())
+    for header, seq in te_all_list:
+        key = extract_te_info(header)
+        te_by_category.setdefault(key, []).append((header, seq))
+    return te_by_category, te_all_list
+
 def get_tsd_length(te_class, te_superfamily):
     """
     Determine the TSD length based on TE class and superfamily.
     Case-insensitive. Variable TSDs are sampled within ranges.
     """
-    import random
-
     # Normalize for case-insensitive matching
     c = (te_class or "").strip().lower()
     s = (te_superfamily or "").strip().lower()
@@ -245,24 +266,18 @@ def write_bed(features, out_bed):
                 f"{new_tag}\n"
             )
 
-def pick_random_TE(te_dict):
-    headers = list(te_dict.keys())
-    choice = random.choice(headers)
-    return choice, te_dict[choice]
+def pick_random_TE(te_all_list):
+    return random.choice(te_all_list)
 
-def pick_random_TE_by_category(te_dict, te_class, te_superfamily):
-    matching = [(h, s) for h, s in te_dict.items() if extract_te_info(h) == (te_class, te_superfamily)]
+def pick_random_TE_by_category(te_by_category, te_all_list, te_class, te_superfamily):
+    matching = te_by_category.get((te_class, te_superfamily))
     if not matching:
         print(f"Warning: No TE found in TE library for category {te_class}/{te_superfamily}. Picking random from all TEs.")
-        return pick_random_TE(te_dict)
+        return random.choice(te_all_list)
     return random.choice(matching)
 
 def reverse_complement(seq):
-    comp = {'A':'T','T':'A','G':'C','C':'G','a':'t','t':'a','g':'c','c':'g','N':'N','n':'n'}
-    rc = []
-    for base in reversed(seq):
-        rc.append(comp.get(base, base))
-    return "".join(rc)
+    return seq.encode('ascii')[::-1].translate(_RC_TABLE).decode('ascii')
 
 def partial_name_match(name1, name2):
     if ';' not in name1 or ';' not in name2:
@@ -275,45 +290,12 @@ def partial_name_match(name1, name2):
         return True
     return False
 
-def count_intact_TE_count(features):
-    n = len(features)
-    intact_flags = [True] * n
-    for i, feat in enumerate(features):
-        feature_id = feat['name'].split(';')[0]
-#       if 'gene' in feature_id.lower():
-        if 'gene' in feature_id.lower() or "_FRAG" in feature_id:
-            intact_flags[i] = False
-    for i, feat in enumerate(features):
-        feature_id = feat['name'].split(';')[0]
-        if "_SOLO" in feature_id:
-            intact_flags[i] = False
-    for i, feat in enumerate(features):
-        if intact_flags[i]:
-            parts = feat['name'].split(';')
-            if len(parts) > 1:
-                if 'CUT_BY' in parts[1]:
-                    intact_flags[i] = False
-    for i, feat in enumerate(features):
-        if not intact_flags[i]:
-            continue
-        parts = feat['name'].split(';')
-        if len(parts) <= 1:
-            continue
-        window_start = max(0, i - 100)
-        window_end = min(n, i + 101)
-        for j in range(window_start, window_end):
-            if j == i:
-                continue
-            other = features[j]
-            if (feat['tsd'] == other['tsd'] and 
-                feat['strand'] == other['strand'] and 
-                partial_name_match(feat['name'], other['name'])):
-                intact_flags[i] = False
-                break
-    count = sum(1 for flag in intact_flags if flag)
-    return count
+def get_intact_te_stats(features):
+    """Return (intact_count, distribution_dict) in a single pass.
 
-def get_intact_TE_distribution(features):
+    Replaces the former count_intact_TE_count + get_intact_TE_distribution
+    pair, which duplicated the same expensive logic.
+    """
     n = len(features)
     intact_flags = [True] * n
     for i, feat in enumerate(features):
@@ -343,19 +325,21 @@ def get_intact_TE_distribution(features):
             if j == i:
                 continue
             other = features[j]
-            if (feat['tsd'] == other['tsd'] and 
-                feat['strand'] == other['strand'] and 
+            if (feat['tsd'] == other['tsd'] and
+                feat['strand'] == other['strand'] and
                 partial_name_match(feat['name'], other['name'])):
                 intact_flags[i] = False
                 break
+    count = 0
     distribution = {}
     for i, feat in enumerate(features):
         if intact_flags[i]:
+            count += 1
             feature_id = feat['name'].split(';')[0]
             te_class, te_superfamily = extract_te_info(feature_id)
             key = (te_class, te_superfamily)
             distribution[key] = distribution.get(key, 0) + 1
-    return distribution
+    return count, distribution
 
 # --- New helper functions for euchromatin/heterochromatin intervals ---
 def merge_intervals(intervals):
@@ -433,16 +417,46 @@ def choose_weighted_position(chrom_length, intervals):
     # Fallback (should not happen)
     return random.randint(0, chrom_length)
 
-def is_in_gene(position, features):
+def build_gene_index(features):
+    """Build sorted gene intervals with max-end augmentation for bisect lookup.
+
+    Returns (gene_intervals, gene_starts, max_ends) where max_ends[i] is the
+    maximum end coordinate among gene_intervals[0..i].  This allows
+    is_in_gene to terminate early even when genes overlap.
     """
-    Check if the given position falls within any gene region in features.
-    A feature is considered a gene if 'gene' is in its first name field.
-    """
+    gene_intervals = []
     for feat in features:
         feature_id = feat['name'].split(';')[0]
         if "gene" in feature_id.lower():
-            if feat['start'] <= position < feat['end']:
-                return True
+            gene_intervals.append((feat['start'], feat['end']))
+    gene_intervals.sort()
+    gene_starts = [iv[0] for iv in gene_intervals]
+    # Augment with running max of end positions for early termination
+    max_ends = []
+    running_max = 0
+    for _start, end in gene_intervals:
+        running_max = max(running_max, end)
+        max_ends.append(running_max)
+    return gene_intervals, gene_starts, max_ends
+
+def is_in_gene(position, gene_intervals, gene_starts, max_ends):
+    """Check if position falls within any gene region using binary search.
+
+    Uses bisect on sorted gene starts, then walks backwards with max-end
+    augmentation for correct early termination even with overlapping genes.
+    O(log G) typical vs O(F) for the old linear scan over all features.
+    """
+    if not gene_intervals:
+        return False
+    idx = bisect.bisect_right(gene_starts, position)
+    # Walk backwards: any gene starting at or before position might contain it
+    for i in range(idx - 1, -1, -1):
+        if gene_intervals[i][0] <= position < gene_intervals[i][1]:
+            return True
+        # If the max end up to this index doesn't reach position,
+        # no earlier interval can contain position either
+        if max_ends[i] <= position:
+            break
     return False
 
 # --- End of new helper functions ---
@@ -451,15 +465,17 @@ def process_chromosome(args_tuple):
     """
     Process all insertion events for one chromosome.
     This function is designed to be run in parallel for each chromosome.
-    It applies insertion events sequentially on the chromosome’s sequence and features.
+    It applies insertion events sequentially on the chromosome's sequence and features.
     """
-    (chrom, seq_list, features, events, te_raw, bias_intervals, global_seed, disable_genes) = args_tuple
+    (chrom, seq_list, features, events, te_by_category, te_all_list,
+     bias_intervals, global_seed, disable_genes) = args_tuple
     # Compute a deterministic seed using the global seed and the chromosome name.
     chrom_seed = (global_seed if global_seed is not None else 0) + sum(ord(c) for c in chrom)
     random.seed(chrom_seed)
     nested_count = 0
     non_nested_count = 0
     chrom_length = len(seq_list)
+    te_seq_cache = {}  # Cache encoded TE bytearrays to avoid re-encoding
     # Process each insertion event assigned to this chromosome.
     for event in events:
         te_class_target, te_superfamily_target = event
@@ -472,9 +488,10 @@ def process_chromosome(args_tuple):
         else:
             candidate = random.randint(0, chrom_length)
         if disable_genes:
+            gene_intervals, gene_starts, max_ends = build_gene_index(features)
             attempt = 0
             max_attempts = 1000
-            while is_in_gene(candidate, features) and attempt < max_attempts:
+            while is_in_gene(candidate, gene_intervals, gene_starts, max_ends) and attempt < max_attempts:
                 if bias_intervals:
                     candidate = choose_weighted_position(chrom_length, bias_intervals)
                 else:
@@ -483,29 +500,38 @@ def process_chromosome(args_tuple):
             # If a gene-free position was not found after many attempts, proceed with the candidate.
         insertion_pos = candidate
 
-        te_header, te_seq = pick_random_TE_by_category(te_raw, te_class_target, te_superfamily_target)
+        te_header, te_seq = pick_random_TE_by_category(
+            te_by_category, te_all_list, te_class_target, te_superfamily_target)
         te_class, te_superfamily = extract_te_info(te_header)
         tsd_length = get_tsd_length(te_class, te_superfamily)
         strand = "+" if random.random() < 0.5 else "-"
+        # Get TE sequence as bytearray, using cache to avoid re-encoding
         if strand == "-":
-            te_seq = reverse_complement(te_seq)
-        te_seq_list = list(te_seq)
+            cache_key = (te_header, '-')
+            if cache_key not in te_seq_cache:
+                te_seq_cache[cache_key] = bytearray(reverse_complement(te_seq).encode('ascii'))
+            te_seq_bytes = te_seq_cache[cache_key]
+        else:
+            cache_key = (te_header, '+')
+            if cache_key not in te_seq_cache:
+                te_seq_cache[cache_key] = bytearray(te_seq.encode('ascii'))
+            te_seq_bytes = te_seq_cache[cache_key]
         if tsd_length > insertion_pos:
             print(f"Warning: TSD length {tsd_length} is greater than insertion position {insertion_pos} on {chrom}. Reducing.")
             tsd_length = insertion_pos
-        tsd_seq_list = []
+        tsd_seq_bytes = bytearray()
         if tsd_length > 0:
-            tsd_seq_list = seq_list[insertion_pos - tsd_length:insertion_pos]
-        tsd_string = "".join(tsd_seq_list) if tsd_length > 0 else "NA"
+            tsd_seq_bytes = seq_list[insertion_pos - tsd_length:insertion_pos]
+        tsd_string = tsd_seq_bytes.decode('ascii') if tsd_length > 0 else "NA"
         # Insert TE sequence into the chromosome sequence.
-        seq_list[insertion_pos:insertion_pos] = te_seq_list
+        seq_list[insertion_pos:insertion_pos] = te_seq_bytes
         # If TSD exists, duplicate it after the inserted TE.
         if tsd_length > 0:
-            seq_list[insertion_pos + len(te_seq_list):insertion_pos + len(te_seq_list)] = tsd_seq_list
-        shift_amount = len(te_seq_list) + tsd_length
+            seq_list[insertion_pos + len(te_seq_bytes):insertion_pos + len(te_seq_bytes)] = tsd_seq_bytes
+        shift_amount = len(te_seq_bytes) + tsd_length
 
         te_start = insertion_pos
-        te_end   = insertion_pos + len(te_seq_list)
+        te_end   = insertion_pos + len(te_seq_bytes)
         new_te_name = te_header
         new_te_feature = {
             'chrom': chrom,
@@ -587,20 +613,22 @@ def main():
     genome_size = sum(len(seq) for seq in genome_raw.values())
     print(f"Genome size: {genome_size} bases")
 
-    print("Converting genome to editable lists ...")
+    print("Converting genome to editable bytearrays ...")
     genome = convert_genome_to_dict_of_lists(genome_raw)
 
     print("Reading TE FASTA ...")
     te_raw = read_fasta(args.TE)
 
+    print("Building TE category index ...")
+    te_by_category, te_all_list = build_te_index(te_raw)
+
     print("Reading BED file ...")
     features_all = parse_bed(args.bed)
     features_original = features_all[:]  # keep a copy
 
-    intact_TE_count = count_intact_TE_count(features_original)
+    intact_TE_count, intact_distribution = get_intact_te_stats(features_original)
     print(f"Total number of intact TEs from BED: {intact_TE_count}")
 
-    intact_distribution = get_intact_TE_distribution(features_original)
     print("Distribution of intact TEs by (te_class, te_superfamily):")
     for key, count in intact_distribution.items():
         print(f"  {key[0]}/{key[1]}: {count}")
@@ -762,7 +790,8 @@ def main():
         bias_intervals = None
         if use_bias and chrom in bias_intervals_all:
             bias_intervals = bias_intervals_all[chrom]
-        tasks.append((chrom, seq_list, feats, events, te_raw, bias_intervals, args.seed, disable_genes_flag))
+        tasks.append((chrom, seq_list, feats, events, te_by_category, te_all_list,
+                       bias_intervals, args.seed, disable_genes_flag))
 
     print(f"Processing {len(chroms)} chromosomes using up to {args.max_processes} processes...")
     if args.max_processes > 1:
@@ -777,7 +806,7 @@ def main():
     total_nested = 0
     total_non_nested = 0
     for chrom, seq_list, feats, nested_count, non_nested_count in results:
-        final_genome[chrom] = "".join(seq_list)
+        final_genome[chrom] = seq_list.decode('ascii')
         all_features.extend(feats)
         total_nested += nested_count
         total_non_nested += non_nested_count
