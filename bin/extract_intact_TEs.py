@@ -44,8 +44,37 @@ import sys
 import numpy as np
 from scipy.stats import gaussian_kde
 import matplotlib.pyplot as plt
-from Bio import SeqIO
-from Bio.Seq import Seq
+
+
+# ---------- Fast FASTA helpers (replace BioPython SeqIO) ----------
+
+_COMPLEMENT = str.maketrans("ACGTacgtNnRYSWKMBDHVryswkmbdhv",
+                            "TGCAtgcaNnYRSWMKVHDByrswmkvhdb")
+
+
+def reverse_complement(seq):
+    """Fast reverse complement without BioPython."""
+    return seq.translate(_COMPLEMENT)[::-1]
+
+
+def parse_fasta(path):
+    """
+    Yield (header, sequence) tuples from a FASTA file.
+    ~5-10x faster than BioPython SeqIO.parse for plain FASTA.
+    """
+    with open(path) as fh:
+        header = None
+        chunks = []
+        for line in fh:
+            if line[0] == ">":
+                if header is not None:
+                    yield header, "".join(chunks)
+                header = line[1:].rstrip()
+                chunks = []
+            else:
+                chunks.append(line.rstrip())
+        if header is not None:
+            yield header, "".join(chunks)
 
 def parse_line(line):
     """
@@ -159,11 +188,13 @@ def process_bed_file(bed_file):
 
 
 def load_genome(genome_fasta):
-    """Load genome FASTA into dict {seqid: Seq}."""
-    genome = {}
-    for rec in SeqIO.parse(genome_fasta, "fasta"):
-        genome[rec.id] = rec.seq
-    return genome
+    """
+    Open genome FASTA via pysam for indexed random access.
+    Requires a .fai index (created automatically if missing).
+    Returns a pysam.FastaFile handle.
+    """
+    import pysam
+    return pysam.FastaFile(genome_fasta)
 
 
 def extract_intact_TEs(records, genome):
@@ -187,11 +218,16 @@ def extract_intact_TEs(records, genome):
     for rec in records:
         if rec['category'] != "Intact TE":
             continue
-        seq = str(genome.get(rec['chrom'], "")[int(rec['start']):int(rec['end'])])
+        chrom = rec['chrom']
+        start, end = int(rec['start']), int(rec['end'])
+        try:
+            seq = genome.fetch(chrom, start, end)
+        except (KeyError, ValueError):
+            continue
         if not seq:
             continue
         if rec['strand'] == "-":
-            seq = str(Seq(seq).reverse_complement())
+            seq = reverse_complement(seq)
 
         _, te_class, _, ltr_len = extract_TE_info(rec['feature_id'])
         if te_class == "LTR" and ltr_len and len(seq) >= 2 * ltr_len:
@@ -209,11 +245,10 @@ def process_library_fasta(lib_fasta):
     fix LTR entries by copying 5' LTR to 3' end.
     """
     out = []
-    for rec in SeqIO.parse(lib_fasta, "fasta"):
+    for header, seq in parse_fasta(lib_fasta):
         # pull only the first token of the header, then strip any ";"-attrs
-        name = rec.description.split()[0]
+        name = header.split()[0]
         feature_id, _ = parse_attributes(name)
-        seq = str(rec.seq)
         _, te_class, _, ltr_len = extract_TE_info(feature_id)
         if te_class == "LTR" and ltr_len and len(seq) >= 2 * ltr_len:
             five = seq[:ltr_len]
@@ -225,16 +260,18 @@ def process_library_fasta(lib_fasta):
 
 def write_fasta(entries, out_file):
     """Write (header, seq) pairs to FASTA, wrapping at 60 bp."""
-    with open(out_file, "w") as f:
+    with open(out_file, "w", buffering=1 << 20) as f:  # 1 MB buffer
         for header, seq in entries:
-            f.write(f">{header}\n")
+            lines = [f">{header}"]
             for i in range(0, len(seq), 60):
-                f.write(seq[i:i+60] + "\n")
+                lines.append(seq[i:i+60])
+            f.write("\n".join(lines) + "\n")
 
 
 def weighted_resample(entries, guide_fasta, out_base, *,
                       plot=False, seed=42,
-                      duplication_mode=False):
+                      duplication_mode=False,
+                      precomputed_guide_lengths=None):
     """
     KDE-based importance resampling that minimises the number of unique
     records that are excluded when --duplication_mode is *not* requested.
@@ -252,8 +289,11 @@ def weighted_resample(entries, guide_fasta, out_base, *,
 
     # ----------  KDE densities & importance weights  ----------
     te_lengths   = np.fromiter((len(seq) for _, seq in entries), dtype=float)
-    guide_lengths = np.fromiter((len(r.seq) for r in SeqIO.parse(guide_fasta, "fasta")),
-                                dtype=float)
+    if precomputed_guide_lengths is not None:
+        guide_lengths = np.fromiter(precomputed_guide_lengths.values(), dtype=float)
+    else:
+        guide_lengths = np.fromiter((len(seq) for _, seq in parse_fasta(guide_fasta)),
+                                    dtype=float)
 
     kde_te    = gaussian_kde(te_lengths,    bw_method="scott")
     kde_guide = gaussian_kde(guide_lengths, bw_method="scott")
@@ -334,10 +374,10 @@ def build_guide_lengths(guide_fasta):
     Uses the same feature_id parsing logic (first token, strip ';' attrs).
     """
     guide_lengths = {}
-    for rec in SeqIO.parse(guide_fasta, "fasta"):
-        name = rec.description.split()[0]
+    for header, seq in parse_fasta(guide_fasta):
+        name = header.split()[0]
         feature_id, _ = parse_attributes(name)
-        guide_lengths[feature_id] = len(rec.seq)
+        guide_lengths[feature_id] = len(seq)
     return guide_lengths
 # =======================================================
 
@@ -380,6 +420,7 @@ def main():
         for b in args.bed:
             recs.extend(process_bed_file(b))
         entries = extract_intact_TEs(recs, genome)
+        genome.close()
 
         if not entries:
             print('No intact TE entries found.', file=sys.stderr)
@@ -395,12 +436,15 @@ def main():
             filtered.append((header, seq))
         entries = filtered
 
+    # Pre-parse guide lengths once (used by both --exclude_truncated and --weight_by)
+    guide_lengths = None
+    if args.weight_by:
+        guide_lengths = build_guide_lengths(args.weight_by)
+
     # ========= NEW: exclude_truncated (requires weight_by) =========
     if args.exclude_truncated:
         if not args.weight_by:
             parser.error('--exclude_truncated requires --weight_by')
-
-        guide_lengths = build_guide_lengths(args.weight_by)
         kept = []
         dropped = 0
         missing_guide = 0
@@ -435,7 +479,8 @@ def main():
             args.weight_by,
             out_base=base,
             plot=args.plot_kde_comparison,
-            duplication_mode=args.duplication_mode
+            duplication_mode=args.duplication_mode,
+            precomputed_guide_lengths=guide_lengths,
         )
 
     write_fasta(entries, args.out_fasta)
