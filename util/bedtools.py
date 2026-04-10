@@ -6,6 +6,7 @@ Usage:
     python bedtools.py -pass_scn infile.[pass.list|scn] -bed infile.bed -r 0.9 [-print overlapping]
 """
 import argparse
+import signal
 from collections import defaultdict
 
 
@@ -48,6 +49,9 @@ def parse_pass(path):
             if ':' not in loc:
                 continue
             chrom, coords = loc.split(':', 1)
+            # Strip annotation suffix (e.g. #LTR/Gypsy/Selgy)
+            if '#' in coords:
+                coords = coords[:coords.index('#')]
 
             # Support both ".." and "-" as range separators
             if '..' in coords:
@@ -99,6 +103,9 @@ def parse_pass_scn(path):
             if ':' not in loc:
                 return None
             chrom, coords = loc.split(':', 1)
+            # Strip annotation suffix (e.g. #LTR/Gypsy/Selgy)
+            if '#' in coords:
+                coords = coords[:coords.index('#')]
             if '..' in coords:
                 start_str, end_str = coords.split('..', 1)
             elif '-' in coords:
@@ -182,6 +189,7 @@ def reciprocal_overlap(a_start, a_end, b_start, b_end):
 
 
 def main():
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
     parser = argparse.ArgumentParser(description="Compute overlap stats between SCN/PASS and BED files.")
     parser.add_argument('-pass_scn', required=True, help='Input SCN- or PASS-formatted file')
     parser.add_argument('-bed', required=True, help='Input BED-formatted file')
