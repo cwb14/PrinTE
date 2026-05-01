@@ -2,13 +2,13 @@
 # Approximately matching proportions as they appear in the library.
 	
 # TE_class   TE_superfamily   intact_frequency	fragmented_frequency
-LTR	Gypsy	0.46	0.46
-LTR	Copia	0.42	0.42
-LTR	Ty3	0.02	0.02
-LTR	unknown	0.08	0.08
-LTR	TRIM	0.02	0.02
-LTR	CRM	0.004	0.004
-	
+LTR	unknown	0.018302	0.018302
+LTR	Ty3	0.683959	0.683959
+LTR	Gypsy	0.023026	0.023026
+LTR	CRM	0.000183	0.000183
+LTR	Copia	0.273657	0.273657
+LTR	TRIM	0.000872	0.000872
+
 DNA	Harbinger	0	0
 DNA	Mariner	0	0
 DNAauto	Helitron	0	0

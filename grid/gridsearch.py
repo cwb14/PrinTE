@@ -1,47 +1,16 @@
 #!/usr/bin/env python3
 import argparse
 import itertools
-import math
-import os
 import random
 import subprocess
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
-
-def dir_name_from_combo(ir, dr, sr, lb):
-    return f"insertion_rates_{ir}_deletion_rates_{dr}_solo_ratio_{sr}_length_bias_{lb}"
-
-
-def format_sci(x: float) -> str:
-    """
-    Format floats like 1e-07 -> '1e-7', 2.5e-12 -> '2.5e-12'
-    so directory names stay readable/stable.
-    """
-    s = f"{x:.12g}"
-    return s.replace("E", "e")
-
-
-def build_logspace_values(start: float, end: float, count: int) -> List[str]:
-    """
-    Build `count` values log10-spaced between start and end (inclusive).
-    Handles start > end or start < end.
-    """
-    if count < 2:
-        raise ValueError("--*-count must be >= 2 to define a range.")
-    if start <= 0 or end <= 0:
-        raise ValueError("--*-start and --*-end must be positive for log spacing.")
-
-    log_s = math.log10(start)
-    log_e = math.log10(end)
-
-    values = []
-    for i in range(count):
-        t = i / (count - 1)
-        log_v = log_s + (log_e - log_s) * t
-        v = 10 ** log_v
-        values.append(format_sci(v))
-    return values
+from grid_utils import (
+    build_logspace_values, dir_name_from_combo,
+    validate_inputs, build_printe_cmd,
+    write_combos_tsv, read_combo_from_tsv, write_slurm_array_script,
+)
 
 
 def build_param_grids(args):
@@ -62,81 +31,6 @@ def build_param_grids(args):
 
 def build_all_combinations(insertion_rates, deletion_rates, solo_ratios, length_biases):
     return list(itertools.product(insertion_rates, deletion_rates, solo_ratios, length_biases))
-
-
-def validate_inputs(args):
-    """
-    Light validation: ensure required script/files exist (as typed),
-    so tab-completion helps users catch mistakes early.
-    """
-    for label, p, must_exist in [
-        ("--printe-script", args.printe_script, True),
-        ("--bed", args.bed, True),
-        ("--fasta", args.fasta, True),
-        ("--te-lib", args.te_lib, True),
-        ("--ratios", args.ratios, True),
-    ]:
-        pp = Path(p).expanduser()
-        if must_exist and not pp.exists():
-            raise FileNotFoundError(f"{label} path does not exist: {p}")
-
-    if args.ge <= 0 or args.st <= 0:
-        raise ValueError("--ge and --st must be > 0")
-    if args.threads < 1:
-        raise ValueError("--threads must be >= 1")
-    if args.tstv <= 0:
-        raise ValueError("--tstv must be > 0")
-
-
-def relpath_from(workdir: Path, user_path: str, base_cwd: Path) -> str:
-    """
-    Convert a user-supplied path (relative to base_cwd) into a path usable from workdir.
-    - If user_path is absolute, return it.
-    - Else treat it as relative to base_cwd (where script was launched),
-      then compute relative path from workdir.
-    """
-    p = Path(user_path).expanduser()
-    if p.is_absolute():
-        return str(p)
-
-    abs_target = (base_cwd / p).resolve()
-    return os.path.relpath(str(abs_target), str(workdir.resolve()))
-
-
-def build_printe_cmd(
-    combo: Tuple[str, str, int, int],
-    args,
-    workdir: Path,
-    base_cwd: Path
-) -> List[str]:
-    ir, dr, sr, lb = combo
-
-    printe_script = relpath_from(workdir, args.printe_script, base_cwd)
-    te_lib = relpath_from(workdir, args.te_lib, base_cwd)
-    bed = relpath_from(workdir, args.bed, base_cwd)
-    fasta = relpath_from(workdir, args.fasta, base_cwd)
-    ratios = relpath_from(workdir, args.ratios, base_cwd)
-
-    cmd = [
-        "bash", printe_script,
-        "-ge", str(args.ge),
-        "-st", str(args.st),
-        "-F", f"{ir},{dr}",
-        "-m", str(args.mut),
-        "-mxgs", str(args.mxgs),
-        "-mngs", str(args.mngs),
-        "-sr", str(sr),
-        "-k", str(lb),
-        "-TsTv", str(args.tstv),
-        "--ex_LTR",
-        "--no_postproc",
-        "--TE_lib", str(te_lib),
-        "-t", str(args.threads),
-        "--bed", str(bed),
-        "--fasta", str(fasta),
-        "-r", str(ratios),
-    ]
-    return cmd
 
 
 def launch_local_job(combo, args, base_cwd: Path):
@@ -198,90 +92,6 @@ def prepare_combos(args) -> Tuple[List[Tuple[str, str, int, int]], int, int]:
         else:
             available.append((ir, dr, sr, lb))
     return available, total, skipped
-
-
-def write_combos_tsv(path: Path, combos: List[Tuple[str, str, int, int]]):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as out:
-        out.write("ir\tdr\tsr\tlb\n")
-        for ir, dr, sr, lb in combos:
-            out.write(f"{ir}\t{dr}\t{sr}\t{lb}\n")
-
-
-def write_slurm_array_script(
-    sbatch_path: Path,
-    args,
-    combos_tsv: Path,
-    n_tasks: int,
-):
-    """
-    Writes an sbatch script that runs this same python file in --run-one mode.
-    """
-    sbatch_path.parent.mkdir(parents=True, exist_ok=True)
-
-    job_name = args.slurm_job_name or "printe_grid"
-    array_spec = f"0-{n_tasks-1}"
-    script_abs = Path(__file__).resolve()
-
-    # Slurm uses 1-based arrays sometimes in user configs, but 0-based is fine.
-    # We'll map SLURM_ARRAY_TASK_ID -> line index + 2 (header line + 1).
-    contents = f"""#!/bin/bash
-#SBATCH --job-name={job_name}
-#SBATCH --array={array_spec}
-#SBATCH --cpus-per-task={args.slurm_cpus}
-#SBATCH --mem={args.slurm_mem}
-#SBATCH --time={args.slurm_time}
-#SBATCH --output={args.slurm_outdir}/%x_%A_%a.out
-#SBATCH --error={args.slurm_outdir}/%x_%A_%a.err
-{f"#SBATCH --partition={args.slurm_partition}" if args.slurm_partition else ""}
-{f"#SBATCH --account={args.slurm_account}" if args.slurm_account else ""}
-
-set -euo pipefail
-
-echo "[INFO] Host: $(hostname)"
-echo "[INFO] Date: $(date)"
-echo "[INFO] PWD:  $(pwd)"
-echo "[INFO] Task: ${{SLURM_ARRAY_TASK_ID}}"
-
-python "{script_abs}" \\
-  --run-one \\
-  --combo-file "{combos_tsv}" \\
-  --combo-index "${{SLURM_ARRAY_TASK_ID}}" \\
-  --printe-script "{args.printe_script}" \\
-  --ge "{args.ge}" \\
-  --st "{args.st}" \\
-  --mut "{args.mut}" \\
-  --mxgs "{args.mxgs}" \\
-  --mngs "{args.mngs}" \\
-  --tstv "{args.tstv}" \\
-  --threads "{args.threads}" \\
-  --bed "{args.bed}" \\
-  --fasta "{args.fasta}" \\
-  --te-lib "{args.te_lib}" \\
-  --ratios "{args.ratios}"
-"""
-
-    with sbatch_path.open("w") as f:
-        f.write(contents)
-
-
-def read_combo_from_tsv(combo_file: Path, combo_index: int) -> Tuple[str, str, int, int]:
-    """
-    combo_index is 0-based index over data lines (excluding header).
-    """
-    with combo_file.open("r") as f:
-        header = f.readline()
-        if not header:
-            raise ValueError(f"Empty combo file: {combo_file}")
-        # Read until desired line
-        for i, line in enumerate(f):
-            if i == combo_index:
-                parts = line.rstrip("\n").split("\t")
-                if len(parts) != 4:
-                    raise ValueError(f"Bad combo line at index {combo_index}: {line}")
-                ir, dr, sr, lb = parts
-                return ir, dr, int(sr), int(lb)
-    raise IndexError(f"combo_index {combo_index} out of range for {combo_file}")
 
 
 def run_one_combo_from_file(args):
@@ -445,7 +255,11 @@ def main():
     sbatch_path = slurm_dir / "submit_array.sbatch"
 
     write_combos_tsv(combos_tsv, sampled)
-    write_slurm_array_script(sbatch_path, args, combos_tsv, n_tasks=len(sampled))
+    write_slurm_array_script(
+        sbatch_path, args, combos_tsv,
+        n_tasks=len(sampled),
+        runner_script=Path(__file__).resolve(),
+    )
 
     print(f"[MODE] slurm")
     print(f"Wrote combos: {combos_tsv}")
