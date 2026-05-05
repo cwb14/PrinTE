@@ -73,11 +73,18 @@ def validate_inputs(args):
     Light validation: ensure required script/files exist (as typed),
     so tab-completion helps users catch mistakes early.
     """
+    te_lib = getattr(args, "te_lib", None)
+    clean_lib = getattr(args, "clean_lib", None)
+    lib_label = "--clean-lib" if clean_lib else "--te-lib"
+    lib_path = clean_lib or te_lib
+    if not lib_path:
+        raise FileNotFoundError("Provide either --te-lib or --clean-lib")
+
     for label, p, must_exist in [
         ("--printe-script", args.printe_script, True),
         ("--bed", args.bed, True),
         ("--fasta", args.fasta, True),
-        ("--te-lib", args.te_lib, True),
+        (lib_label, lib_path, True),
         ("--ratios", args.ratios, True),
     ]:
         pp = Path(p).expanduser()
@@ -101,10 +108,15 @@ def build_printe_cmd(
     ir, dr, sr, lb = combo
 
     printe_script = relpath_from(workdir, args.printe_script, base_cwd)
-    te_lib = relpath_from(workdir, args.te_lib, base_cwd)
     bed = relpath_from(workdir, args.bed, base_cwd)
     fasta = relpath_from(workdir, args.fasta, base_cwd)
     ratios = relpath_from(workdir, args.ratios, base_cwd)
+
+    clean_lib = getattr(args, "clean_lib", None)
+    if clean_lib:
+        lib_flag, lib_path = "--clean_lib", relpath_from(workdir, clean_lib, base_cwd)
+    else:
+        lib_flag, lib_path = "--TE_lib", relpath_from(workdir, args.te_lib, base_cwd)
 
     cmd = [
         "bash", printe_script,
@@ -119,7 +131,7 @@ def build_printe_cmd(
         "-TsTv", str(args.tstv),
         "--ex_LTR",
         "--no_postproc",
-        "--TE_lib", str(te_lib),
+        lib_flag, str(lib_path),
         "-t", str(args.threads),
         "--bed", str(bed),
         "--fasta", str(fasta),
@@ -170,6 +182,9 @@ def write_slurm_array_script(
     job_name = args.slurm_job_name or "printe_grid"
     array_spec = f"0-{n_tasks-1}"
 
+    clean_lib = getattr(args, "clean_lib", None)
+    lib_arg = f'--clean-lib "{clean_lib}"' if clean_lib else f'--te-lib "{args.te_lib}"'
+
     contents = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
 #SBATCH --array={array_spec}
@@ -202,7 +217,7 @@ python "{runner_script}" \\
   --threads "{args.threads}" \\
   --bed "{args.bed}" \\
   --fasta "{args.fasta}" \\
-  --te-lib "{args.te_lib}" \\
+  {lib_arg} \\
   --ratios "{args.ratios}"
 """
 
@@ -235,6 +250,9 @@ def write_local_array_script(
     last_idx = n_tasks - 1
     logdir = args.slurm_outdir or "slurm_logs"
     total_threads = args.threads
+
+    clean_lib = getattr(args, "clean_lib", None)
+    lib_arg = f'--clean-lib "{clean_lib}"' if clean_lib else f'--te-lib "{args.te_lib}"'
 
     contents = f"""#!/bin/bash
 # Non-SLURM launcher: runs all {n_tasks} combos in parallel.
@@ -269,7 +287,7 @@ for i in $(seq 0 {last_idx}); do
     --threads "{threads_per_sample}" \\
     --bed "{args.bed}" \\
     --fasta "{args.fasta}" \\
-    --te-lib "{args.te_lib}" \\
+    {lib_arg} \\
     --ratios "{args.ratios}" \\
     > "$LOGDIR/task_${{i}}.out" 2> "$LOGDIR/task_${{i}}.err" &
   PIDS+=($!)

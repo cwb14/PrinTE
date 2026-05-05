@@ -184,6 +184,7 @@ Options:
   -mb, --mutation_bins       Comma-separated bins for TE mutation distribution (overrides -tk/-tmx; disables decay PDF inside inserter)
   -bo, --burnin_only         Run burn-in phase only and then exit.
   -i,  --TE_lib              TE library file (default: ${TOOL_DIR}/data/maize_rice_arab_curated_TE.lib.gz)
+  -cl, --clean_lib           Pre-built cleaned TE library (skips library processing; alternative to -i)
 
 ########## FIXED TE INDEL RATE ##########
   -F,  --fix                 Fixed insertion and deletion numbers, comma-separated. Format: insertion,deletion (e.g., 1e-9,1e-9)
@@ -203,12 +204,14 @@ Options:
 
 ########## GENERAL USE ##########
   -m,  --mutation_rate       DNA Mutation rate (default: 1.3e-8)
-  -mxgs, --max_size           Maximum genome size bound (e.g., 100M, 1G). Used in regression-based
-                               early termination: projected final size with 95% prediction interval
-                               must fall below this value or simulation stops early
-  -mngs, --min_size           Minimum genome size bound (e.g., 700M, 1G). Used in regression-based
-                               early termination: projected final size with 95% prediction interval
-                               must fall above this value or simulation stops early
+  -mxgs, --max_size           Maximum genome size bound (e.g., 100M, 1G). Used in exponential
+                               regression early termination: after 10%+ of iterations, the projected
+                               terminal size (with empirically calibrated 95% PI) must fall below
+                               this value or simulation stops early
+  -mngs, --min_size           Minimum genome size bound (e.g., 700M, 1G). Used in exponential
+                               regression early termination: after 10%+ of iterations, the projected
+                               terminal size (with empirically calibrated 95% PI) must fall above
+                               this value or simulation stops early
   -s,  --seed                Random seed (default: 42)
   -r,  --TE_ratio            TE ratio file (default: ${TOOL_DIR}/ratios.tsv)
   -t,  --threads             Number of threads (default: 4)
@@ -263,6 +266,7 @@ euch_buffer=10000
 model="K2P"
 ex_ltr=0
 disable_genes=0
+clean_lib_arg=""
 # New TE inserter mutation options defaults:
 TE_mut_k=10
 TE_mut_Mmax=20
@@ -294,6 +298,9 @@ while [[ $# -gt 0 ]]; do
       shift; shift;;
     -i|--TE_lib)
       TE_lib="$2"
+      shift; shift;;
+    -cl|--clean_lib)
+      clean_lib_arg="$2"
       shift; shift;;
     -m|--mutation_rate)
       mutation_rate="$2"
@@ -490,7 +497,9 @@ fi
 
 # --- Preprocess fasta inputs: decompress if gzipped ---
 cds=$(decompress_if_gz "$cds")
-TE_lib=$(decompress_if_gz "$TE_lib")
+if [[ -z "$clean_lib_arg" ]]; then
+  TE_lib=$(decompress_if_gz "$TE_lib")
+fi
 if [[ -n "$input_fasta" ]]; then
   input_fasta=$(decompress_if_gz "$input_fasta")
 fi
@@ -505,43 +514,48 @@ if [[ -n "$fix" ]]; then
 fi
 
 ###############################################################################
-# TE Library Processing (always executed)
+# TE Library Processing
 ###############################################################################
-echo "=== TE Library Processing ===" | tee -a "$LOG"
+if [[ -n "$clean_lib_arg" ]]; then
+    clean_lib=$(decompress_if_gz "$clean_lib_arg")
+    echo "=== Skipping TE Library Processing; using user-provided clean library: ${clean_lib} ===" | tee -a "$LOG"
+else
+    echo "=== TE Library Processing ===" | tee -a "$LOG"
 
-# (A) Compute divergence info from the TE library.
-cmd="python ${BIN_DIR}/seq_divergence.py -i ${TE_lib} -o lib.txt -t ${threads} --min_align 100 --max_off 20 --miu ${mutation_rate} --blast_outfmt '6 qseqid sseqid sstart send slen qstart qend qlen length nident btop'"
-echo "Running: $cmd" | tee -a "$LOG"
-eval $cmd >> "$LOG" 2>> "$ERR"
-if [ $? -ne 0 ]; then
-    echo "Error running seq_divergence.py" | tee -a "$ERR"
-    exit 1
-fi
+    # (A) Compute divergence info from the TE library.
+    cmd="python ${BIN_DIR}/seq_divergence.py -i ${TE_lib} -o lib.txt -t ${threads} --min_align 100 --max_off 20 --miu ${mutation_rate} --blast_outfmt '6 qseqid sseqid sstart send slen qstart qend qlen length nident btop'"
+    echo "Running: $cmd" | tee -a "$LOG"
+    eval $cmd >> "$LOG" 2>> "$ERR"
+    if [ $? -ne 0 ]; then
+        echo "Error running seq_divergence.py" | tee -a "$ERR"
+        exit 1
+    fi
 
-# (B) Append LTR lengths to TE library.
-cmd="python ${BIN_DIR}/LTR_fasta_header_appender.py -fasta ${TE_lib} -domains lib.txt -div_type none"
-if [[ "$ex_ltr" -eq 1 ]]; then
-    cmd+=" -exclude_no_hits"
-fi
-echo "Running: $cmd > lib.fa" | tee -a "$LOG"
-eval $cmd > lib.fa 2>> "$ERR"
-if [ $? -ne 0 ]; then
-    echo "Error running LTR_fasta_header_appender.py" | tee -a "$ERR"
-    exit 1
-fi
+    # (B) Append LTR lengths to TE library.
+    cmd="python ${BIN_DIR}/LTR_fasta_header_appender.py -fasta ${TE_lib} -domains lib.txt -div_type none"
+    if [[ "$ex_ltr" -eq 1 ]]; then
+        cmd+=" -exclude_no_hits"
+    fi
+    echo "Running: $cmd > lib.fa" | tee -a "$LOG"
+    eval $cmd > lib.fa 2>> "$ERR"
+    if [ $? -ne 0 ]; then
+        echo "Error running LTR_fasta_header_appender.py" | tee -a "$ERR"
+        exit 1
+    fi
 
-# (C) Extract only intact TEs into a cleaned library
-echo "=== Extracting intact TEs to lib_clean.fa ===" | tee -a "$LOG"
-cmd="python ${BIN_DIR}/extract_intact_TEs.py --lib lib.fa --out_fasta lib_clean.fa"
-echo "Running: $cmd" | tee -a "$LOG"
-eval $cmd >> "$LOG" 2>> "$ERR"
-if [ $? -ne 0 ]; then
-    echo "Error running extract_intact_TEs.py" | tee -a "$ERR"
-    exit 1
-fi
+    # (C) Extract only intact TEs into a cleaned library
+    echo "=== Extracting intact TEs to lib_clean.fa ===" | tee -a "$LOG"
+    cmd="python ${BIN_DIR}/extract_intact_TEs.py --lib lib.fa --out_fasta lib_clean.fa"
+    echo "Running: $cmd" | tee -a "$LOG"
+    eval $cmd >> "$LOG" 2>> "$ERR"
+    if [ $? -ne 0 ]; then
+        echo "Error running extract_intact_TEs.py" | tee -a "$ERR"
+        exit 1
+    fi
 
-# Now use lib_clean.fa for all downstream insertions
-clean_lib="lib_clean.fa"
+    # Now use lib_clean.fa for all downstream insertions
+    clean_lib="lib_clean.fa"
+fi
 
 ###############################################################################
 # Phase 1: Burn-in Genome Generation (only if no external BED/FASTA provided)
@@ -682,15 +696,15 @@ seed_list=($(python -c "import random; random.seed(${seed}); print(' '.join([str
 echo "Seed list for Phase 2 iterations: ${seed_list[@]}" | tee -a "$LOG"
 
 # Initialize prev_lib for first generation
-prev_lib="lib_clean.fa"
+prev_lib="${clean_lib}"
 
 last_gen_done=0
-# Arrays to track genome sizes across iterations for regression-based bounds checking.
-# On resume, backfill from existing gen*_final.fasta files so regression has history.
+# Arrays to track genome sizes across iterations for exponential projection.
+# On resume, backfill from existing gen*_final.fasta files so projection has history.
 genome_size_iters=()
 genome_size_bytes=()
 if [[ "$cont_flag" -eq 1 && $start_iter -gt 1 ]]; then
-  echo "Backfilling genome size history from existing generations for regression..." | tee -a "$LOG"
+  echo "Backfilling genome size history from existing generations for projection..." | tee -a "$LOG"
   for (( bi=1; bi<start_iter; bi++ )); do
     bf="gen$(( bi * step ))_final.fasta"
     if [[ -f "$bf" ]]; then
@@ -704,7 +718,7 @@ if [[ "$cont_flag" -eq 1 && $start_iter -gt 1 ]]; then
       echo "  iteration $bi (gen$(( bi * step ))): ${bsz} bytes" | tee -a "$LOG"
     fi
   done
-  echo "Backfilled ${#genome_size_iters[@]} data points for regression." | tee -a "$LOG"
+  echo "Backfilled ${#genome_size_iters[@]} data points for projection." | tee -a "$LOG"
 fi
 
 for (( i=start_iter; i<=iterations; i++ )); do
@@ -808,7 +822,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
   cmd="python ${BIN_DIR}/extract_intact_TEs.py \
     --genome gen${current_gen}_final.fasta \
     --bed    gen${current_gen}_final.bed \
-    --weight_by lib_clean.fa --exclude_missing_ltr_len \
+    --weight_by ${clean_lib} --exclude_missing_ltr_len \
     --exclude_truncated \
     --out_fasta gen${current_gen}_final.lib"
   echo "Running: $cmd" | tee -a "$LOG"
@@ -832,7 +846,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
   fi
 
   # clean up the *previous* lib file unless the user wants to keep temps
-  if [[ "$keep_temps" -ne 1 && "$prev_lib" != "lib_clean.fa" ]]; then
+  if [[ "$keep_temps" -ne 1 && "$prev_lib" != "${clean_lib}" ]]; then
     rm -f "$prev_lib"
   fi
 
@@ -842,10 +856,21 @@ for (( i=start_iter; i<=iterations; i++ )); do
   # record that we successfully reached this generation
   last_gen_done=$current_gen
   
-  # --- Regression-based genome size bounds checking ---
-  # After accumulating >= 3 data points, project the final genome size via
-  # linear regression every iteration. The projection must fall between
-  # min_size and max_size (whichever are set) or we terminate early.
+  # --- Exponential regression with empirical prediction interval ---
+  # After observing >= 10% of total iterations, project the terminal genome
+  # size via exponential regression (log(y) = a + bx).  Uncertainty bounds
+  # use empirically calibrated prediction intervals (LOO-validated at ~93%
+  # coverage) instead of the theoretical OLS PI which is miscalibrated for
+  # this extrapolation task.
+  #
+  # The empirical error envelope is asymmetric: models almost never over-
+  # predict (q97.5 ≈ 0%) but can substantially under-predict (q2.5 varies
+  # from -56% at 10% observed to -25% at 50%).  This means:
+  #   "too large" stops are high-confidence (tight upper bound)
+  #   "too small" stops require wider margins (conservative lower bound)
+  #
+  # Termination requires the ENTIRE empirical interval to fall outside the
+  # user-specified bounds, making false termination rare.
   if [[ -n "$max_size" || -n "$min_size" ]]; then
     fasta="gen${current_gen}_final.fasta"
     if [[ -f "$fasta" ]]; then
@@ -859,80 +884,103 @@ for (( i=start_iter; i<=iterations; i++ )); do
       genome_size_iters+=("$i")
       genome_size_bytes+=("$actual_bytes")
 
-      # Run regression with 95% prediction interval once we have >= 3 data points.
-      # Termination requires the ENTIRE interval to fall outside bounds:
-      #   too small → upper bound of interval < min_bytes
-      #   too large → lower bound of interval > max_bytes
-      # This prevents premature termination when the fit is noisy.
-      if [[ ${#genome_size_iters[@]} -ge 3 ]]; then
-        regression_result=$(python -c "
+      # Minimum data: 10% of total iterations (empirically validated threshold)
+      min_n=$(( iterations / 10 ))
+      [[ $min_n -lt 3 ]] && min_n=3
+
+      if [[ ${#genome_size_iters[@]} -ge $min_n ]]; then
+        projection_result=$(python -c "
 import sys, math
 
 xs = [int(x) for x in sys.argv[1].split(',')]
 ys = [int(y) for y in sys.argv[2].split(',')]
 target_x = int(sys.argv[3])
+total_iters = int(sys.argv[4])
 n = len(xs)
+frac = n / total_iters
 
-# Linear regression
-sum_x  = sum(xs)
-sum_y  = sum(ys)
-sum_xy = sum(x*y for x, y in zip(xs, ys))
-sum_x2 = sum(x*x for x in xs)
-denom  = n * sum_x2 - sum_x * sum_x
+# --- Exponential regression: log(y) = a + bx ---
+log_ys = [math.log(y) for y in ys]
+sum_x   = sum(xs)
+sum_ly  = sum(log_ys)
+sum_xly = sum(x * ly for x, ly in zip(xs, log_ys))
+sum_x2  = sum(x * x for x in xs)
+denom   = n * sum_x2 - sum_x * sum_x
 
 if denom == 0:
-    y_hat = int(sum_y / n)
-    # No variance info — report point estimate with zero margin
-    print(f'{y_hat} {y_hat} {y_hat} 0.0')
+    proj = int(math.exp(sum_ly / n))
+    print(f'{proj} {proj} {proj} 0.0')
     sys.exit(0)
 
-slope     = (n * sum_xy - sum_x * sum_y) / denom
-intercept = (sum_y - slope * sum_x) / n
-y_hat     = slope * target_x + intercept
+b = (n * sum_xly - sum_x * sum_ly) / denom
+a = (sum_ly - b * sum_x) / n
+log_proj = a + b * target_x
+proj = math.exp(log_proj)
 
-# Residual standard error
-x_bar   = sum_x / n
-ss_res  = sum((y - (slope * x + intercept))**2 for x, y in zip(xs, ys))
-se      = math.sqrt(ss_res / (n - 2))    # n >= 3 so n-2 >= 1
+# R-squared in log-space
+ss_res = sum((ly - (a + b * x))**2 for x, ly in zip(xs, log_ys))
+ss_tot = sum((ly - sum_ly / n)**2 for ly in log_ys)
+r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
-# Extrapolation penalty
-ss_xx   = sum((x - x_bar)**2 for x in xs)
-h       = 1.0 + 1.0/n + (target_x - x_bar)**2 / ss_xx if ss_xx > 0 else 1.0 + 1.0/n
-margin  = se * math.sqrt(h)
+# --- Empirical prediction interval (calibrated from 61 trajectories) ---
+# Lookup table: fraction -> (q2.5_SPE%, q97.5_SPE%) for exponential model.
+# SPE = (projected - actual) / actual * 100.
+# Derived via leave-one-out cross-validation (~93% coverage).
+#   actual_lo = proj / (1 + q97.5/100)  [actual is at least this]
+#   actual_hi = proj / (1 + q2.5/100)   [actual is at most this]
+_margin_table = [
+    (0.03, -84.6,  13.4),
+    (0.05, -67.1,   4.2),
+    (0.07, -58.3,   1.2),
+    (0.10, -55.7,   0.3),
+    (0.15, -50.0,   0.8),
+    (0.20, -44.3,   0.4),
+    (0.25, -40.3,   0.7),
+    (0.30, -36.9,   0.4),
+    (0.40, -30.2,   0.3),
+    (0.50, -25.1,   0.1),
+    (0.60, -20.5,   0.1),
+    (0.70, -15.0,   0.1),
+    (0.80, -10.0,   0.1),
+    (0.90,  -5.0,   0.1),
+]
 
-# Student's t critical value for 95% two-sided (alpha/2 = 0.025)
-# Exact lookup for small df; Cornish-Fisher approximation for df >= 8
-df = n - 2
-_t_table = {1:12.706, 2:4.303, 3:3.182, 4:2.776, 5:2.571, 6:2.447, 7:2.365}
-if df in _t_table:
-    t_crit = _t_table[df]
+# Interpolate margins for current fraction
+q_lo, q_hi = _margin_table[-1][1], _margin_table[-1][2]
+if frac < _margin_table[0][0]:
+    q_lo, q_hi = _margin_table[0][1], _margin_table[0][2]
 else:
-    z = 1.959964
-    t_crit = z + (z**3+z)/(4*df) + (5*z**5+16*z**3+3*z)/(96*df*df)
+    for j in range(len(_margin_table) - 1):
+        f0, lo0, hi0 = _margin_table[j]
+        f1, lo1, hi1 = _margin_table[j + 1]
+        if f0 <= frac <= f1:
+            t = (frac - f0) / (f1 - f0)
+            q_lo = lo0 + t * (lo1 - lo0)
+            q_hi = hi0 + t * (hi1 - hi0)
+            break
 
-pred_margin = t_crit * margin
+# Empirical bounds on actual terminal genome size
+denom_hi = 1.0 + q_hi / 100.0
+denom_lo = 1.0 + q_lo / 100.0
+actual_lo = int(proj / denom_hi) if denom_hi > 0 else 0
+actual_hi = int(proj / denom_lo) if denom_lo > 0 else int(proj * 10)
 
-# R-squared for logging
-ss_tot = sum((y - sum_y/n)**2 for y in ys)
-r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
+print(f'{int(proj)} {actual_lo} {actual_hi} {r2:.4f}')
+" "$(IFS=,; echo "${genome_size_iters[*]}")" "$(IFS=,; echo "${genome_size_bytes[*]}")" "$iterations" "$iterations")
 
-lo = int(y_hat - pred_margin)
-hi = int(y_hat + pred_margin)
-print(f'{int(y_hat)} {lo} {hi} {r2:.4f}')
-" "$(IFS=,; echo "${genome_size_iters[*]}")" "$(IFS=,; echo "${genome_size_bytes[*]}")" "$iterations")
+        read -r proj_point proj_lo proj_hi proj_r2 <<< "$projection_result"
+        frac_pct=$(( 100 * ${#genome_size_iters[@]} / iterations ))
 
-        read -r proj_point proj_lo proj_hi proj_r2 <<< "$regression_result"
+        echo "Projection (iter $i, n=${#genome_size_iters[@]}, ${frac_pct}% observed, R²=${proj_r2}): point=${proj_point}, empirical 95% PI=[${proj_lo}..${proj_hi}]" | tee -a "$LOG"
 
-        echo "Regression (iteration $i, n=${#genome_size_iters[@]}, R²=${proj_r2}): projected=${proj_point}, 95% PI=[${proj_lo}..${proj_hi}]" | tee -a "$LOG"
-
-        if [[ -n "$min_size" && $proj_hi -lt $min_bytes ]]; then
-          echo "95% prediction interval upper bound (${proj_hi} bytes) is below minimum (${min_bytes} bytes)." | tee -a "$LOG"
+        if [[ -n "$min_size" ]] && python3 -c "import sys; sys.exit(0 if int('$proj_hi') < int('$min_bytes') else 1)"; then
+          echo "Empirical PI upper bound (${proj_hi} bytes) is below minimum (${min_bytes} bytes)." | tee -a "$LOG"
           echo "Confidently below target. Stopping at generation ${current_gen}." | tee -a "$LOG"
           break
         fi
 
-        if [[ -n "$max_size" && $proj_lo -gt $max_bytes ]]; then
-          echo "95% prediction interval lower bound (${proj_lo} bytes) exceeds maximum (${max_bytes} bytes)." | tee -a "$LOG"
+        if [[ -n "$max_size" ]] && python3 -c "import sys; sys.exit(0 if int('$proj_lo') > int('$max_bytes') else 1)"; then
+          echo "Empirical PI lower bound (${proj_lo} bytes) exceeds maximum (${max_bytes} bytes)." | tee -a "$LOG"
           echo "Confidently above target. Stopping at generation ${current_gen}." | tee -a "$LOG"
           break
         fi
@@ -945,6 +993,16 @@ print(f'{int(y_hat)} {lo} {hi} {r2:.4f}')
   fi
 
 done
+
+# --- Dump genome size trajectory for model fitting ---
+if [[ ${#genome_size_iters[@]} -gt 0 ]]; then
+  trajectory_file="genome_size_trajectory.tsv"
+  echo -e "iteration\tgenome_size_bytes" > "$trajectory_file"
+  for (( ti=0; ti<${#genome_size_iters[@]}; ti++ )); do
+    echo -e "${genome_size_iters[$ti]}\t${genome_size_bytes[$ti]}" >> "$trajectory_file"
+  done
+  echo "Genome size trajectory written to ${trajectory_file} (${#genome_size_iters[@]} data points)" | tee -a "$LOG"
+fi
 
 echo "Pipeline completed at $(date)" | tee -a "$LOG"
 

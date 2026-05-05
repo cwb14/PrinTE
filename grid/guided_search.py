@@ -348,7 +348,7 @@ def train_surrogate(
     Train a Random Forest surrogate on training data rows.
 
     Features: [log10(ins), log10(del), sr, k]
-    Target:   log10(genome_size)
+    Target:   log10(genome_size); non-positive projections are floored to 1.
 
     Returns (fitted_model, oob_r2_score).
     Raises ValueError if fewer than 30 rows are provided.
@@ -366,7 +366,17 @@ def train_surrogate(
          r["k"]]
         for r in rows
     ])
-    y = np.array([math.log10(float(r["genome_size"])) for r in rows])
+
+    # PrinTE's regression can extrapolate genome_size <= 0 when a genome is
+    # collapsing fast; floor at 1 so log10 stays defined. These rows remain
+    # informative as confidently-tiny labels for the surrogate.
+    sizes = [float(r["genome_size"]) for r in rows]
+    n_floored = sum(1 for s in sizes if s <= 0)
+    y = np.array([math.log10(max(1.0, s)) for s in sizes])
+    if n_floored:
+        print(f"  Note: {n_floored}/{len(rows)} projection(s) had genome_size <= 0; "
+              f"floored to 1 for log10.")
+
     weights = np.array([float(r["weight"]) for r in rows])
 
     model = RandomForestRegressor(
@@ -623,7 +633,10 @@ def add_printe_args(parser):
     parser.add_argument("--threads", "-t", type=int, required=True)
     parser.add_argument("--bed", required=True)
     parser.add_argument("--fasta", required=True)
-    parser.add_argument("--te-lib", required=True)
+    lib_grp = parser.add_mutually_exclusive_group(required=True)
+    lib_grp.add_argument("--te-lib")
+    lib_grp.add_argument("--clean-lib",
+                         help="Pre-built cleaned TE library; skips library processing in PrinTE.sh")
     parser.add_argument("--ratios", required=True)
 
 
@@ -808,7 +821,7 @@ def cmd_init(args):
     # Persist state
     printe_args = {k: getattr(args, k) for k in
         ["printe_script", "ge", "st", "mut", "mxgs", "mngs",
-         "tstv", "threads", "bed", "fasta", "te_lib", "ratios"]}
+         "tstv", "threads", "bed", "fasta", "te_lib", "clean_lib", "ratios"]}
     slurm_args_dict = {k: getattr(args, k) for k in
         ["slurm_dir", "slurm_job_name", "slurm_partition", "slurm_account",
          "slurm_cpus", "slurm_mem", "slurm_time", "slurm_outdir"]}
