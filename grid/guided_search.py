@@ -46,12 +46,16 @@ _DIR_RE = re.compile(
 )
 
 _PROJ_RE = re.compile(
-    r"Regression\s+\(iteration\s+\d+,\s*n=\d+,\s*R²=(?P<r2>[0-9.]+)\):\s*"
-    r"projected=(?P<point>-?\d+),\s*95%\s+PI=\[(?P<lo>-?\d+)\.\.(?P<hi>-?\d+)\]"
+    r"Projection\s+\(iter\s+\d+,\s*n=\d+,\s*\d+%\s*observed,\s*R²=(?P<r2>-?[0-9.]+)\):\s*"
+    r"point=(?P<point>\d+),\s*empirical\s+95%\s+PI=\[(?P<lo>\d+)\.\.(?P<hi>\d+)\]"
 )
 
-_TERM_TOO_LARGE_RE = re.compile(r"95% prediction interval lower bound .* exceeds maximum")
-_TERM_TOO_SMALL_RE = re.compile(r"95% prediction interval upper bound .* is below minimum")
+# Termination markers: tier-2 PI lines (existing) and tier-1 gross-divergence
+# lines emitted by PrinTE_v2.sh.
+_TERM_TOO_LARGE_RE = re.compile(
+    r"Empirical PI lower bound .* exceeds maximum|Gross overshoot:")
+_TERM_TOO_SMALL_RE = re.compile(
+    r"Empirical PI upper bound .* is below minimum|Gross undershoot:")
 _TERM_CONTINUING_RE = re.compile(r"Projection within bounds .* Continuing")
 
 # Training data TSV column order
@@ -348,7 +352,7 @@ def train_surrogate(
     Train a Random Forest surrogate on training data rows.
 
     Features: [log10(ins), log10(del), sr, k]
-    Target:   log10(genome_size); non-positive projections are floored to 1.
+    Target:   log10(genome_size)
 
     Returns (fitted_model, oob_r2_score).
     Raises ValueError if fewer than 30 rows are provided.
@@ -366,17 +370,7 @@ def train_surrogate(
          r["k"]]
         for r in rows
     ])
-
-    # PrinTE's regression can extrapolate genome_size <= 0 when a genome is
-    # collapsing fast; floor at 1 so log10 stays defined. These rows remain
-    # informative as confidently-tiny labels for the surrogate.
-    sizes = [float(r["genome_size"]) for r in rows]
-    n_floored = sum(1 for s in sizes if s <= 0)
-    y = np.array([math.log10(max(1.0, s)) for s in sizes])
-    if n_floored:
-        print(f"  Note: {n_floored}/{len(rows)} projection(s) had genome_size <= 0; "
-              f"floored to 1 for log10.")
-
+    y = np.array([math.log10(float(r["genome_size"])) for r in rows])
     weights = np.array([float(r["weight"]) for r in rows])
 
     model = RandomForestRegressor(
