@@ -50,8 +50,8 @@ _PROJ_RE = re.compile(
     r"point=(?P<point>\d+),\s*empirical\s+95%\s+PI=\[(?P<lo>\d+)\.\.(?P<hi>\d+)\]"
 )
 
-_TERM_TOO_LARGE_RE = re.compile(r"95% prediction interval lower bound .* exceeds maximum")
-_TERM_TOO_SMALL_RE = re.compile(r"95% prediction interval upper bound .* is below minimum")
+_TERM_TOO_LARGE_RE = re.compile(r"Empirical PI lower bound .* exceeds maximum")
+_TERM_TOO_SMALL_RE = re.compile(r"Empirical PI upper bound .* is below minimum")
 _TERM_CONTINUING_RE = re.compile(r"Projection within bounds .* Continuing")
 
 # Training data TSV column order
@@ -251,7 +251,11 @@ def harvest_results(
                 "r2": proj["r2"],
                 "pi_lo": proj["pi_lo"],
                 "pi_hi": proj["pi_hi"],
-                "weight": proj["r2"],
+                # Clamp to [0, 1]: negative R² means the trajectory regression
+                # was worse than predicting the mean, so the projected size is
+                # not informative — give it zero weight rather than a negative
+                # one (sklearn's tree split-finder breaks on negative weights).
+                "weight": max(0.0, proj["r2"]),
             })
 
     if skipped:
