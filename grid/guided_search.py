@@ -50,12 +50,8 @@ _PROJ_RE = re.compile(
     r"point=(?P<point>\d+),\s*empirical\s+95%\s+PI=\[(?P<lo>\d+)\.\.(?P<hi>\d+)\]"
 )
 
-# Termination markers: tier-2 PI lines (existing) and tier-1 gross-divergence
-# lines emitted by PrinTE_v2.sh.
-_TERM_TOO_LARGE_RE = re.compile(
-    r"Empirical PI lower bound .* exceeds maximum|Gross overshoot:")
-_TERM_TOO_SMALL_RE = re.compile(
-    r"Empirical PI upper bound .* is below minimum|Gross undershoot:")
+_TERM_TOO_LARGE_RE = re.compile(r"95% prediction interval lower bound .* exceeds maximum")
+_TERM_TOO_SMALL_RE = re.compile(r"95% prediction interval upper bound .* is below minimum")
 _TERM_CONTINUING_RE = re.compile(r"Projection within bounds .* Continuing")
 
 # Training data TSV column order
