@@ -194,16 +194,20 @@ def main():
 
         hits = count_hits(tsv_path)
         log(f"  Hits so far: {hits} / target {args.target_hits}")
-        if hits >= args.target_hits:
-            log("Target hit count reached. Done.")
-            return
 
+        # Run purge before the target-reached check so the final round's
+        # intermediates get cleaned up too — otherwise the last 100 sims keep
+        # ~14 GB each of gen*_final.{fasta,bed,lib,mut.txt} on disk forever.
         if not args.no_purge:
             # Don't abort on purge failure — it's housekeeping, not pipeline.
             run_cmd("purge",
                     [sys.executable, str(PURGE),
                      "--run-dir", ".", "--execute"],
                     cwd=run_dir)
+
+        if hits >= args.target_hits:
+            log("Target hit count reached. Done.")
+            return
 
         if run_cmd("next",
                    [sys.executable, str(GUIDED_SEARCH), "next",
