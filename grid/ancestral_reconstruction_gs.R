@@ -15,7 +15,8 @@
 #
 # Key behavior:
 #   - Taxon IDs (prefix/abbreviations) are inferred directly from the Newick tip labels.
-#   - FASTA filenames are constructed as:  <tip_label><suffix>
+#   - FASTA files are looked for in the SAME directory as the --newick file,
+#     with filenames constructed as:  <newick_dir>/<tip_label><suffix>
 #
 # Options:
 #   --suffix        Filename suffix appended to each tip label to locate FASTA files (required)
@@ -28,8 +29,10 @@
 #   --node_adj      OPTIONAL: comma-separated adj for node labels (default: 1.2,-0.2)
 #
 # Notes:
-# - Genome size is computed as the total number of non-whitespace characters
-#   from non-header FASTA lines (headers start with '>').
+# - Genome size is computed from a samtools faidx index (.fai): the sum of the
+#   sequence-length column (col 2). If a "<fasta>.fai" already exists it is
+#   reused; otherwise it is created once with `samtools faidx`. This is far
+#   faster than scanning the FASTA in R. Requires `samtools` on PATH.
 # - If --abrev is provided:
 #     * FASTA reading uses the original tree tip labels (abbreviations) to locate files.
 #     * Reconstruction/plotting uses full names (tree tips are relabeled after sizes are read).
@@ -92,17 +95,34 @@ read_abbrev_tsv <- function(path) {
   stats::setNames(full, ab)
 }
 
-# Count genome size in bp from FASTA (ignores headers, whitespace).
+# Genome size in bp via samtools faidx: sum of the .fai sequence-length column.
+# Reuses an existing "<fasta>.fai" if present; otherwise builds it once.
 calc_genome_size_bp <- function(fasta_file) {
   if (!file.exists(fasta_file)) stop(paste("FASTA file not found:", fasta_file))
-  lines <- readLines(fasta_file, warn = FALSE)
-  if (length(lines) == 0) stop(paste("FASTA file is empty:", fasta_file))
 
-  seq_lines <- lines[!grepl("^\\s*>", lines)]
-  if (length(seq_lines) == 0) stop(paste("No sequence lines found in:", fasta_file))
+  fai_file <- paste0(fasta_file, ".fai")
 
-  seq_lines <- gsub("\\s+", "", seq_lines)
-  nchar(paste0(seq_lines, collapse = ""), type = "chars")
+  if (!file.exists(fai_file)) {
+    out <- suppressWarnings(system2("samtools",
+                                    args   = c("faidx", shQuote(fasta_file)),
+                                    stdout = TRUE, stderr = TRUE))
+    st <- attr(out, "status")
+    if (!is.null(st) && st != 0) {
+      stop(paste0("samtools faidx failed for ", fasta_file, ":\n",
+                  paste(out, collapse = "\n")))
+    }
+    if (!file.exists(fai_file)) {
+      stop(paste("samtools faidx did not produce expected index:", fai_file))
+    }
+  }
+
+  fai <- read.table(fai_file, sep = "\t", header = FALSE, quote = "",
+                    comment.char = "", stringsAsFactors = FALSE)
+  if (ncol(fai) < 2) stop(paste("Malformed .fai (need >=2 columns):", fai_file))
+  if (nrow(fai) == 0) stop(paste("Empty .fai index:", fai_file))
+
+  # as.numeric (double) avoids 32-bit integer overflow on large genomes.
+  sum(as.numeric(fai[[2]]))
 }
 
 # Get descendant tip names for a node
@@ -146,14 +166,27 @@ tip_labels_for_files <- tree$tip.label
 
 cat("Computing genome sizes from FASTA files...\n")
 
+# FASTA files are expected in the same directory as the Newick tree file.
+fasta_dir <- dirname(opt$newick)
+cat("Looking for FASTA files in: ", fasta_dir, "\n", sep = "")
+
+# Fail fast if samtools is missing (used to build/read .fai indices).
+if (Sys.which("samtools") == "") {
+  stop(paste("samtools not found on PATH. samtools is required to index",
+             "FASTA files (e.g. `mamba install -c bioconda samtools`)."))
+}
+
 genome_bp <- numeric(length(tip_labels_for_files))
 names(genome_bp) <- tip_labels_for_files
 
 for (p in tip_labels_for_files) {
-  fasta_file <- paste0(p, opt$suffix)
+  fasta_file <- file.path(fasta_dir, paste0(p, opt$suffix))
+  reused <- file.exists(paste0(fasta_file, ".fai"))
   bp <- calc_genome_size_bp(fasta_file)
   genome_bp[p] <- bp
-  cat("  ", p, " -> ", fasta_file, " : ", bp, " bp\n", sep = "")
+  cat("  ", p, " -> ", fasta_file,
+      if (reused) " [reused .fai]" else " [built .fai]",
+      " : ", bp, " bp\n", sep = "")
 }
 cat("\n")
 
@@ -321,4 +354,3 @@ dev.off()
 
 cat("Contour map phylogeny written to ", pdf_file, "\n", sep = "")
 cat("Done.\n")
-
