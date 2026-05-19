@@ -23,7 +23,7 @@
    - Per-generation LTR extraction and divergence analyses  
    - Overall LTR density plot  
 
-PrinTE treats all TEs as Type 1 (copy-and-paste). It supports simulating Type 2 (cut-and-paste) TEs, but does not currently model the cut-and-paste aspect of their biology. 
+PrinTE models both Type 1 (copy-and-paste) and Type 2 (cut-and-paste) transposition. Families flagged `cutpaste` in the `transposition` column of `ratios.tsv` are conserved: they are excluded from replicative insertion, and when an *intact* element is excised it relocates (one element of the same class/superfamily is re-inserted the following generation); a *fragmented* element (`_FRAG`, `_SOLO`, or cut by a nested insertion) is removed outright with no relocation. Cut-and-paste families do not amplify: intact elements relocate (copy-number-neutral), while fragmented ones are lost outright — so these families stay flat or slowly decline rather than expand. All other families (missing/blank/unrecognized value) remain Type 1 copy-and-paste, preserving prior behavior.
 
 ---
 
@@ -74,6 +74,10 @@ PrinTE installs and uses [Kmer2LTR](https://github.com/cwb14/Kmer2LTR.git) for L
      2. `superfamily`  
      3. `weight` of **intact TE** (probability of inserting intact TE)
      4. `weight` of **fragmented TE** (probability of inserting fragmented TE)
+     5. `transposition` (optional): `cutpaste` for conserved Type 2
+        (cut-and-paste) DNA transposons, or `copypaste`/blank/absent for
+        Type 1 (copy-and-paste; default). Backward compatible — older
+        4-column ratios files behave exactly as before.
    - PrinTE ships with `ratios.tsv` for this purpose.  
    - Users can adjust the `weight` values (column 3 & 4) with to tune the TE landscape to their need.
 

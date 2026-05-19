@@ -55,6 +55,7 @@ import re
 import numpy as np
 import matplotlib.pyplot as plt
 import concurrent.futures
+import cutpaste_common as _cc
 
 # =============================================================================
 # Data Structures and Helpers
@@ -458,7 +459,8 @@ def select_removals(entries, nest_groups, num_excision, seed, k, gene_weights, g
 # Simulation: Remove sequences and adjust bed coordinates
 # =============================================================================
 
-def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_freq):
+def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_freq,
+                      cutpaste_set=None):
     """
     This function modifies the genome sequences and bed entries.
     
@@ -529,6 +531,30 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
                     ltr_val = int(m.group(1))
                     if random.random() < (soloLTR_freq / 100.0):
                         partial_info[id(e)] = ltr_val
+
+    # --- Conserved cut-and-paste relocation tally ---
+    # A FULL excision (not partial/solo) of an INTACT element whose family is
+    # flagged cut-and-paste means the element jumped out: owe a re-insertion.
+    # qualifies_as_intact_ltr() already encodes the CUT_BY / paired-host-half
+    # fragmentation test; add explicit _FRAG/_SOLO exclusion for full removals.
+    # All _ELIGIBLE_SUBTYPES are intentionally in scope here (incl.
+    # NEST_TE_IN_GENE middles and CUT_PAIR_TE flanks); the _FRAG/_SOLO +
+    # qualifies_as_intact_ltr filters already drop host-halves and partials,
+    # so no e.subtype filter is needed or wanted (unlike the partial_info
+    # loop above, which is scoped differently for a different purpose).
+    reloc_tally = {}
+    if cutpaste_set:
+        for e in sorted_removals:
+            if id(e) in partial_info:
+                continue
+            fid = e.feature_id
+            if "_FRAG" in fid or "_SOLO" in fid:
+                continue
+            if not qualifies_as_intact_ltr(e):
+                continue
+            fam = _cc.parse_family(fid)
+            if fam in cutpaste_set:
+                reloc_tally[fam] = reloc_tally.get(fam, 0) + 1
 
     removals_by_chrom = defaultdict(list)
     new_entries = []
@@ -731,7 +757,7 @@ def simulate_excision(genome_records, entries, nest_groups, removals, soloLTR_fr
             entry.end -= shift
 
     new_entries.sort(key=lambda x: (x.chrom, x.start))
-    return updated_genome, new_entries
+    return updated_genome, new_entries, reloc_tally
 
 # =============================================================================
 # Failsafe consolidation for adjacent gene entries
@@ -846,7 +872,7 @@ def plot_weighted_candidate_curve(k, L95, outname):
 def process_chrom(args_tuple):
     (chrom, entries, genome_record, nest_groups, excision_count,
      seed_i, k, gene_weights, generations, sel_coeff,
-     euch_intervals, euch_het_bias, soloLTR_freq) = args_tuple
+     euch_intervals, euch_het_bias, soloLTR_freq, cutpaste_set) = args_tuple
 
     # Ensure reproducibility per-chrom:
     random.seed(seed_i)
@@ -863,15 +889,16 @@ def process_chrom(args_tuple):
     random.seed(seed_i + 1)
 
     # Simulate and adjust sequences and coords for this chrom
-    updated_genome_chrom, updated_entries = simulate_excision(
+    updated_genome_chrom, updated_entries, reloc_tally = simulate_excision(
         {chrom: genome_record},
         entries,
         nest_groups,
         removals,
-        soloLTR_freq
+        soloLTR_freq,
+        cutpaste_set,
     )
 
-    return updated_genome_chrom, updated_entries
+    return updated_genome_chrom, updated_entries, reloc_tally
 
 # =============================================================================
 # Main
@@ -915,6 +942,9 @@ def main():
     parser.add_argument("--euch_het_buffer", type=int, default=0, help="Buffer (bp) around genes for euchromatin.")
     parser.add_argument("--euch_het_bias", type=float, default=1.0, help="Bias factor for euchromatic excision.")
     parser.add_argument("-m", "--max-chrom", type=int, default=1, help="Max number of chromosomes to process in parallel.")
+    parser.add_argument("--TE_ratio", dest="te_ratio_file", default=None,
+                        help="ratios.tsv; enables conserved cut-and-paste "
+                             "relocation accounting (writes cutpaste_debt.tsv).")
     parser.add_argument(
         "--promoter-boundary",
         type=int,
@@ -932,6 +962,7 @@ def main():
     genome_records = parse_fasta(args.genome)
     genome_size = sum(len(rec.seq) for rec in genome_records.values())
     entries = parse_bed(args.bed)
+    cutpaste_set = _cc.load_cutpaste_set(args.te_ratio_file)
 
     # Gene weights
     unique_genes = {e.feature_id for e in entries if e.feature_id.startswith("gene")}
@@ -1024,16 +1055,20 @@ def main():
                 args.sel_coeff,
                 euch_intervals,
                 args.euch_het_bias,
-                args.soloLTR_freq
+                args.soloLTR_freq,
+                cutpaste_set,
             ))
 
         # Run in parallel
         updated_genome = {}
         updated_entries = []
+        total_reloc = {}
         with concurrent.futures.ProcessPoolExecutor(max_workers=args.max_chrom) as exe:
-            for ug, ue in exe.map(process_chrom, tasks):
+            for ug, ue, rt in exe.map(process_chrom, tasks):
                 updated_genome.update(ug)
                 updated_entries.extend(ue)
+                for fam, cnt in rt.items():
+                    total_reloc[fam] = total_reloc.get(fam, 0) + cnt
     else:
         # Single-threaded path
         removals = select_removals(
@@ -1042,9 +1077,21 @@ def main():
             euch_intervals=euch_intervals, euch_het_bias=args.euch_het_bias
         )
         random.seed(args.seed + 1)
-        updated_genome, updated_entries = simulate_excision(
-            genome_records, entries, nest_groups, removals, args.soloLTR_freq
+        updated_genome, updated_entries, total_reloc = simulate_excision(
+            genome_records, entries, nest_groups, removals, args.soloLTR_freq,
+            cutpaste_set,
         )
+
+    # Write the relocation debt sidecar only when cut-and-paste modeling is
+    # actually in effect (>=1 'cutpaste' family in the ratios file). With a
+    # legacy 4-column ratios file, no --TE_ratio, or an all-copypaste file,
+    # cutpaste_set is empty and NO sidecar is created -- behavior identical
+    # to the pre-feature pipeline.
+    if cutpaste_set:
+        _cc.write_debt("cutpaste_debt.tsv", total_reloc)
+        _n = sum(total_reloc.values())
+        print(f"Cut-and-paste relocation: {_n} intact element(s) excised "
+              f"-> cutpaste_debt.tsv ({len(total_reloc)} families).")
 
     # Failsafe consolidation and output
     final_bed = fail_safe_consolidation(updated_entries)

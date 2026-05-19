@@ -25,6 +25,13 @@ import re
 import sys
 import multiprocessing
 import numpy as np  # New import for Poisson simulation
+import os
+import cutpaste_common as _cc
+
+# Resolved relative to the working directory: the exciser writes this file and
+# the next generation's inserter consumes it. PrinTE.sh always invokes both
+# from the run directory, so the relative path is the cross-step contract.
+_DEBT_FILE = "cutpaste_debt.tsv"
 
 # Pre-computed translation table for reverse complement (C-speed)
 _RC_TABLE = bytes.maketrans(b'ACGTacgtNn', b'TGCAtgcaNn')
@@ -627,6 +634,23 @@ def main():
     features_original = features_all[:]  # keep a copy
 
     intact_TE_count, intact_distribution = get_intact_te_stats(features_original)
+
+    cutpaste_set = _cc.load_cutpaste_set(args.TE_ratio_file)
+    if cutpaste_set:
+        _excluded = 0
+        for key in list(intact_distribution):
+            if key in cutpaste_set:
+                intact_TE_count -= intact_distribution[key]
+                del intact_distribution[key]
+                _excluded += 1
+        print(f"Cut-and-paste: excluded {_excluded} family(ies) present in "
+              f"the genome from replicative insertion "
+              f"({len(cutpaste_set)} flagged in ratios).")
+        if args.fix_in is None and intact_TE_count <= 0:
+            print("Warning: all intact TEs in the genome belong to "
+                  "cut-and-paste families; replicative insertion rate is 0 "
+                  "this generation (relocation debt, if any, still applies).")
+
     print(f"Total number of intact TEs from BED: {intact_TE_count}")
 
     print("Distribution of intact TEs by (te_class, te_superfamily):")
@@ -674,6 +698,13 @@ def main():
             sys.exit(1)
         if not te_ratio:
             print("Error: No TE ratio information loaded from TE_ratio_file.")
+            sys.exit(1)
+        for _k in list(te_ratio):
+            if _k in cutpaste_set:
+                del te_ratio[_k]
+        if not te_ratio:
+            print("Error: all TE ratio families are cut-and-paste; "
+                  "no replicative families to insert in fix_in mode.")
             sys.exit(1)
         total_weight = sum(te_ratio.values())
         for k in te_ratio:
@@ -750,6 +781,21 @@ def main():
             insertion_events.append(chosen_cat)
         print(f"Total insertion events after adding born TEs: {len(insertion_events)}")
     # --- End New TE Birth functionality ---
+
+    # --- Consume conserved cut-and-paste relocation debt from prior gen ---
+    if os.path.exists(_DEBT_FILE):
+        debt = _cc.read_debt(_DEBT_FILE)
+        added = skipped = 0
+        for fam, cnt in debt.items():
+            if fam in te_by_category:
+                insertion_events.extend([fam] * cnt)
+                added += cnt
+            else:
+                skipped += cnt
+        os.remove(_DEBT_FILE)
+        print(f"Cut-and-paste relocation: re-inserted {added} element(s) "
+              f"from {_DEBT_FILE}; skipped {skipped} (family extinct in "
+              f"library). Consumed and removed {_DEBT_FILE}.")
 
     random.shuffle(insertion_events)
 

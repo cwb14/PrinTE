@@ -668,6 +668,14 @@ fi
 
 echo "=== Phase 2: Looping Generations ===" | tee -a "$LOG"
 
+# Conserved cut-and-paste: a relocation-debt sidecar (cutpaste_debt.tsv) is
+# produced by the exciser and consumed by the next generation's inserter.
+# On a fresh run (NOT --continue) remove any leftover from a prior unrelated
+# run so it cannot leak into generation 1. --continue intentionally keeps it.
+if [[ "$cont_flag" -ne 1 ]]; then
+  rm -f cutpaste_debt.tsv
+fi
+
 # Calculate the total number of iterations.
 iterations=$(( generation_end / step ))
 
@@ -799,7 +807,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
 
   # (2c) Purge some TEs and convert intact TEs to soloLTRs using TE excision.
   # Updated to use TE_exciser_parallel.py with new parameters.
-  cmd="python ${BIN_DIR}/TE_exciser_parallel.py --genome ${nest_prefix}.fasta --bed ${nest_prefix}.bed --rate ${delete_rate} --generations ${step} --soloLTR_freq ${solo_rate} ${extra_fix_ex} --output gen${current_gen}_final --seed ${current_seed} --sigma ${sigma} --k ${k} --sel_coeff ${sel_coeff} -m ${threads} --euch_het_buffer ${euch_buffer} --euch_het_bias ${euch_bias_excise} --promoter-boundary ${promoter_boundary}"
+  cmd="python ${BIN_DIR}/TE_exciser_parallel.py --genome ${nest_prefix}.fasta --bed ${nest_prefix}.bed --rate ${delete_rate} --generations ${step} --soloLTR_freq ${solo_rate} ${extra_fix_ex} --output gen${current_gen}_final --seed ${current_seed} --sigma ${sigma} --k ${k} --sel_coeff ${sel_coeff} -m ${threads} --euch_het_buffer ${euch_buffer} --euch_het_bias ${euch_bias_excise} --promoter-boundary ${promoter_boundary} --TE_ratio ${TE_ratio}"
 
   if [ $i -ne 1 ]; then
     cmd+=" --no_fig"
@@ -1003,6 +1011,10 @@ if [[ ${#genome_size_iters[@]} -gt 0 ]]; then
   done
   echo "Genome size trajectory written to ${trajectory_file} (${#genome_size_iters[@]} data points)" | tee -a "$LOG"
 fi
+
+# The final generation's debt has no next generation to consume it (by
+# design); remove the spent sidecar so the workdir is clean.
+rm -f cutpaste_debt.tsv
 
 echo "Pipeline completed at $(date)" | tee -a "$LOG"
 
