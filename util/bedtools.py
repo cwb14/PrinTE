@@ -177,6 +177,130 @@ def parse_bed(path):
     return entries
 
 
+# ---------------------------------------------------------------------------
+# Intact LTR-RT subsetting (--printe-intact).
+# Classification logic is ported from ../bin/extract_intact_LTR.py, which is
+# the canonical source. If the category rules change there, update them here
+# too: same first-pass categories, the same "rule 3" nearby-fragment check,
+# and the same final filter on intact TEs whose TE_class is "LTR".
+# ---------------------------------------------------------------------------
+def _extract_te_class(feature_id):
+    """TE_class from a feature_id of form TE_name#TE_class/TE_superfamily."""
+    try:
+        _te_name, rest = feature_id.split("#", 1)
+        te_class, _te_superfamily = rest.split("/", 1)
+        return te_class
+    except ValueError:
+        return None
+
+
+def parse_bed_intact(path):
+    """Parse a BED file, returning only intact LTR-RT entries.
+
+    Same (chrom, start, end, raw) tuples as parse_bed(), but restricted to
+    records classified as an intact TE whose TE_class is "LTR", following the
+    rules in ../bin/extract_intact_LTR.py.
+    """
+    records = []
+    with open(path) as f:
+        for line in f:
+            raw = line.rstrip("\n")
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            parts = s.split("\t")
+            if len(parts) < 6:
+                continue  # need name/tsd/strand columns to classify
+            chrom, start_s, end_s, name, tsd, strand = parts[:6]
+            try:
+                start = int(start_s)
+                end = int(end_s)
+            except ValueError:
+                continue
+            if start > end:
+                start, end = end, start
+            records.append({
+                "chrom": chrom, "start": start, "end": end, "raw": raw,
+                "name": name, "tsd": tsd, "strand": strand,
+                "feature_id": name.split(";")[0],
+                "additional": name.split(";")[1:],
+                "category": None,
+            })
+
+    # First pass: initial category per record.
+    for rec in records:
+        fid = rec["feature_id"]
+        if fid.startswith("gene"):
+            rec["category"] = "gene"
+        elif "_FRAG" in fid:
+            rec["category"] = "Fragmented TE"
+        elif "_SOLO" in fid:
+            rec["category"] = "SoloLTR"
+        elif rec["additional"] and "CUT_BY" in rec["additional"][0]:
+            rec["category"] = "Fragmented TE"
+        else:
+            rec["category"] = "Potential intact TE"
+
+    # Rule 3: a potential-intact record carrying extra attributes is really a
+    # fragment if a nearby (±100 in file order) non-gene record shares its TSD
+    # and strand and a prefix-related name.
+    for i, rec in enumerate(records):
+        if rec["category"] == "Potential intact TE" and rec["additional"]:
+            for j in range(max(0, i - 100), min(len(records), i + 101)):
+                if i == j:
+                    continue
+                other = records[j]
+                if other["feature_id"].startswith("gene"):
+                    continue
+                if other["tsd"] == rec["tsd"] and other["strand"] == rec["strand"]:
+                    if rec["name"].startswith(other["name"]) or other["name"].startswith(rec["name"]):
+                        rec["category"] = "Fragmented TE"
+                        break
+
+    # Surviving potential-intact records are intact; keep LTR-class ones.
+    for rec in records:
+        if rec["category"] == "Potential intact TE":
+            rec["category"] = "Intact TE"
+
+    intact = []
+    for rec in records:
+        if rec["category"] != "Intact TE":
+            continue
+        if _extract_te_class(rec["feature_id"]) != "LTR":
+            continue
+        intact.append((rec["chrom"], rec["start"], rec["end"], rec["raw"]))
+    return intact
+
+
+def compute_metrics(overlapped_scn, overlapped_bed, total_scn, total_bed):
+    """Precision/recall/F1/FDR from overlap counts.
+
+    Overlaps are not strictly 1:1, so true positives have two values:
+    predicted-side (overlapped_scn) and truth-side (overlapped_bed). Precision
+    is computed from the predicted side, recall from the truth side. Ratios
+    that are undefined (zero denominator) are returned as None.
+    """
+    fp = total_scn - overlapped_scn
+    fn = total_bed - overlapped_bed
+    precision = overlapped_scn / total_scn if total_scn > 0 else None
+    recall = overlapped_bed / total_bed if total_bed > 0 else None
+    if precision is None or recall is None or (precision + recall) == 0:
+        f1 = None
+    else:
+        f1 = 2 * precision * recall / (precision + recall)
+    fdr = (1 - precision) if precision is not None else None
+    return {
+        "tp_pred": overlapped_scn,
+        "tp_truth": overlapped_bed,
+        "fp": fp,
+        "fn": fn,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "fdr": fdr,
+    }
+
+
 def reciprocal_overlap(a_start, a_end, b_start, b_end):
     overlap_start = max(a_start, b_start)
     overlap_end = min(a_end, b_end)
@@ -195,10 +319,20 @@ def main():
     parser.add_argument('-bed', required=True, help='Input BED-formatted file')
     parser.add_argument('-r', type=float, default=0.0, help='Reciprocal overlap threshold (0-1)')
     parser.add_argument('-print', dest='print_mode', choices=['overlapping', 'unique-input', 'unique-bed'], help='Lines to print')
+    parser.add_argument('--printe-intact', dest='printe_intact', action='store_true',
+                        help='Subset the BED to intact LTR-RT entries only before '
+                             'computing overlap, using PrinTE classification rules '
+                             '(see bin/extract_intact_LTR.py). Use when the BED is a '
+                             'full genome annotation but the SCN/PASS file contains '
+                             'only intact LTR-RTs, so false negatives stay meaningful.')
     args = parser.parse_args()
 
     in_entries = parse_pass_scn(args.pass_scn)
-    bed_entries = parse_bed(args.bed)
+    if args.printe_intact:
+        bed_entries = parse_bed_intact(args.bed)
+        print(f"Subset BED via --printe-intact: {len(bed_entries)} intact LTR-RT entries")
+    else:
+        bed_entries = parse_bed(args.bed)
     scn_entries = in_entries
 
     # Index by chromosome
@@ -240,10 +374,21 @@ def main():
     unique_scn = total_scn - overlapped_scn
     unique_bed = total_bed - overlapped_bed
 
-    # Summary stats
-    print(f"Overlapping entries: {overlapped_scn} ({overlapped_bed} unique)")
-    print(f"Entries unique to SCN/PASS file: {unique_scn}")
-    print(f"Entries unique to BED file: {unique_bed}")
+    # Summary stats. The two overlap counts differ because matches are not
+    # strictly 1:1; they serve as predicted-side and truth-side TP respectively.
+    m = compute_metrics(overlapped_scn, overlapped_bed, total_scn, total_bed)
+
+    def fmt(x):
+        return f"{x:.4f}" if x is not None else "NA"
+
+    print(f"Overlapping entries: {overlapped_scn} ({overlapped_bed} unique)        [TP: {overlapped_scn} predicted-side / {overlapped_bed} truth-side]")
+    print(f"Entries unique to SCN/PASS file: {unique_scn}        [FP]")
+    print(f"Entries unique to BED file: {unique_bed}        [FN]")
+    print()
+    print(f"Precision = {fmt(m['precision'])}   (TP_pred {overlapped_scn} / predictions {total_scn})")
+    print(f"Recall    = {fmt(m['recall'])}   (TP_truth {overlapped_bed} / truths {total_bed})   [= sensitivity]")
+    print(f"F1        = {fmt(m['f1'])}")
+    print(f"FDR       = {fmt(m['fdr'])}   (1 - precision)")
 
     # Optional detailed printing
     if args.print_mode == 'overlapping':
