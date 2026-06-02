@@ -13,7 +13,7 @@ PrinTE is four tools in one:
    nesting, solo-LTR formation, cut-and-paste vs copy-and-paste transposition,
    selection against gene disruption, and chromatin bias.
 2. **A grid search** that finds the evolutionary parameters which best reproduce a real
-   genome — in an unbiased, reproducible way — rather than hand-tuning by eye.
+   genome - in an unbiased, reproducible way - rather than hand-tuning by eye.
 3. **A benchmarking tool**: because PrinTE knows exactly where every TE is, you can run your
    TE-annotation pipeline on a simulated genome and measure how well it recovers the truth.
 4. **Utilities for two directions of time**: reconstructing a clade's *past* and evolving it
@@ -24,9 +24,9 @@ PrinTE is four tools in one:
 > once (see [Benchmark your TE annotations](#benchmark-your-te-annotations-first)). This applies
 > to **both** tracks below.
 
-> **Scope note — PrinTE is LTR-RT-centric.** PrinTE simulates *all* TE classes, but its
+> **Scope note - PrinTE is LTR-RT-centric.** PrinTE simulates *all* TE classes, but its
 > genome-size dynamics (solo-LTR formation, length-biased loss, LTR-RT dating) and its
-> grid-search **scoring** are built around **LTR retrotransposons** — the dominant driver of
+> grid-search **scoring** are built around **LTR retrotransposons** since theyre the dominant driver of
 > plant genome-size evolution. Non-LTR TEs are simulated and tracked, but the size signal you
 > reconstruct and fit is an LTR-RT signal. The annotation, library-building, and ancestral-
 > reconstruction steps below therefore focus on LTR-RTs (see
@@ -44,15 +44,15 @@ hypothesis.
 | **You start from** | a time-scaled tree + TE annotations for a clade | one present-day genome |
 | **Build the burn-in with** | **PrinTE** (from a reconstructed ancestor) | **TEgenomeSimulator** (a digital replica) |
 | **You evolve toward** | the **real** present-day genome | an unknown future |
-| **You can score the result?** | **Yes** — against the real genome | **No** — the future hasn't happened |
+| **You can score the result?** | **Yes** - against the real genome | **No** - the future hasn't happened |
 | **Typical question** | Did TE activity **speed up or slow down** over time? | Under which parameters does the genome stay **stable**? |
 | **Typical horizon** | the full branch length (millions of years) | short (~1 My) |
 
-- **[Track 1 — Past → present](#track-1--past--present)** reconstructs the genomic and TE state
+- **[Track 1 - Past → present](#track-1--past--present)** reconstructs the genomic and TE state
   of a common ancestor, builds that ancestor as a burn-in, and evolves it forward until the
   simulation looks like the real genome. Because you have the real genome as ground truth,
   you can **score** each simulation and **test increasing- vs decreasing-rate hypotheses**.
-- **[Track 2 — Present → future](#track-2--present--future)** takes a digital replica of a real
+- **[Track 2 - Present → future](#track-2--present--future)** takes a digital replica of a real
   genome (built with [TEgenomeSimulator](https://github.com/Plant-Food-Research-Open/TEgenomeSimulator)),
   feeds it to PrinTE, and scans for the parameter regimes that **maintain** the genome over a
   short horizon. There is no future genome to score against, so this is best framed as a
@@ -77,7 +77,7 @@ conda activate PrinTE
 
 This installs everything the **core simulator** and **grid search** need. PrinTE additionally
 clones [Kmer2LTR](https://github.com/cwb14/Kmer2LTR.git) (used to date LTR-RTs) into the PrinTE
-directory the first time it runs the post-processing of an *evolve* run — not during a burn-in.
+directory the first time it runs the post-processing of an *evolve* run - not during a burn-in.
 If you work offline, pre-clone it: `git clone https://github.com/cwb14/Kmer2LTR.git` inside the
 PrinTE directory.
 
@@ -113,9 +113,9 @@ option list.
 
 A PrinTE run has two phases:
 
-- **Phase 1 — burn-in.** Build a starting genome: a synthetic genome seeded with genes and TEs.
+- **Phase 1 - burn-in.** Build a starting genome: a synthetic genome seeded with genes and TEs.
   Skipped if you supply your own genome (`--fasta`/`--bed`) or resume a run (`--continue`).
-- **Phase 2 — generation loop.** For each step, *mutate → insert → excise → rebuild the TE
+- **Phase 2 - generation loop.** For each step, *mutate → insert → excise → rebuild the TE
   library*, then write `gen<N>_final.{fasta,bed,lib}`.
 
 PrinTE models both **copy-and-paste** (Type 1) and **cut-and-paste** (Type 2) transposition.
@@ -126,18 +126,18 @@ number constant); a *fragmented* copy (`_FRAG`, `_SOLO`, or one cut by a nested 
 simply lost. Every other family is copy-and-paste and can amplify. Older 4-column `ratios.tsv`
 files (no `transposition` column) behave as all copy-and-paste, exactly as before.
 
-### Phase 1 — the burn-in genome
+### Phase 1 - the burn-in genome
 
 PrinTE's burn-in is flexible enough to mimic the composition of almost any real genome. It does
-**not** create solo-LTRs in the burn-in — those arise during Phase 2.
+**not** create solo-LTRs in the burn-in - those arise during Phase 2.
 
 **Inputs:**
 
-1. **CDS FASTA (`--cds`)** — the **genes** inserted into the synthetic genome. The default is
+1. **CDS FASTA (`--cds`)** - the **genes** inserted into the synthetic genome. The default is
    *Arabidopsis thaliana* TAIR10 CDS (19,621 sequences). To request more genes than that
    (`--cds_percent` / `--cds_num`), supply your own CDS FASTA. Each CDS is inserted at most once.
 
-2. **TE library FASTA (`--TE_lib`)** — the **TEs** to insert. Headers must use **RepeatMasker
+2. **TE library FASTA (`--TE_lib`)** - the **TEs** to insert. Headers must use **RepeatMasker
    format**:
 
    ```
@@ -146,19 +146,19 @@ PrinTE's burn-in is flexible enough to mimic the composition of almost any real 
    ```
 
    The supported `#[class]/[superfamily]` suffixes are listed in `ratios.tsv`. TEs are sampled
-   with replacement, so a single element can be inserted many times — **larger libraries give
+   with replacement, so a single element can be inserted many times - **larger libraries give
    more diverse TE landscapes**. Control abundance with `--intact_TE_percent`/`--intact_TE_num`
    (intact) and `--frag_TE_percent`/`--frag_TE_num` (fragmented). In the burn-in, genes and TEs
    are laid out in tandem (no nesting) at random distances ≥ 20 bp apart.
 
-3. **TE ratios file (`--TE_ratio`, default `ratios.tsv`)** — the relative frequency of each
+3. **TE ratios file (`--TE_ratio`, default `ratios.tsv`)** - the relative frequency of each
    superfamily. Columns:
 
    1. `class`
    2. `superfamily`
    3. `weight` of **intact** TE
    4. `weight` of **fragmented** TE
-   5. `transposition` (optional) — `cutpaste` for conserved Type 2 DNA transposons; blank or
+   5. `transposition` (optional) - `cutpaste` for conserved Type 2 DNA transposons; blank or
       `copypaste` for Type 1 (the default).
 
    ```text
@@ -174,20 +174,20 @@ PrinTE's burn-in is flexible enough to mimic the composition of almost any real 
 
 **Key burn-in parameters:**
 
-- **`--size` / `--chr_number`** — total genome size (must carry a `kb`/`Mb`/`Gb` suffix, e.g.
+- **`--size` / `--chr_number`** - total genome size (must carry a `kb`/`Mb`/`Gb` suffix, e.g.
   `135Mb`) and chromosome count. Work is parallelized per chromosome, so more chromosomes
   generally run faster (but avoid oversplitting).
-- **`--TE_mut_k` / `--TE_mut_Mmax`** — the age (substitution-divergence) distribution of TEs in
+- **`--TE_mut_k` / `--TE_mut_Mmax`** - the age (substitution-divergence) distribution of TEs in
   the burn-in. TE mutations are clock-like, but old elements are preferentially lost, so the
   *observed* distribution skews young. `--TE_mut_k` sets the decay slope (larger → more young
   TEs); `--TE_mut_Mmax` sets the maximum divergence (use `--TE_mut_Mmax 0` to disable aging).
   PrinTE writes the chosen distribution to `burnin_mut_dist.pdf`.
-- **`--mutation_bins`** — supply an explicit TE age distribution (a 3-column `start end frequency`
+- **`--mutation_bins`** - supply an explicit TE age distribution (a 3-column `start end frequency`
   file) instead of the decay model. **This is how the past→present track injects a reconstructed
   ancestral age distribution** (overrides `--TE_mut_k`/`--TE_mut_Mmax`).
-- **`--burnin_only`** — build the burn-in and stop (no `-ge`/`-st` needed).
+- **`--burnin_only`** - build the burn-in and stop (no `-ge`/`-st` needed).
 
-### Phase 2 — evolving the genome
+### Phase 2 - evolving the genome
 
 PrinTE offers two rate models. Choose one.
 
@@ -199,7 +199,7 @@ Constant TE insertion and deletion **per base of genome per generation**.
 --fix 5e-9,1e-8     # insertion=5e-9, deletion=1e-8 per bp per generation
 ```
 
-- **`--disable_genes`** — forbid TE insertion into genes (fixed mode only).
+- **`--disable_genes`** - forbid TE insertion into genes (fixed mode only).
 
 #### Variable rates
 
@@ -207,33 +207,33 @@ Insertion and deletion scale with the genome's current TE content. Rates are spe
 intact TE per generation** and converted internally to per-base rates; accumulated TE mutations
 are inherited by new copies.
 
-- **`--insert_rate` / `--delete_rate`** — insertions/deletions per intact TE per generation.
-- **`--birth_rate`** — occasionally resamples from the **original** library (`--TE_lib`),
+- **`--insert_rate` / `--delete_rate`** - insertions/deletions per intact TE per generation.
+- **`--birth_rate`** - occasionally resamples from the **original** library (`--TE_lib`),
   modeling horizontal transfer or revival of an extinct lineage. Without it, only existing
   intact TEs propagate.
 
 **Selective constraint** (variable mode). PrinTE treats genes as selectively constrained and
 TEs + intergenic DNA as neutral.
 
-- **`--sigma`** — how unevenly constraint is spread across genes (log-normal). Low → most genes
+- **`--sigma`** - how unevenly constraint is spread across genes (log-normal). Low → most genes
   similarly constrained; high → a few highly constrained, the rest mild. Visualized in
   `lognormal_distribution.pdf`.
-- **`--sel_coeff`** — by default PrinTE does not purge TEs by fitness; set this to make more
+- **`--sel_coeff`** - by default PrinTE does not purge TEs by fitness; set this to make more
   deleterious (gene-disrupting) insertions more likely to be deleted.
-- **`--promoter-boundary`** — bp up/downstream of a gene where an overlapping TE still counts as
+- **`--promoter-boundary`** - bp up/downstream of a gene where an overlapping TE still counts as
   disrupting that gene.
 
 **Chromatin bias.** TEs may insert/delete more readily in euchromatin. PrinTE approximates
 euchromatin as the neighborhood of genes.
 
-- **`--chromatin_buffer`** — bp around genes treated as euchromatin.
-- **`--chromatin_bias_insert` / `--chromatin_bias_delete`** — euchromatin bias for insertion / deletion.
+- **`--chromatin_buffer`** - bp around genes treated as euchromatin.
+- **`--chromatin_bias_insert` / `--chromatin_bias_delete`** - euchromatin bias for insertion / deletion.
 
 **LTR / length dynamics** (both modes).
 
-- **`--solo_rate`** — when an intact LTR-RT is removed, the % chance it leaves a **solo-LTR**
+- **`--solo_rate`** - when an intact LTR-RT is removed, the % chance it leaves a **solo-LTR**
   rather than disappearing entirely.
-- **`--k`** — length bias of deletion: longer elements (more prone to unequal recombination) are
+- **`--k`** - length bias of deletion: longer elements (more prone to unequal recombination) are
   removed faster. `--k 0` disables it. See `weighted_candidate_selection.pdf`.
 
 In short: use **fixed** for simple constant-rate experiments, and **variable** for dynamics
@@ -241,23 +241,23 @@ shaped by genome composition, selection, and chromatin.
 
 ### General options
 
-- **`--generation_end` / `--step`** — total generations and generations per step.
+- **`--generation_end` / `--step`** - total generations and generations per step.
   `--generation_end 3000 --step 1000` samples generations 1000, 2000, 3000.
-- **`--mutation_rate` / `--TsTv`** — DNA substitution rate per bp per generation, and the
+- **`--mutation_rate` / `--TsTv`** - DNA substitution rate per bp per generation, and the
   transition/transversion ratio.
-- **`--max_size` / `--min_size`** — stop Phase 2 early once a regression projection of the
+- **`--max_size` / `--min_size`** - stop Phase 2 early once a regression projection of the
   terminal genome size is *confidently* above (`--max_size`) or below (`--min_size`) a bound
   (e.g. `1G`, `100M`). Handy for parameter scans that would otherwise blow up or collapse.
-- **`--fasta` / `--bed`** — start from your own genome + PrinTE-format BED (skips the burn-in;
+- **`--fasta` / `--bed`** - start from your own genome + PrinTE-format BED (skips the burn-in;
   see [Bringing your own genome](#bringing-your-own-genome)).
-- **`--continue`** — resume from the last completed generation in the working directory. Combine
+- **`--continue`** - resume from the last completed generation in the working directory. Combine
   with a larger `--generation_end` (and new rates) to **extend** a finished run.
-- **`--model`** — substitution model for LTR-RT dating (`raw`, `K2P`, `JC69`; default `K2P`).
-- **`--pergen_select`** — how many generations get the (slower) per-generation LTR-RT dating
+- **`--model`** - substitution model for LTR-RT dating (`raw`, `K2P`, `JC69`; default `K2P`).
+- **`--pergen_select`** - how many generations get the (slower) per-generation LTR-RT dating
   analysis (default 2 = first + last).
-- **`--ex_LTR`** — drop library LTR-RTs that lack a detectable LTR.
-- **`--no_postproc` / `--keep_temps`** — skip all plots/reports / keep intermediate files.
-- **`--seed` / `--threads`** — reproducibility and parallelism.
+- **`--ex_LTR`** - drop library LTR-RTs that lack a detectable LTR.
+- **`--no_postproc` / `--keep_temps`** - skip all plots/reports / keep intermediate files.
+- **`--seed` / `--threads`** - reproducibility and parallelism.
 
 ### Outputs
 
@@ -275,7 +275,7 @@ The `.lib` is a FASTA whose headers are the bare feature IDs of the surviving in
 `>tuteh_AC183372_584#LTR/unknown~LTRlen:126`). You can inspect it (`grep '>' gen40000_final.lib`)
 or feed it to a later run via `--clean_lib`.
 
-The **BED** has six tab-separated columns — `chromosome`, `start`, `end`, `feature_ID`, `TSD`,
+The **BED** has six tab-separated columns - `chromosome`, `start`, `end`, `feature_ID`, `TSD`,
 `strand` (coordinates are 0-based, half-open):
 
 ```text
@@ -292,14 +292,14 @@ chr1  1869245  1869502  anysaf_AC211487_11211#LTR/Ty3~LTRlen:257_SOLO           
 
 Other useful files:
 
-- **`gen<N>_mut.txt`** — the per-generation mutation report (mutations introduced this step,
+- **`gen<N>_mut.txt`** - the per-generation mutation report (mutations introduced this step,
   and the accumulated substitution distance from the burn-in genome).
-- **`burnin.stat`** — composition of the burn-in (bp, % genes, % intact/fragmented TE).
-- **`pipeline.report`** — insertions (nested/non-nested) and deletions per generation.
-- **`pipeline.log` / `pipeline.error`** — full run log and error log. Both are always created;
+- **`burnin.stat`** - composition of the burn-in (bp, % genes, % intact/fragmented TE).
+- **`pipeline.report`** - insertions (nested/non-nested) and deletions per generation.
+- **`pipeline.log` / `pipeline.error`** - full run log and error log. Both are always created;
   on success `pipeline.error` holds only a start banner, so **if a run dies, read
   `pipeline.error` for the traceback.**
-- **Figures** — `percent_TE.pdf` (TE fraction over time), `solo_intact.pdf` (solo:intact ratio),
+- **Figures** - `percent_TE.pdf` (TE fraction over time), `solo_intact.pdf` (solo:intact ratio),
   `stat_intact_plot.pdf`/`stat_frag_plot.pdf` (superfamily counts), `genome_size_plot.pdf`,
   `all_LTR_density.pdf` (LTR-RT age distribution across generations).
 
@@ -326,7 +326,7 @@ To skip the burn-in (`--fasta genome.fasta --bed genome.bed`), your BED must be 
 The two supported ways to obtain a valid BED without hand-editing are: **(a)** let PrinTE build a
 burn-in (Track 1), or **(b)** import a TEgenomeSimulator genome with `util/gff_to_bed.py`
 (Track 2). If you omit `-i/--TE_lib` here, new insertions are drawn from the bundled default
-library — supply `-i your_TE.lib` (RepeatMasker headers) so they match your organism.
+library - supply `-i your_TE.lib` (RepeatMasker headers) so they match your organism.
 
 ---
 
@@ -347,7 +347,7 @@ annotation pipeline. **Do this once before either track.**
 2. **Annotate the LTR-RTs** in `burnin.fasta`. We recommend
    [synLTR](#annotating-ltr-rts-and-building-a-species-specific-library) (below): with
    `--out_prefix burnin` it writes `burnin_r1_ltr.tsv`, whose column 1 is the `chrom:start-end`
-   locus — exactly what `-pass_scn` reads. Any LTR finder works as long as you hand `bedtools.py`
+   locus - exactly what `-pass_scn` reads. Any LTR finder works as long as you hand `bedtools.py`
    an SCN or PASS file (an SCN line has ≥12 whitespace columns with start/end in columns 1–2 and
    the sequence name last; a PASS line starts `chr:start..end`). Use the **same pipeline on your
    real genomes** in Track 1/2.
@@ -363,7 +363,7 @@ annotation pipeline. **Do this once before either track.**
 
    `--printe-intact` subsets the truth BED to intact LTR-RTs so false negatives stay meaningful;
    `-r 0.9` requires reciprocal 90% overlap (each call and the true element cover ≥90% of the
-   other — lower it, e.g. `-r 0.5`, for looser positional agreement). Expected output:
+   other - lower it, e.g. `-r 0.5`, for looser positional agreement). Expected output:
 
    ```text
    Subset BED via --printe-intact: 412 intact LTR-RT entries
@@ -397,7 +397,7 @@ git clone https://github.com/cwb14/Kmer2LTR.git    # also auto-cloned by PrinTE/
 ```
 
 **Annotate LTR-RTs in a genome** (real or simulated). `--max-rounds 1` does a single, non-nested
-pass — the right setting for PrinTE; `--proteins` is a protein FASTA used to classify elements
+pass - the right setting for PrinTE; `--proteins` is a protein FASTA used to classify elements
 (the bundled `PrinTE/data/TAIR10.pep.fa.gz` works for most plant genomes):
 
 ```bash
@@ -408,11 +408,11 @@ bash synLTR/module2/ltrharvest_wrapper2.sh \
 
 Two of its outputs matter here (with `--out_prefix mygenome`):
 
-- **`mygenome_r1_ltr.tsv`** — the LTR-RT table. **Column 1 is the `chrom:start-end` locus and
+- **`mygenome_r1_ltr.tsv`** - the LTR-RT table. **Column 1 is the `chrom:start-end` locus and
   column 7 is the LTR–LTR p-distance** (the age proxy). Pass this to `bedtools.py -pass_scn` for
   [benchmarking](#benchmark-your-te-annotations-first) and to the grid scorer (as `--ref-tsv` and
   the per-simulation `--exp-tsv-name`).
-- **`mygenome_depth0_ltr.fa`** — a FASTA of the (unnested) LTR-RT sequences, with
+- **`mygenome_depth0_ltr.fa`** - a FASTA of the (unnested) LTR-RT sequences, with
   RepeatMasker-style headers `>chrom:start-end#LTR/superfamily/...`.
 
 (synLTR needs `mafft` and `trimal` on PATH and clones Kmer2LTR on first run, so that run needs
@@ -452,8 +452,8 @@ settings) that make a simulation match a target. Rather than guess, PrinTE's `gr
 The search space is four dimensions: **insertion rate × deletion rate × solo ratio (`sr`) ×
 length bias (`k`)**. Two front-ends are provided:
 
-- **`grid/gridsearch.py`** — random/grid sampling of the space (simple, exhaustive-ish).
-- **`grid/guided_search.py`** — *active learning*: round 0 explores with Latin-hypercube
+- **`grid/gridsearch.py`** - random/grid sampling of the space (simple, exhaustive-ish).
+- **`grid/guided_search.py`** - *active learning*: round 0 explores with Latin-hypercube
   sampling; later rounds train a random-forest surrogate on the results so far and propose the
   most informative next batch. This converges on the target with far fewer simulations.
 
@@ -471,7 +471,7 @@ zcat PrinTE/data/maize_rice_arab_curated_TE.lib.gz \
   | python PrinTE/data/fix_non_ATGC.py - > lib_clean.fa
 ```
 
-### Step 1 — seed and launch the search
+### Step 1 - seed and launch the search
 
 ```bash
 python PrinTE/grid/guided_search.py init \
@@ -501,7 +501,7 @@ so the run spans your branch (a 5.4-My branch at 100-yr generations is `--ge 540
         --samples 100 --explore-frac 0.2 > orchestrator.log 2>&1 &
   ```
 
-  `run_loop.py` harvests results, proposes the next batch, and re-launches each round itself —
+  `run_loop.py` harvests results, proposes the next batch, and re-launches each round itself -
   run it from the directory containing `search_state.json` (written by `init`). It only drives
   the **local** launcher.
 
@@ -510,17 +510,17 @@ so the run spans your branch (a 5.4-My branch at 100-yr generations is `--ge 540
   you submit with `sbatch slurm_grid/submit_array.sbatch`. On SLURM, drive the rounds manually
   (`guided_search.py harvest` → `next` → `sbatch`) rather than with `run_loop.py`.
 
-### Step 2 — re-annotate the simulated genomes
+### Step 2 - re-annotate the simulated genomes
 
 The grid runs skip post-processing for speed, so the simulated genomes are **not** dated
 automatically. Annotate each one's LTR-RTs with the **same tool you used to benchmark**
 ([synLTR](#annotating-ltr-rts-and-building-a-species-specific-library)), producing in every
 simulation directory a `<genome>_r1_ltr.tsv` table (**column 1 = `chrom:start-end`, column 7 =
-p-distance** — exactly what the scorer reads). `grid/discover_ltr.sh` is a template that loops
+p-distance** - exactly what the scorer reads). `grid/discover_ltr.sh` is a template that loops
 over every simulation directory and runs the annotation; edit its target FASTA name and paths to
 match your run. Build the **reference** table the same way on your real genome.
 
-### Step 3 — score and visualize
+### Step 3 - score and visualize
 
 ```bash
 python PrinTE/grid/build_composite_matrix.py \
@@ -544,7 +544,7 @@ python PrinTE/grid/contour_plot.py --input composite_matrix.tsv
   **`--exp-tsv-name`** is the basename of the per-simulation LTR TSV inside each directory. If your
   re-annotation wrote a different name (e.g. `<prefix>_kmer2ltr_dedup`), either rename it in each
   directory or pass that name to `--exp-tsv-name`.
-- Pass `--compare-script PrinTE/grid/compare_genomes.py` explicitly — the script's built-in
+- Pass `--compare-script PrinTE/grid/compare_genomes.py` explicitly - the script's built-in
   default points at a differently named file.
 - **Reading the winner:** the first four columns of the top row are your best-fit
   `insertion_rate`, `deletion_rate`, `solo_ratio`, `length_bias`. `--alphas` weights the four
@@ -556,7 +556,7 @@ report (parameter ranges, correlations, and confidence intervals for the optimum
 
 ---
 
-## Track 1 — Past → present
+## Track 1 - Past → present
 
 **Goal:** reconstruct the genome and TE state of a clade's common ancestor, build it as a
 burn-in, and evolve it forward until the simulation resembles the **real** present-day genome.
@@ -570,14 +570,14 @@ genome with `--out_prefix <tip>` to produce, per tip, an LTR-RT table `<tip>_r1_
 genome, table, LTR-RT FASTA) which drive the three reconstructions below. (Distance trees can be
 time-scaled with a tool such as [PATHd8](https://www2.math.su.se/PATHd8/).)
 
-### Step 1 — reconstruct the ancestor
+### Step 1 - reconstruct the ancestor
 
 Two R scripts run `phytools::fastAnc` over the tree. **File-naming/placement matters:**
 
 - `ancestral_reconstruction_gs.R` looks for each tip's file as `<tip_label><suffix>` **in the
   same directory as the Newick** (`<tip>` is the exact tip string in the tree).
 - `ancestral_reconstruction_ltr_age.R` looks for `<tip_label><suffix>` **in the current working
-  directory** — so run it from where those files live.
+  directory** - so run it from where those files live.
 
 ```bash
 # (a) Ancestral GENOME size  -> needs one genome FASTA per tip, named <tip>.fa, next to tree.nwk.
@@ -596,7 +596,7 @@ Rscript PrinTE/grid/ancestral_reconstruction_ltr_age.R \
 ```
 
 (`gs.R` needs `samtools` on PATH and builds `<file>.fai` automatically. `ltr_age.R` calls
-`grid/summary_stats.py` via `python` — keep it beside the R script, or pass `--summary_path` —
+`grid/summary_stats.py` via `python` - keep it beside the R script, or pass `--summary_path` -
 and bins ages with defaults `--bins 50 --bin_max 0.15`.)
 
 **Find your node.** `gs.R` writes `ancestral_genome_size.contMap.pdf` (node numbers show only
@@ -605,7 +605,7 @@ with `--label_nodes`) and `ancestral_genome_size.ancestral_genome_sizes.tsv`. `l
 tips). Open a PDF (or `grep` your tip names in `node_map.tsv`), find the internal node whose
 descendants are exactly your clade, and **use that node number consistently below** (here, `20`).
 
-### Step 2 — turn the reconstruction into PrinTE inputs
+### Step 2 - turn the reconstruction into PrinTE inputs
 
 ```bash
 # Ancestral genome size and intact-LTR-RT size are column 6 (bp_est) of each gs.R table.
@@ -629,7 +629,7 @@ awk -v OFS='\t' '{a[NR]=$0; v[NR]=$3; s+=$3} END{for(i=1;i<=NR;i++) print a[i], 
   ancestral.LTR.bins | cut -f1,2,4 > ancestral.LTR.bins.freq
 ```
 
-### Step 3 — build the ancestor as a burn-in
+### Step 3 - build the ancestor as a burn-in
 
 ```bash
 bash PrinTE/PrinTE.sh --burnin_only \
@@ -639,14 +639,14 @@ bash PrinTE/PrinTE.sh --burnin_only \
     -cl lib_clean.fa -r PrinTE/ratios_ltr_only.tsv -t 200
 ```
 
-`-sz`, `-itp`, and `-mb` come from Step 2. `-ftp` is the **fragmented**-TE percent — it is *not*
+`-sz`, `-itp`, and `-mb` come from Step 2. `-ftp` is the **fragmented**-TE percent - it is *not*
 reconstructed above (the gs.R/ltr_age.R steps cover intact LTR-RTs only), so estimate it from
 your clade's present-day fragment + solo load, or use it as filler/deletion substrate. `-cl
 lib_clean.fa` is the cleaned TE library; for a more realistic ancestor, build a
 **species-specific** LTR-RT library from a close present-day relative
 (see [Annotating LTR-RTs](#annotating-ltr-rts-and-building-a-species-specific-library)) and pass it here.
 
-### Step 4 — benchmark, evolve, and fit
+### Step 4 - benchmark, evolve, and fit
 
 Optionally [benchmark](#benchmark-your-te-annotations-first) the burn-in (run your LTR pipeline on
 `burnin.fasta`; a high recall on a genome with a known TE landscape means later mismatches reflect
@@ -655,12 +655,12 @@ to find the insertion/deletion rates (and `sr`, `k`) whose terminal genome best 
 one.
 
 **Interpret.** The best-fit rates are your estimate of TE turnover along the branch. Compare them
-to the ancestral and present-day TE loads to decide whether activity rose or fell — and use the
+to the ancestral and present-day TE loads to decide whether activity rose or fell - and use the
 ancestral reconstruction to motivate which hypothesis (increasing vs decreasing rate) to test.
 
 ---
 
-## Track 2 — Present → future
+## Track 2 - Present → future
 
 **Goal:** take a real present-day genome and project it forward. There is no future genome to
 compare against, so instead of fitting, you **scan for stability**: under which PrinTE parameters
@@ -698,7 +698,7 @@ A run **"held steady"** if its genome size and TE content stayed inside your tol
 the horizon. The lightest-weight read-out is each run's `genome_size_plot.pdf` and `percent_TE.pdf`
 (flat = stable); for a single number, score each run against the replica with
 `build_composite_matrix.py` (low Composite = stayed close to the start). Because there is no ground
-truth, treat Track 2 as **hypothesis generation** about genome stability — report *which rate
+truth, treat Track 2 as **hypothesis generation** about genome stability - report *which rate
 regimes maintain the genome* and which let it expand or erode, not a single historical rate.
 
 ---
@@ -708,14 +708,14 @@ regimes maintain the genome* and which let it expand or erode, not a single hist
 PrinTE ships with a curated maize/rice/Arabidopsis library
 (`data/maize_rice_arab_curated_TE.lib.gz`) and an LTR-RT exemplar database (`data/ltr-db.fa.gz`).
 For LTR-RT studies, the best library is usually a **species-specific** one built from your own
-genome — see [Annotating LTR-RTs](#annotating-ltr-rts-and-building-a-species-specific-library).
+genome - see [Annotating LTR-RTs](#annotating-ltr-rts-and-building-a-species-specific-library).
 To assemble a library by hand instead, a few helpers are provided:
 
-- **`util/TE_lib_stitcher.py`** — reassemble split `LTR` + `Internal` library entries into
+- **`util/TE_lib_stitcher.py`** - reassemble split `LTR` + `Internal` library entries into
   intact LTR-RTs.
-- **`data/fasta_to_RepeatMasker.py`** — normalize heterogeneous headers into
+- **`data/fasta_to_RepeatMasker.py`** - normalize heterogeneous headers into
   `>name#class/superfamily` form.
-- **`data/fix_non_ATGC.py`** — replace non-ACGT characters with `T` so downstream k-mer/alignment
+- **`data/fix_non_ATGC.py`** - replace non-ACGT characters with `T` so downstream k-mer/alignment
   steps don't choke (streams large files; writes to stdout):
 
   ```bash
