@@ -6,6 +6,15 @@ genome, it repeatedly **mutates** the DNA, **inserts** new transposable elements
 for every generation you sample. It is built for plant-genome-scale data and runs on a laptop
 or a cluster.
 
+```
+                 Present
+Ancestor        ╭─▶▬▶─▶▬▶─▶▬◀─▶─▶▬▶─▶▬▶─▶▬▶  Expansion
+─▶▬▶──▶▬◀──▶▬▶──┤ ⟶ forward time
+                ╰─▶▬▶──▶▬▶───────            Contraction
+
+▶▬▶ LTR-RT · ▶▬◀ DNA transposon (TIR) · ▶ solo-LTR · ── DNA
+```
+
 PrinTE is four tools in one:
 
 1. **A forward TE simulator** that supports both **fixed** (constant) and **variable**
