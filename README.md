@@ -24,6 +24,14 @@ PrinTE is four tools in one:
 > once (see [Benchmark your TE annotations](#benchmark-your-te-annotations-first)). This applies
 > to **both** tracks below.
 
+> **Scope note — PrinTE is LTR-RT-centric.** PrinTE simulates *all* TE classes, but its
+> genome-size dynamics (solo-LTR formation, length-biased loss, LTR-RT dating) and its
+> grid-search **scoring** are built around **LTR retrotransposons** — the dominant driver of
+> plant genome-size evolution. Non-LTR TEs are simulated and tracked, but the size signal you
+> reconstruct and fit is an LTR-RT signal. The annotation, library-building, and ancestral-
+> reconstruction steps below therefore focus on LTR-RTs (see
+> [Annotating LTR-RTs](#annotating-ltr-rts-and-building-a-species-specific-library)).
+
 ---
 
 ## Two ways to use PrinTE
@@ -336,18 +344,19 @@ annotation pipeline. **Do this once before either track.**
    bash PrinTE/PrinTE.sh --burnin_only -sz 100Mb -cn 1 -P 4 -itp 10
    ```
 
-2. **Run your TE/LTR-RT annotation pipeline** on `burnin.fasta` to produce an `SCN` or `PASS`
-   file of predicted intact LTR-RTs. These are the standard outputs of LTR finders — e.g.
-   LTRharvest writes a `.scn`, and LTR_retriever writes a `genome.fa.pass.list`. (`-pass_scn`
-   reads either: an SCN line has ≥12 whitespace columns with start/end in columns 1–2 and the
-   sequence name last; a PASS line starts `chr:start..end`.) Use the **same pipeline you intend
-   to run on your real genomes** in Track 1/2.
+2. **Annotate the LTR-RTs** in `burnin.fasta`. We recommend
+   [synLTR](#annotating-ltr-rts-and-building-a-species-specific-library) (below): with
+   `--out_prefix burnin` it writes `burnin_r1_ltr.tsv`, whose column 1 is the `chrom:start-end`
+   locus — exactly what `-pass_scn` reads. Any LTR finder works as long as you hand `bedtools.py`
+   an SCN or PASS file (an SCN line has ≥12 whitespace columns with start/end in columns 1–2 and
+   the sequence name last; a PASS line starts `chr:start..end`). Use the **same pipeline on your
+   real genomes** in Track 1/2.
 
 3. **Compare predictions to the truth** with `util/bedtools.py`:
 
    ```bash
    python PrinTE/util/bedtools.py \
-       -pass_scn my_annotations.scn \
+       -pass_scn burnin_r1_ltr.tsv \
        -bed burnin.bed --printe-intact \
        -r 0.9
    ```
@@ -371,6 +380,67 @@ annotation pipeline. **Do this once before either track.**
 As a rule of thumb, **recall and F1 ≥ 0.90** at `-r 0.9` indicate a pipeline you can trust;
 below ~0.8, fix the annotation (or simplify the simulation target) before interpreting any
 evolutionary result.
+
+---
+
+## Annotating LTR-RTs and building a species-specific library
+
+Two LTR-RT operations recur in PrinTE: **annotating** LTR-RTs in a genome (to benchmark your
+calls and to score simulations), and **building a species-specific LTR-RT library** so that
+simulated insertions resemble the real elements of your genome. The companion tools
+[synLTR](https://github.com/cwb14/synLTR) (annotation) and
+[Kmer2LTR](https://github.com/cwb14/Kmer2LTR) (library building + LTR dating), both by the PrinTE
+author, do exactly this and benchmark well for PrinTE's purposes.
+
+```bash
+git clone https://github.com/cwb14/synLTR.git
+git clone https://github.com/cwb14/Kmer2LTR.git    # also auto-cloned by PrinTE/synLTR when needed
+```
+
+**Annotate LTR-RTs in a genome** (real or simulated). `--max-rounds 1` does a single, non-nested
+pass — the right setting for PrinTE; `--proteins` is a protein FASTA used to classify elements
+(the bundled `PrinTE/data/TAIR10.pep.fa.gz` works for most plant genomes):
+
+```bash
+bash synLTR/module2/ltrharvest_wrapper2.sh \
+    --genome mygenome.fa --proteins PrinTE/data/TAIR10.pep.fa.gz \
+    --max-rounds 1 --threads 64 --out_prefix mygenome
+```
+
+Two of its outputs matter here (with `--out_prefix mygenome`):
+
+- **`mygenome_r1_ltr.tsv`** — the LTR-RT table. **Column 1 is the `chrom:start-end` locus and
+  column 7 is the LTR–LTR p-distance** (the age proxy). Pass this to `bedtools.py -pass_scn` for
+  [benchmarking](#benchmark-your-te-annotations-first) and to the grid scorer (as `--ref-tsv` and
+  the per-simulation `--exp-tsv-name`).
+- **`mygenome_depth0_ltr.fa`** — a FASTA of the (unnested) LTR-RT sequences, with
+  RepeatMasker-style headers `>chrom:start-end#LTR/superfamily/...`.
+
+(synLTR needs `mafft` and `trimal` on PATH and clones Kmer2LTR on first run, so that run needs
+network access.)
+
+**Build a species-specific library** from that FASTA. `Kmer2LTR --make-perfect-ltr-rt 5p`
+rebuilds each element with two *identical* LTRs (as at the moment of insertion) and appends the
+`~LTRlen:<N>` tag PrinTE needs. `5p` (use the 5′ LTR) is the natural choice:
+
+```bash
+python Kmer2LTR/Kmer2LTR.py -i mygenome_depth0_ltr.fa --make-perfect-ltr-rt 5p
+# -> mygenome_depth0_ltr.LTRs.alns.perfect_5p.fa
+```
+
+Feed that file to PrinTE as a ready-made library: its headers already use the
+`name#class/superfamily~LTRlen:<N>` convention, so PrinTE uses them as-is (skips library processing):
+
+```bash
+bash PrinTE/PrinTE.sh ... --clean_lib mygenome_depth0_ltr.LTRs.alns.perfect_5p.fa
+```
+
+**Why this matters biologically:** the simulation now inserts the *actual* LTR-RTs of your species
+ (their real sequences, length distribution, and superfamily mix) so the simulated TE landscape,
+and the genome-size trajectory it drives, reflect your genome's own elements rather than a generic
+library. (`--make-perfect-ltr-rt` **requires** a mode; a bare `--make-perfect-ltr-rt` errors.
+Kmer2LTR only appends `~LTRlen:N`; the `#class/superfamily` comes from synLTR's headers, so the
+chain works because synLTR emits RepeatMasker-style names.)
 
 ---
 
@@ -444,13 +514,12 @@ so the run spans your branch (a 5.4-My branch at 100-yr generations is `--ge 540
 ### Step 2 — re-annotate the simulated genomes
 
 The grid runs skip post-processing for speed, so the simulated genomes are **not** dated
-automatically. Annotate each one's intact LTR-RTs with the **same LTR pipeline you benchmarked**
-above, producing, in every simulation directory, a TSV whose **column 1 is a `chrom:start-end`
-interval and column 7 is the LTR-RT p-distance (the age proxy)** — this is exactly what the
-scorer reads. `grid/discover_ltr.sh` is a template that loops over every simulation directory and
-runs an LTR finder + Kmer2LTR dating (edit its paths to point at your finder and target FASTA
-name; it expects a protein database such as the bundled `PrinTE/data/TAIR10.pep.fa.gz` to classify
-elements). Build the **reference** table the same way on your real genome.
+automatically. Annotate each one's LTR-RTs with the **same tool you used to benchmark**
+([synLTR](#annotating-ltr-rts-and-building-a-species-specific-library)), producing in every
+simulation directory a `<genome>_r1_ltr.tsv` table (**column 1 = `chrom:start-end`, column 7 =
+p-distance** — exactly what the scorer reads). `grid/discover_ltr.sh` is a template that loops
+over every simulation directory and runs the annotation; edit its target FASTA name and paths to
+match your run. Build the **reference** table the same way on your real genome.
 
 ### Step 3 — score and visualize
 
@@ -495,11 +564,12 @@ burn-in, and evolve it forward until the simulation resembles the **real** prese
 Because the real genome is ground truth, you can score the fit and ask whether TE activity
 **increased or decreased** along the branch.
 
-You should already have a **time-scaled Newick tree** (`tree.nwk`) and, **for each tip**, two
-files: the genome FASTA and a table of its dated intact LTR-RTs. (Distance trees can be
-time-scaled with a tool such as [PATHd8](https://www2.math.su.se/PATHd8/); the LTR-RT table is
-your LTR pipeline's de-duplicated dating output — the same one used in scoring above — a TSV
-whose column 7 is the per-element p-distance/age.)
+You should already have a **time-scaled Newick tree** (`tree.nwk`) and **each tip's genome
+FASTA**. Run [synLTR](#annotating-ltr-rts-and-building-a-species-specific-library) on each tip's
+genome with `--out_prefix <tip>` to produce, per tip, an LTR-RT table `<tip>_r1_ltr.tsv` (column
+7 = p-distance/age) and an LTR-RT FASTA `<tip>_depth0_ltr.fa`. So each tip has three files (
+genome, table, LTR-RT FASTA) which drive the three reconstructions below. (Distance trees can be
+time-scaled with a tool such as [PATHd8](https://www2.math.su.se/PATHd8/).)
 
 ### Step 1 — reconstruct the ancestor
 
@@ -515,15 +585,15 @@ Two R scripts run `phytools::fastAnc` over the tree. **File-naming/placement mat
 Rscript PrinTE/grid/ancestral_reconstruction_gs.R \
     --newick tree.nwk --suffix .fa --out ancestral_genome_size --label_nodes
 
-# (b) Ancestral intact-LTR-RT size  -> needs one FASTA of ONLY each tip's intact LTR-RTs,
-#     named <tip>_ltr.lib.fa, next to tree.nwk (the script sums their bp).
+# (b) Ancestral LTR-RT size  -> needs each tip's LTR-RT FASTA (synLTR's <tip>_depth0_ltr.fa)
+#     next to tree.nwk; the script sums their bp.
 Rscript PrinTE/grid/ancestral_reconstruction_gs.R \
-    --newick tree.nwk --suffix _ltr.lib.fa --out ancestral_ltrrt_size --label_nodes
+    --newick tree.nwk --suffix _depth0_ltr.fa --out ancestral_ltrrt_size --label_nodes
 
-# (c) Ancestral LTR-RT AGE distribution  -> run from the dir holding each tip's LTR table,
-#     named <tip>_ltr_kmer2ltr_dedup (TAB-separated, >=7 cols, col 7 = p-distance/age, 0-1).
+# (c) Ancestral LTR-RT AGE distribution  -> run from the dir holding each tip's LTR table
+#     (synLTR's <tip>_r1_ltr.tsv; TAB-separated, col 7 = p-distance/age in 0-1).
 Rscript PrinTE/grid/ancestral_reconstruction_ltr_age.R \
-    --newick tree.nwk --suffix _ltr_kmer2ltr_dedup
+    --newick tree.nwk --suffix _r1_ltr.tsv
 ```
 
 (`gs.R` needs `samtools` on PATH and builds `<file>.fai` automatically. `ltr_age.R` calls
@@ -573,7 +643,9 @@ bash PrinTE/PrinTE.sh --burnin_only \
 `-sz`, `-itp`, and `-mb` come from Step 2. `-ftp` is the **fragmented**-TE percent — it is *not*
 reconstructed above (the gs.R/ltr_age.R steps cover intact LTR-RTs only), so estimate it from
 your clade's present-day fragment + solo load, or use it as filler/deletion substrate. `-cl
-lib_clean.fa` is the cleaned TE library (see [grid search](#grid-search-finding-parameters-without-bias)).
+lib_clean.fa` is the cleaned TE library; for a more realistic ancestor, build a
+**species-specific** LTR-RT library from a close present-day relative
+(see [Annotating LTR-RTs](#annotating-ltr-rts-and-building-a-species-specific-library)) and pass it here.
 
 ### Step 4 — benchmark, evolve, and fit
 
@@ -599,7 +671,7 @@ distribution) over a short horizon (~1 My)?
 **1. Build a digital replica** of your genome by running
 [TEgenomeSimulator](https://github.com/Plant-Food-Research-Open/TEgenomeSimulator) yourself. It
 emits a genome FASTA (`TEgenomeSimulator.fa`) and a TE GFF3 (`TEgenomeSimulator.gff`). Unlike
-Track 1, TEgenomeSimulator — not PrinTE — creates the burn-in here.
+Track 1, TEgenomeSimulator, not PrinTE, creates the burn-in here.
 
 **2. Convert it to PrinTE format** and (optionally) confirm it loads:
 
@@ -636,7 +708,9 @@ regimes maintain the genome* and which let it expand or erode, not a single hist
 
 PrinTE ships with a curated maize/rice/Arabidopsis library
 (`data/maize_rice_arab_curated_TE.lib.gz`) and an LTR-RT exemplar database (`data/ltr-db.fa.gz`).
-To build your own, a few helpers are provided:
+For LTR-RT studies, the best library is usually a **species-specific** one built from your own
+genome — see [Annotating LTR-RTs](#annotating-ltr-rts-and-building-a-species-specific-library).
+To assemble a library by hand instead, a few helpers are provided:
 
 - **`util/TE_lib_stitcher.py`** — reassemble split `LTR` + `Internal` library entries into
   intact LTR-RTs.
