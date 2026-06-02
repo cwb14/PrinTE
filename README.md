@@ -389,8 +389,7 @@ Two LTR-RT operations recur in PrinTE: **annotating** LTR-RTs in a genome (to be
 calls and to score simulations), and **building a species-specific LTR-RT library** so that
 simulated insertions resemble the real elements of your genome. The companion tools
 [synLTR](https://github.com/cwb14/synLTR) (annotation) and
-[Kmer2LTR](https://github.com/cwb14/Kmer2LTR) (library building + LTR dating), both by the PrinTE
-author, do exactly this and benchmark well for PrinTE's purposes.
+[Kmer2LTR](https://github.com/cwb14/Kmer2LTR) (library building + LTR dating) do this and benchmark well for PrinTE's purposes.
 
 ```bash
 git clone https://github.com/cwb14/synLTR.git
