@@ -160,85 +160,138 @@ decompress_if_gz() {
 }
 
 # --- Help message function ---
+print_usage() {
+  cat <<EOF
+PrinTE - a forward, per-generation simulator of transposable-element (TE) genome evolution.
+
+Usage:
+  $(basename "$0") [options]
+
+Common workflows:
+  # Build a burn-in genome only (synthetic genome + TEs), then stop:
+  $(basename "$0") --burnin_only -sz 100Mb -cn 1 -P 4 -itp 10
+
+  # Forward-evolve for 30,000 generations, sampling every 10,000:
+  $(basename "$0") -sz 135Mb -cn 5 -P 25 -itp 21 -ir 1e-6 -dr 4e-6 -ge 30000 -st 10000 -t 20
+
+  # Start from your own genome instead of a burn-in:
+  $(basename "$0") -f genome.fasta -b genome.bed -ge 20000 -st 10000
+
+  # Resume / extend a finished run (optionally with new rates):
+  $(basename "$0") -ge 50000 -st 10000 -F 7e-11,1e-11 --continue
+
+Most-used options:
+  -sz -cn -P -itp     burn-in genome size / chromosomes / % CDS / % intact-TE
+  -ge -st             total generations / generations per step   (required to evolve)
+  -ir -dr   |   -F    variable per-TE rates   OR   fixed per-bp rates (insertion,deletion)
+  -m -TsTv -sr -k     DNA mutation rate / Ts:Tv / solo-LTR % / length-bias
+  -f -b               start from an existing FASTA + BED (skip burn-in)
+  --burnin_only       stop after the burn-in genome
+  --continue          resume from the last completed generation
+  -t                  threads
+
+Run '$(basename "$0") -h' for the full option list.
+EOF
+}
+
 print_help() {
   cat <<EOF
-Usage: $(basename "$0") [options]
+PrinTE - a forward, per-generation simulator of transposable-element (TE) genome evolution.
+It builds (or imports) a starting genome, then repeatedly mutates the DNA, inserts new TEs,
+and excises old ones, writing a genome FASTA + annotation BED + TE library per sampled generation.
 
-Options:
-############### REQUIRED (for full pipeline) ###############
-  -ge, --generation_end      Number of generations to simulate (REQUIRED unless --burnin_only is used; must be an exact multiple of step)
-  -st, --step                Generation step size (number of generations per loop; REQUIRED unless --burnin_only is used)
+Usage:
+  $(basename "$0") [options]
 
-############### BURN-IN ###############
-  -c,  --cds                 Path to CDS file (default: ${TOOL_DIR}/data/TAIR10.cds.fa)
-  -N,  --cds_num             Number of CDS sequences to insert. (Mutually exclusive with --cds_percent)
-  -P,  --cds_percent         Percent of the genome that should be CDS. (Mutually exclusive with --cds_num)
-  -itn, --intact_TE_num      Number of INTACT TE insertions in burn-in (mutually exclusive with --intact_TE_percent)
-  -itp, --intact_TE_percent  Target % genome as INTACT TE bp in burn-in (default: 20; mutually exclusive with --intact_TE_num)
-  -ftn, --frag_TE_num        Number of FRAGMENTED TE insertions in burn-in (mutually exclusive with --frag_TE_percent)
-  -ftp, --frag_TE_percent    Target % genome as FRAGMENTED TE bp in burn-in (default: 0; mutually exclusive with --frag_TE_num)
-  -cn, --chr_number          Number of chromosomes (default: 4)
-  -sz, --size                Genome size in kb, Mb, or Gb (default: 400Mb)
-  -tk, --TE_mut_k            Slope of exponential decay for TE mutation (default: 10)
-  -tmx, --TE_mut_Mmax         X-limit for exponential decay function (default: 20)
-  -mb, --mutation_bins       Comma-separated bins for TE mutation distribution (overrides -tk/-tmx; disables decay PDF inside inserter)
-  -bo, --burnin_only         Run burn-in phase only and then exit.
-  -i,  --TE_lib              TE library file (default: ${TOOL_DIR}/data/maize_rice_arab_curated_TE.lib.gz)
-  -cl, --clean_lib           Pre-built cleaned TE library (skips library processing; alternative to -i)
+Pipeline:  TE-library prep -> [Phase 1: burn-in genome] -> [Phase 2: generation loop] -> post-processing.
+Phase 1 is skipped when you supply --fasta/--bed or --continue.
 
-########## FIXED TE INDEL RATE ##########
-  -F,  --fix                 Fixed insertion and deletion numbers, comma-separated. Format: insertion,deletion (e.g., 1e-9,1e-9)
-  -dg, --disable_genes       Disable insertion into genes (only effective if -F/--fix is provided)
+----------------------- EVOLUTION (Phase 2; required unless --burnin_only) -----------------------
+  -ge,  --generation_end N     Total generations to simulate (must be a multiple of --step).
+  -st,  --step N               Generations per loop. e.g. -ge 30000 -st 10000 samples 10k,20k,30k.
 
-######### VARIABLE TE INDEL RATE #########
-  -ir, --insert_rate         TE insertion rate (default: 1e-8)
-  -dr, --delete_rate         TE deletion rate (default: 1e-7)
-  -br, --birth_rate          TE birth rate (default: 1e-3)
-  -sc, --sigma               Selection coefficient for gene insertions (default: 1.0)
-  -sf, --sel_coeff           Selection coefficient for TE excision (variable-rate only; default: 0)
-                             0 = neutral; 0.1 = 2× bias; 1 = 11× bias.
-  -cbi, --chromatin_bias_insert   Chromatin bias for TE insertion (default: 1.0)
-  -cbd, --chromatin_bias_delete   Chromatin bias for TE deletion (default: 1.0)
-  -cb,  --chromatin_buffer         Interval upstream/downstream used for chromatin bias (default: 10000)
-  -pb, --promoter-boundary   bp upstream/downstream of genes to treat TE insertions as function-disrupting (rate mode only; default: 0)
+-------------------------------- BURN-IN GENOME (Phase 1) ----------------------------------------
+  -sz,  --size SIZE            Genome size with a kb/Mb/Gb suffix (default: 400Mb).
+  -cn,  --chr_number N         Number of chromosomes (default: 4). Work is parallel per chromosome.
+  -c,   --cds FILE             CDS FASTA used as 'genes' (default: data/TAIR10.cds.fa, 19,621 seqs).
+  -P,   --cds_percent FLOAT    Target % of genome that is CDS        (mutually exclusive with -N).
+  -N,   --cds_num N            Number of CDS to insert               (mutually exclusive with -P).
+  -itp, --intact_TE_percent F  Target % genome as INTACT TE bp       (default: 20; excl. -itn).
+  -itn, --intact_TE_num N      Number of INTACT TE insertions        (excl. -itp).
+  -ftp, --frag_TE_percent F    Target % genome as FRAGMENTED TE bp   (default: 0; excl. -ftn).
+  -ftn, --frag_TE_num N        Number of FRAGMENTED TE insertions    (excl. -ftp).
+  -i,   --TE_lib FILE          TE library FASTA, RepeatMasker headers (default: data/maize_rice_arab_curated_TE.lib.gz).
+  -cl,  --clean_lib FILE       Pre-cleaned TE library; skips library processing (alternative to -i).
+  -r,   --TE_ratio FILE        Per-superfamily insertion weights (default: ratios.tsv).
+  -tk,  --TE_mut_k FLOAT       Burn-in TE age-decay slope (default: 10; larger -> TEs look younger).
+  -tmx, --TE_mut_Mmax FLOAT    Max burn-in TE divergence % (default: 20; use 0 to disable TE aging).
+  -mb,  --mutation_bins FILE   Explicit TE age distribution (3-col bins); overrides -tk/-tmx.
+  -bo,  --burnin_only          Build the burn-in genome and exit (no Phase 2; -ge/-st not needed).
 
-########## GENERAL USE ##########
-  -m,  --mutation_rate       DNA Mutation rate (default: 1.3e-8)
-  -mxgs, --max_size           Maximum genome size bound (e.g., 100M, 1G). Used in exponential
-                               regression early termination: after 10%+ of iterations, the projected
-                               terminal size (with empirically calibrated 95% PI) must fall below
-                               this value or simulation stops early
-  -mngs, --min_size           Minimum genome size bound (e.g., 700M, 1G). Used in exponential
-                               regression early termination: after 10%+ of iterations, the projected
-                               terminal size (with empirically calibrated 95% PI) must fall above
-                               this value or simulation stops early
-  -s,  --seed                Random seed (default: 42)
-  -r,  --TE_ratio            TE ratio file (default: ${TOOL_DIR}/ratios.tsv)
-  -t,  --threads             Number of threads (default: 4)
-  -sr, --solo_rate           Percent chance to convert an intact TE to soloLTR (default: 95)
-  -k,  --k                   TE length decay slope for TE excision (default: 10)
-  -b,  --bed                 Input BED file for starting generation (skip burn-in; requires --fasta)
-  -f,  --fasta               Input FASTA file for starting generation (skip burn-in; requires --bed)
-  -x,  --continue            Resume simulation from the last completed generation.
-  -kt, --keep_temps          Keep temporary files (default: remove them after each loop)
-  -md, --model               DNA mutation model for LTR dating (choose from: raw, K2P, JC69; default: K2P)
-  -TsTv, --TsTv              Transition/transversion ratio (default: 1.0)
-  -ex, --ex_LTR              Exclude LTR sequences without a domain hit (passed as '-exclude_no_hits' to LTR_fasta_header_appender.py)
-  -np, --no_postproc         Skip all post-processing steps; exit after generating the final gen<N>_final.bed and gen<N>_final.fasta files
-  -h,  --help                Display this help message and exit
+------------------------------ TE RATES (choose Variable OR Fixed) -------------------------------
+  Variable -- rates scale with the evolving TE content; insertion mutations accrue over time:
+  -ir,  --insert_rate RATE     Insertions per intact TE per generation (default: 1e-8).
+  -dr,  --delete_rate RATE     Deletions  per intact TE per generation (default: 1e-7).
+  -br,  --birth_rate RATE      Rate of reintroducing TEs from the original library (default: 1e-3).
+  Fixed -- constant per-base rates:
+  -F,   --fix INS,DEL          Fixed insertion,deletion per bp per generation, e.g. -F 5e-9,1e-8.
+  -dg,  --disable_genes        Forbid TE insertion into genes (Fixed mode only).
 
-Example:
-  $(basename "$0") -st 1000 -ge 3000
+------------------ SELECTION, CHROMATIN & SOLO-LTR DYNAMICS (mostly Variable mode) ---------------
+  -sc,  --sigma FLOAT          Spread of per-gene selective constraint (log-normal; default: 1.0).
+  -sf,  --sel_coeff FLOAT      Bias deletion toward more deleterious insertions (default: 0 = off).
+  -cbi, --chromatin_bias_insert F  Euchromatin (near-gene) insertion bias (default: 1.0).
+  -cbd, --chromatin_bias_delete F  Euchromatin (near-gene) deletion  bias (default: 1.0).
+  -cb,  --chromatin_buffer N       bp around genes treated as euchromatin (default: 10000).
+  -pb,  --promoter-boundary N      bp up/downstream of genes where a TE overlap disrupts a gene (default: 0).
+  -sr,  --solo_rate FLOAT      % chance an excised intact LTR-RT leaves a solo-LTR (default: 95).
+  -k,   --k FLOAT              Length-bias slope for deletion; longer TEs lost faster (default: 10; 0 = off).
+
+----------------------------------- INPUT / RESUME ----------------------------------------------
+  -f,   --fasta FILE           Start-genome FASTA (skip burn-in; requires --bed).
+  -b,   --bed FILE             Start-annotation BED (skip burn-in; requires --fasta).
+  -x,   --continue             Resume from the last completed generation in the working directory.
+
+----------------------------------- DNA MUTATION ------------------------------------------------
+  -m,   --mutation_rate RATE   Substitution rate per bp per generation (default: 1.3e-8).
+  -TsTv,--TsTv FLOAT           Transition/transversion ratio (default: 1.0).
+
+------------------------- GENOME-SIZE BOUNDS (optional early stop, Phase 2) ----------------------
+  -mxgs,--max_size SIZE        Stop early once the projected size is confidently ABOVE SIZE (e.g. 1G).
+  -mngs,--min_size SIZE        Stop early once the projected size is confidently BELOW SIZE (e.g. 100M).
+
+------------------------------- OUTPUT / POST-PROCESSING -----------------------------------------
+  -md,  --model {raw,K2P,JC69} Substitution model for LTR-RT dating (default: K2P).
+  -pgs, --pergen_select N      How many generations get per-gen LTR-RT dating (default: 2 = first + last).
+  -ex,  --ex_LTR               Drop library LTR-RTs that lack a detectable LTR.
+  -np,  --no_postproc          Stop after the final genome; skip all plots and reports.
+  -kt,  --keep_temps           Keep per-generation intermediate files.
+
+--------------------------------------- GENERAL -------------------------------------------------
+  -s,   --seed N               Random seed (default: 42).
+  -t,   --threads N            Threads (default: 4).
+  -h,   --help                 Show this help and exit.
+
+Examples:
+  # Burn-in only: 100 Mb, 1 chromosome, 4% CDS, 10% intact TE
+  $(basename "$0") --burnin_only -sz 100Mb -cn 1 -P 4 -itp 10
+
+  # Variable-rate forward simulation
+  $(basename "$0") -sz 135Mb -cn 5 -P 25 -itp 21 -ir 1.1e-6 -dr 4e-6 -br 1e-7 -m 7e-9 -ge 40000 -st 10000 -t 20
+
+  # Fixed-rate run, then extend it with new rates via --continue
+  $(basename "$0") -sz 113Mb -cn 20 -P 20 -itn 6000 -F 3e-11,5e-11 -ge 300000 -st 100000 -t 10
+  $(basename "$0") -ge 400000 -st 100000 -F 7e-11,1e-11 --continue
 EOF
 }
 
 #—-----------------------------------------
-# if no args or any of -h, --h, -help, --help, print help and exit
-if [[ $# -eq 0 \
-   || "$1" == "-h"  \
-   || "$1" == "--h" \
-   || "$1" == "-help" \
-   || "$1" == "--help" ]]; then
+# No arguments -> concise usage.  -h/--help (any form) -> full help.
+if [[ $# -eq 0 ]]; then
+  print_usage
+  exit 0
+fi
+if [[ "$1" == "-h" || "$1" == "--h" || "$1" == "-help" || "$1" == "--help" ]]; then
   print_help
   exit 0
 fi
@@ -409,6 +462,9 @@ while [[ $# -gt 0 ]]; do
       shift; shift;;
     -pb|--promoter-boundary)
       promoter_boundary="$2"
+      shift; shift;;
+    -md|--model)
+      model="$2"
       shift; shift;;
     -h|--help)
       print_help
