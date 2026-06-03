@@ -23,9 +23,9 @@ PrinTE is four tools in one:
    selection against gene disruption, and chromatin bias.
 2. **A grid search** that finds the evolutionary parameters which best reproduce a real
    genome - in an unbiased, reproducible way - rather than hand-tuning by eye.
-3. **A benchmarking tool**: because PrinTE knows exactly where every TE is, you can run your
+3. **A benchmarking tool** because PrinTE knows exactly where every TE is, you can run your
    TE-annotation pipeline on a simulated genome and measure how well it recovers the truth.
-4. **Utilities for two directions of time**: reconstructing a clade's *past* and evolving it
+4. **Utilities for two directions of time** reconstructing a clade's *past* and evolving it
    to the present, or projecting a present-day genome into the *future*.
 
 > **PrinTE works from your TE annotations, so its conclusions are only as good as those
@@ -128,7 +128,7 @@ A PrinTE run has two phases:
   library*, then write `gen<N>_final.{fasta,bed,lib}`.
 
 PrinTE models both **copy-and-paste** (Type 1) and **cut-and-paste** (Type 2) transposition.
-Families flagged `cutpaste` in the `transposition` column of `ratios.tsv` are conserved: they
+Families flagged `cutpaste` in the `transposition` column of `ratios.tsv` are conserved. Ie, they
 are excluded from replicative amplification, and when an *intact* element is excised it
 relocates (an element of the same superfamily is re-inserted the next generation, keeping copy
 number constant); a *fragmented* copy (`_FRAG`, `_SOLO`, or one cut by a nested insertion) is
@@ -342,7 +342,7 @@ library - supply `-i your_TE.lib` (RepeatMasker headers) so they match your orga
 ## Benchmark your TE annotations first
 
 PrinTE simulates from TE annotations, so **the forward framework assumes high-quality
-annotations**. Conveniently, PrinTE is also the tool to *test* that assumption: it knows the
+annotations**. Conveniently, PrinTE is also the tool to *test* that assumption because it knows the
 exact location of every TE it places, so a simulated genome is a ground-truth benchmark for any
 annotation pipeline. **Do this once before either track.**
 
