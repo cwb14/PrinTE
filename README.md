@@ -10,7 +10,7 @@ or a cluster.
                  Present
 Ancestor        ╭─▶▬▶─▶▬▶─▶▬◀─▶─▶▬▶─▶▬▶─▶▬▶  Expansion
 ─▶▬▶──▶▬◀──▶▬▶──┤ ⟶ forward time
-                ╰─▶▬▶──▶▬▶───────            Contraction
+                ╰─▶▬▶──▶▬▶──                 Contraction
 
 ▶▬▶ LTR-RT · ▶▬◀ DNA transposon (TIR) · ▶ solo-LTR · ── DNA
 ```
