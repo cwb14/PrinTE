@@ -187,11 +187,24 @@ def parse_args():
                    help="Slurm partition/queue (optional).")
     p.add_argument("--slurm-account", default=None,
                    help="Slurm account (optional).")
-    p.add_argument("--slurm-cpus", type=int, default=4,
-                   help="cpus-per-task (default: 4). NOTE: this should usually match --threads for PrinTE "
-                        "only if PrinTE is truly thread-scaled on-node; otherwise keep smaller.")
-    p.add_argument("--slurm-mem", default="8G",
-                   help="Memory per task, e.g. 8G, 32G (default: 8G).")
+    p.add_argument("--slurm-qos", default=None,
+        help="Override QOS. Default: probed/omitted.")
+    p.add_argument("--slurm-pack", choices=["auto", "on", "off"], default="auto",
+        help="Pack combos per exclusive whole node. auto (default) / on / off.")
+    p.add_argument("--slurm-combos-per-node", type=int, default=None,
+        help="Override packing factor K (combos per array element).")
+    p.add_argument("--slurm-max-concurrent", type=int, default=None,
+        help="Override array %%K throttle.")
+    p.add_argument("--slurm-use-logical-cpus", action="store_true",
+        help="Pack to logical CPUs (hyperthreads) instead of physical cores.")
+    p.add_argument("--slurm-no-probe", action="store_true",
+        help="Skip cluster introspection; conservative portable script.")
+    p.add_argument("--slurm-probe-timeout", type=int, default=8,
+        help="Per-command introspection timeout (s). Default: 8.")
+    p.add_argument("--slurm-cpus", type=int, default=None,
+        help="Override cpus-per-task. Default: auto = --threads, clamped to node.")
+    p.add_argument("--slurm-mem", default=None,
+        help="Override memory (e.g. 16G). Default: auto-sized to node.")
     p.add_argument("--slurm-time", default="24:00:00",
                    help="Walltime, e.g. 02:00:00, 1-00:00:00 (default: 24:00:00).")
     p.add_argument("--slurm-outdir", default="slurm_logs",

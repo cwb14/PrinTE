@@ -635,26 +635,52 @@ def add_printe_args(parser):
 
 
 def add_slurm_args(parser):
-    """Add scheduler / SLURM job submission arguments."""
+    """Add scheduler / SLURM job submission arguments.
+
+    Defaults auto-detect cluster resources at generation time; any explicit
+    --slurm-* value overrides the auto-pick. Probing degrades gracefully.
+    """
     parser.add_argument(
-        "--scheduler",
-        choices=["local", "slurm"],
-        default="local",
-        help="local: emit submit_array.sh that launches all combos in parallel via "
-             "nohup, splitting --threads across them. slurm: emit submit_array.sbatch "
-             "(an array job; each task gets the full --threads value). Default: local.",
+        "--scheduler", choices=["local", "slurm"], default="local",
+        help="local: emit submit_array.sh launching all combos in parallel via "
+             "nohup, splitting --threads across them. slurm: emit "
+             "submit_array.sbatch (a cluster-aware array job). Default: local.",
     )
     parser.add_argument("--slurm-dir", default="slurm_grid")
     parser.add_argument("--slurm-submit", action="store_true",
-        help="Auto-launch after writing the script: 'sbatch <path>' for slurm; "
+        help="Auto-launch after writing: 'sbatch <path>' for slurm; "
              "'nohup bash <path> > submit.log 2>&1 &' for local.")
     parser.add_argument("--slurm-job-name", default="printe_grid")
-    parser.add_argument("--slurm-partition", default=None)
-    parser.add_argument("--slurm-account", default=None)
-    parser.add_argument("--slurm-cpus", type=int, default=4)
-    parser.add_argument("--slurm-mem", default="8G")
-    parser.add_argument("--slurm-time", default="24:00:00")
     parser.add_argument("--slurm-outdir", default="slurm_logs")
+
+    # Overrides (None => auto-detect). Explicit value always wins.
+    parser.add_argument("--slurm-partition", default=None,
+        help="Override partition. Default: cluster default partition (probed).")
+    parser.add_argument("--slurm-account", default=None,
+        help="Override account. Default: probed/omitted.")
+    parser.add_argument("--slurm-qos", default=None,
+        help="Override QOS. Default: probed/omitted.")
+    parser.add_argument("--slurm-cpus", type=int, default=None,
+        help="Override cpus-per-task. Default: auto = --threads, clamped to node.")
+    parser.add_argument("--slurm-mem", default=None,
+        help="Override memory (e.g. 16G). Default: auto-sized to node.")
+    parser.add_argument("--slurm-time", default="24:00:00",
+        help="Requested walltime; capped to partition MaxTime if known.")
+
+    # Packing / array behavior
+    parser.add_argument("--slurm-pack", choices=["auto", "on", "off"], default="auto",
+        help="Pack multiple combos per exclusive whole node. auto: pack only on "
+             "exclusive partitions (default). on: force. off: 1 combo per element.")
+    parser.add_argument("--slurm-combos-per-node", type=int, default=None,
+        help="Override packing factor K (combos per array element).")
+    parser.add_argument("--slurm-max-concurrent", type=int, default=None,
+        help="Override array %%K throttle (max concurrently running elements).")
+    parser.add_argument("--slurm-use-logical-cpus", action="store_true",
+        help="Pack to logical CPUs (hyperthreads) instead of physical cores.")
+    parser.add_argument("--slurm-no-probe", action="store_true",
+        help="Skip cluster introspection; emit a conservative portable script.")
+    parser.add_argument("--slurm-probe-timeout", type=int, default=8,
+        help="Per-command timeout (s) for cluster introspection. Default: 8.")
 
 
 def add_param_range_args(parser):
@@ -818,7 +844,9 @@ def cmd_init(args):
          "tstv", "threads", "bed", "fasta", "te_lib", "clean_lib", "ratios"]}
     slurm_args_dict = {k: getattr(args, k) for k in
         ["slurm_dir", "slurm_job_name", "slurm_partition", "slurm_account",
-         "slurm_cpus", "slurm_mem", "slurm_time", "slurm_outdir"]}
+         "slurm_qos", "slurm_cpus", "slurm_mem", "slurm_time", "slurm_outdir",
+         "slurm_pack", "slurm_combos_per_node", "slurm_max_concurrent",
+         "slurm_use_logical_cpus", "slurm_no_probe", "slurm_probe_timeout"]}
     slurm_args_dict["scheduler"] = args.scheduler
     param_ranges = {
         "ins_start": args.ins_start, "ins_end": args.ins_end,

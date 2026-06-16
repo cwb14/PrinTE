@@ -762,6 +762,25 @@ echo "Seed list for Phase 2 iterations: ${seed_list[@]}" | tee -a "$LOG"
 # Initialize prev_lib for first generation
 prev_lib="${clean_lib}"
 
+# Iteration-0 anchor: byte size of the starting genome, kept SEPARATE from the
+# genome_size_* arrays so the existing projection's calibration is untouched.
+# Used only as the "previous size" for the hard-breach direction check at step 1.
+breach_anchor=""
+if [[ -n "$max_size" || -n "$min_size" ]]; then
+  start_fa="burnin.fasta"
+  if [[ "$skip_burnin" -eq 1 && -n "$input_fasta" ]]; then
+    start_fa="$input_fasta"
+  fi
+  if [[ -f "$start_fa" ]]; then
+    if [[ "$OS" == "Darwin" ]]; then
+      breach_anchor=$(stat -f%z "$start_fa")
+    else
+      breach_anchor=$(stat -c%s "$start_fa")
+    fi
+    echo "Hard-breach anchor (iteration 0): ${breach_anchor} bytes from ${start_fa}" | tee -a "$LOG"
+  fi
+fi
+
 last_gen_done=0
 # Arrays to track genome sizes across iterations for exponential projection.
 # On resume, backfill from existing gen*_final.fasta files so projection has history.
@@ -783,6 +802,25 @@ if [[ "$cont_flag" -eq 1 && $start_iter -gt 1 ]]; then
     fi
   done
   echo "Backfilled ${#genome_size_iters[@]} data points for projection." | tee -a "$LOG"
+fi
+
+# --- Back-of-napkin estimate (observe-only) ---
+# Fixed mode (-F) + a size bound set => bounded-grid-search context. Predicts the
+# terminal genome size and cumulative event counts; writes napkin_estimate.tsv.
+if [[ -n "$fix" && ( -n "$max_size" || -n "$min_size" ) ]]; then
+  napkin_fa="burnin.fasta"; napkin_bed="burnin.bed"
+  if [[ "$skip_burnin" -eq 1 && -n "$input_fasta" && -n "$input_bed" ]]; then
+    napkin_fa="$input_fasta"; napkin_bed="$input_bed"
+  fi
+  if [[ -f "$napkin_fa" && -f "$napkin_bed" ]]; then
+    echo "=== Back-of-napkin genome-size estimate (observe-only) ===" | tee -a "$LOG"
+    python "${BIN_DIR}/estimate_genome_size.py" \
+      --fasta "$napkin_fa" --bed "$napkin_bed" \
+      --lib "$clean_lib" --ratios "$TE_ratio" \
+      --ins "$fix_in" --del "$fix_ex" --step "$step" --ge "$generation_end" \
+      --solo-rate "$solo_rate" --k "$k" --out "napkin_estimate.tsv" 2>&1 | tee -a "$LOG" || \
+      echo "WARNING: napkin estimate failed (non-fatal; observe-only)." | tee -a "$LOG"
+  fi
 fi
 
 for (( i=start_iter; i<=iterations; i++ )); do
@@ -948,6 +986,31 @@ for (( i=start_iter; i<=iterations; i++ )); do
       genome_size_iters+=("$i")
       genome_size_bytes+=("$actual_bytes")
 
+      # --- Hard-breach early stop (universal; fires before min_n) ---
+      # Stop iff the OBSERVED size has crossed a bound AND is still moving
+      # further out (2-point slope). Uses the iteration-0 anchor as the
+      # previous size on step 1. m=0 (no margin) by design.
+      if [[ -n "$breach_anchor" ]]; then
+        breach_iters="0,$(IFS=,; echo "${genome_size_iters[*]}")"
+        breach_sizes="${breach_anchor},$(IFS=,; echo "${genome_size_bytes[*]}")"
+        # Clamp the projected terminal to [mngs/4 .. mxgs*4]; fall back to wide
+        # defaults if a bound is unset.
+        clamp_lo=$(( ${min_bytes:-1000000} / 4 ))
+        clamp_hi=$(( ${max_bytes:-1000000000} * 4 ))
+        breach_out=$(python "${BIN_DIR}/project_terminal.py" \
+          --iters "$breach_iters" --sizes "$breach_sizes" \
+          --target "$iterations" \
+          ${max_size:+--mxgs "$max_bytes"} ${min_size:+--mngs "$min_bytes"} \
+          --clamp-lo "$clamp_lo" --clamp-hi "$clamp_hi")
+        breach_rc=$?
+        if [[ -n "$breach_out" ]]; then
+          echo "$breach_out" | tee -a "$LOG"
+        fi
+        if [[ $breach_rc -eq 10 || $breach_rc -eq 11 ]]; then
+          break
+        fi
+      fi
+
       # Minimum data: 10% of total iterations (empirically validated threshold)
       min_n=$(( iterations / 10 ))
       [[ $min_n -lt 3 ]] && min_n=3
@@ -1066,6 +1129,15 @@ if [[ ${#genome_size_iters[@]} -gt 0 ]]; then
     echo -e "${genome_size_iters[$ti]}\t${genome_size_bytes[$ti]}" >> "$trajectory_file"
   done
   echo "Genome size trajectory written to ${trajectory_file} (${#genome_size_iters[@]} data points)" | tee -a "$LOG"
+fi
+
+# --- Napkin check (observe-only): predicted vs actual per-step ---
+if [[ -f "napkin_estimate.tsv" && -f "genome_size_trajectory.tsv" ]]; then
+  echo "=== Napkin check (predicted vs actual) ===" | tee -a "$LOG"
+  python "${BIN_DIR}/estimate_genome_size.py" --check \
+    --estimate-in "napkin_estimate.tsv" --trajectory "genome_size_trajectory.tsv" \
+    --check-out "napkin_check.tsv" 2>&1 | tee -a "$LOG" || \
+    echo "WARNING: napkin check failed (non-fatal; observe-only)." | tee -a "$LOG"
 fi
 
 # The final generation's debt has no next generation to consume it (by

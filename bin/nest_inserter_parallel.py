@@ -33,6 +33,12 @@ import cutpaste_common as _cc
 # from the run directory, so the relative path is the cross-step contract.
 _DEBT_FILE = "cutpaste_debt.tsv"
 
+# Read-only TE library shared with worker processes via fork copy-on-write.
+# Set in main() before the Pool is created; workers READ these (never mutate),
+# so on Linux (fork) no private per-worker copy is pickled/made.
+_TE_BY_CATEGORY = None
+_TE_ALL_LIST = None
+
 # Pre-computed translation table for reverse complement (C-speed)
 _RC_TABLE = bytes.maketrans(b'ACGTacgtNn', b'TGCAtgcaNn')
 
@@ -273,6 +279,21 @@ def write_bed(features, out_bed):
                 f"{new_tag}\n"
             )
 
+def _write_fasta_record(fout, chrom, seq_list):
+    """Write one FASTA record to a binary file object, no str-decode copy.
+
+    `seq_list` is a bytearray/bytes written directly, so the bytes produced are
+    identical to '>{chrom}\\n{seq}\\n' written in text mode on POSIX. The header
+    is utf-8 encoded to match the original text-mode behavior on Linux (a
+    default-locale text file), so non-ASCII contig names don't crash.
+    """
+    fout.write(b">")
+    fout.write(chrom.encode("utf-8"))
+    fout.write(b"\n")
+    fout.write(seq_list)
+    fout.write(b"\n")
+
+
 def pick_random_TE(te_all_list):
     return random.choice(te_all_list)
 
@@ -474,8 +495,12 @@ def process_chromosome(args_tuple):
     This function is designed to be run in parallel for each chromosome.
     It applies insertion events sequentially on the chromosome's sequence and features.
     """
-    (chrom, seq_list, features, events, te_by_category, te_all_list,
+    (chrom, seq_list, features, events,
      bias_intervals, global_seed, disable_genes) = args_tuple
+    # TE library is shared read-only via module globals (fork COW), not passed
+    # per task -- avoids pickling a private copy into every worker.
+    te_by_category = _TE_BY_CATEGORY
+    te_all_list = _TE_ALL_LIST
     # Compute a deterministic seed using the global seed and the chromosome name.
     chrom_seed = (global_seed if global_seed is not None else 0) + sum(ord(c) for c in chrom)
     random.seed(chrom_seed)
@@ -622,12 +647,17 @@ def main():
 
     print("Converting genome to editable bytearrays ...")
     genome = convert_genome_to_dict_of_lists(genome_raw)
+    del genome_raw  # original strings no longer needed; lengths read from `genome`
 
     print("Reading TE FASTA ...")
     te_raw = read_fasta(args.TE)
 
     print("Building TE category index ...")
     te_by_category, te_all_list = build_te_index(te_raw)
+    # Expose the read-only TE library to worker processes via fork copy-on-write.
+    global _TE_BY_CATEGORY, _TE_ALL_LIST
+    _TE_BY_CATEGORY = te_by_category
+    _TE_ALL_LIST = te_all_list
 
     print("Reading BED file ...")
     features_all = parse_bed(args.bed)
@@ -810,7 +840,7 @@ def main():
     # Distribute insertion events among chromosomes.
     # Use the original chromosome lengths from genome_raw.
     chroms = list(genome.keys())
-    chrom_lengths = [len(genome_raw[c]) for c in chroms]
+    chrom_lengths = [len(genome[c]) for c in chroms]
     event_assignment = {chrom: [] for chrom in chroms}
     for event in insertion_events:
         chosen_chrom = random.choices(chroms, weights=chrom_lengths, k=1)[0]
@@ -836,37 +866,73 @@ def main():
         bias_intervals = None
         if use_bias and chrom in bias_intervals_all:
             bias_intervals = bias_intervals_all[chrom]
-        tasks.append((chrom, seq_list, feats, events, te_by_category, te_all_list,
+        tasks.append((chrom, seq_list, feats, events,
                        bias_intervals, args.seed, disable_genes_flag))
 
-    print(f"Processing {len(chroms)} chromosomes using up to {args.max_processes} processes...")
-    if args.max_processes > 1:
-        with multiprocessing.Pool(processes=args.max_processes) as pool:
-            results = pool.map(process_chromosome, tasks)
-    else:
-        results = list(map(process_chromosome, tasks))
+    # Stream output in sorted-chromosome order so peak memory never holds more
+    # than one finished chromosome at a time (plus the pool's in-flight results):
+    # write each chromosome's FASTA as it completes, then free it -- no whole-
+    # genome `results` list and no decoded `final_genome` copy. Sorting tasks by
+    # chromosome makes the ordered imap / serial map yield in the same sorted
+    # order the previous implementation wrote in, so the FASTA is byte-identical.
+    # Per-chromosome RNG is seeded from the chromosome name (process_chromosome),
+    # so submission order never changes results.
+    tasks.sort(key=lambda t: t[0])
 
-    # Merge the processed chromosomes.
-    final_genome = {}
     all_features = []
     total_nested = 0
     total_non_nested = 0
-    for chrom, seq_list, feats, nested_count, non_nested_count in results:
-        final_genome[chrom] = seq_list.decode('ascii')
-        all_features.extend(feats)
-        total_nested += nested_count
-        total_non_nested += non_nested_count
+    out_fasta = f"{args.output}.fasta"
+    out_bed = f"{args.output}.bed"
+    tmp_fasta = out_fasta + ".tmp"
+    tmp_bed = out_bed + ".tmp"
+    print(f"Processing {len(chroms)} chromosomes using up to {args.max_processes} processes...")
+    print(f"Writing updated FASTA to {out_fasta}")
+    # Write to temp files and os.replace() only after BOTH finish, so a mid-run
+    # worker failure can never leave a truncated .fasta/.bed that looks complete
+    # (the streaming write would otherwise expose a partial file to a resume).
+    with open(tmp_fasta, "wb") as fout:
+        if args.max_processes > 1:
+            # fork context: workers inherit the read-only TE-library globals via
+            # copy-on-write instead of pickling a private copy in every task.
+            # The COW-globals design REQUIRES fork (Linux); guard so a fork-less
+            # platform fails loudly instead of workers silently seeing None.
+            if "fork" not in multiprocessing.get_all_start_methods():
+                sys.exit("Error: parallel mode (-m >1) requires the 'fork' start "
+                         "method (Linux). Re-run with -m 1 on this platform.")
+            ctx = multiprocessing.get_context("fork")
+            # chunksize mirrors pool.map's auto-batching so a many-scaffold genome
+            # doesn't pay per-task IPC overhead (imap defaults to chunksize=1).
+            chunk = max(1, len(tasks) // (4 * args.max_processes))
+            with ctx.Pool(processes=args.max_processes) as pool:
+                for chrom, seq_list, feats, nested_count, non_nested_count in \
+                        pool.imap(process_chromosome, tasks, chunksize=chunk):
+                    _write_fasta_record(fout, chrom, seq_list)
+                    all_features.extend(feats)
+                    total_nested += nested_count
+                    total_non_nested += non_nested_count
+                    del seq_list
+        else:
+            # Serial: process_chromosome mutates the genome bytearray in place and
+            # returns that same object, still bound by genome[chrom] and tasks[i].
+            # Null both after writing so each finished chromosome is freed instead
+            # of the whole (possibly ballooned) genome staying resident to the end.
+            for i in range(len(tasks)):
+                chrom, seq_list, feats, nested_count, non_nested_count = \
+                    process_chromosome(tasks[i])
+                _write_fasta_record(fout, chrom, seq_list)
+                all_features.extend(feats)
+                total_nested += nested_count
+                total_non_nested += non_nested_count
+                seq_list = None
+                genome[chrom] = None
+                tasks[i] = None
 
     all_features.sort(key=lambda x: (x['chrom'], x['start']))
-    out_bed = f"{args.output}.bed"
     print(f"Writing updated BED to {out_bed}")
-    write_bed(all_features, out_bed)
-    out_fasta = f"{args.output}.fasta"
-    print(f"Writing updated FASTA to {out_fasta}")
-    with open(out_fasta, 'w') as f:
-        for chrom in sorted(final_genome.keys()):
-            f.write(f">{chrom}\n")
-            f.write(final_genome[chrom] + "\n")
+    write_bed(all_features, tmp_bed)
+    os.replace(tmp_fasta, out_fasta)
+    os.replace(tmp_bed, out_bed)
     total_complete = total_nested + total_non_nested
     print(f"Total TE insertions performed: {total_complete} (Nested: {total_nested}, Non-nested: {total_non_nested})")
     print("Done.")

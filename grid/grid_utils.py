@@ -174,55 +174,41 @@ def write_slurm_array_script(
     n_tasks: int,
     runner_script: Path,
 ):
+    """Probe the cluster, plan an efficient/portable sbatch array, and write it.
+
+    Thin orchestrator over slurm_introspect (discover) + slurm_sbatch (plan +
+    render). `n_tasks` is the number of combos; the emitted array size may be
+    smaller when combos are packed onto exclusive whole nodes. Signature kept
+    stable for both callers (guided_search.py and gridsearch.py).
     """
-    Writes an sbatch script that runs runner_script in --run-one mode.
-    """
+    from slurm_introspect import probe_cluster
+    from slurm_sbatch import (
+        build_request_from_args, plan_sbatch, render_sbatch_script,
+        render_chunk_submitter, summarize_plan,
+    )
+
+    sbatch_path = Path(sbatch_path)
     sbatch_path.parent.mkdir(parents=True, exist_ok=True)
 
-    job_name = args.slurm_job_name or "printe_grid"
-    array_spec = f"0-{n_tasks-1}"
+    req = build_request_from_args(args, n_combos=int(n_tasks))
+    profile = probe_cluster(req.partition, timeout_s=req.probe_timeout,
+                            do_probe=not req.no_probe)
+    plan = plan_sbatch(profile, req)
 
-    clean_lib = getattr(args, "clean_lib", None)
-    lib_arg = f'--clean-lib "{clean_lib}"' if clean_lib else f'--te-lib "{args.te_lib}"'
+    script = render_sbatch_script(plan, args, Path(runner_script), Path(combos_tsv))
+    sbatch_path.write_text(script)
 
-    contents = f"""#!/bin/bash
-#SBATCH --job-name={job_name}
-#SBATCH --array={array_spec}
-#SBATCH --cpus-per-task={args.slurm_cpus}
-#SBATCH --mem={args.slurm_mem}
-#SBATCH --time={args.slurm_time}
-#SBATCH --output={args.slurm_outdir}/%x_%A_%a.out
-#SBATCH --error={args.slurm_outdir}/%x_%A_%a.err
-{f"#SBATCH --partition={args.slurm_partition}" if args.slurm_partition else ""}
-{f"#SBATCH --account={args.slurm_account}" if args.slurm_account else ""}
+    submitter = render_chunk_submitter(plan, sbatch_path)
+    if submitter:
+        sub_path = sbatch_path.parent / "submit_chunks.sh"
+        sub_path.write_text(submitter)
+        sub_path.chmod(sub_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
-set -euo pipefail
-
-echo "[INFO] Host: $(hostname)"
-echo "[INFO] Date: $(date)"
-echo "[INFO] PWD:  $(pwd)"
-echo "[INFO] Task: ${{SLURM_ARRAY_TASK_ID}}"
-
-python "{runner_script}" \\
-  --run-one \\
-  --combo-file "{combos_tsv}" \\
-  --combo-index "${{SLURM_ARRAY_TASK_ID}}" \\
-  --printe-script "{args.printe_script}" \\
-  --ge "{args.ge}" \\
-  --st "{args.st}" \\
-  --mut "{args.mut}" \\
-  --mxgs "{args.mxgs}" \\
-  --mngs "{args.mngs}" \\
-  --tstv "{args.tstv}" \\
-  --threads "{args.threads}" \\
-  --bed "{args.bed}" \\
-  --fasta "{args.fasta}" \\
-  {lib_arg} \\
-  --ratios "{args.ratios}"
-"""
-
-    with sbatch_path.open("w") as f:
-        f.write(contents)
+    print(summarize_plan(plan))
+    if submitter:
+        print(f"[SLURM] Array exceeds MaxArraySize -> submit with: bash "
+              f"{sbatch_path.parent / 'submit_chunks.sh'}")
+    return sbatch_path
 
 
 def write_local_array_script(
