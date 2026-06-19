@@ -222,6 +222,15 @@ def apply_filter(df, col_name, min_val, max_val, current_mask):
     return current_mask
 
 
+# Display labels for printed reports (column names stay unchanged internally)
+DISPLAY_NAMES = {"solo_ratio": "solo_rate"}
+
+
+def disp(name):
+    """Return the human-facing label for a column name."""
+    return DISPLAY_NAMES.get(name, name)
+
+
 def print_report(df, metric_col, label, params_of_interest):
     """Print parameter ranges, optimal estimates, correlations, and multiple R²."""
     df_metric = df[metric_col]
@@ -230,10 +239,10 @@ def print_report(df, metric_col, label, params_of_interest):
     for param in params_of_interest:
         vals = df[param].dropna()
         if len(vals) == 0:
-            print(f"{param:20s}: no valid values")
+            print(f"{disp(param):20s}: no valid values")
         else:
             print(
-                f"{param:20s}: "
+                f"{disp(param):20s}: "
                 f"min = {vals.min():.6g}, "
                 f"max = {vals.max():.6g}, "
                 f"(n={len(vals)})"
@@ -258,7 +267,7 @@ def print_report(df, metric_col, label, params_of_interest):
         hi = df_top[param].max()
 
         print(
-            f"{param:20s}: "
+            f"{disp(param):20s}: "
             f"{best_val:.6g} "
             f"[95% CI: {lo:.6g}, {hi:.6g}] "
             f"(n={df_top.shape[0]})"
@@ -303,7 +312,7 @@ def print_report(df, metric_col, label, params_of_interest):
             rho, sp_pval = spearmanr(col_valid, metric_valid)
 
         print(
-            f"  {col:20s}:  "
+            f"  {disp(col):20s}:  "
             f"Pearson r = {r: .4f}  "
             f"[95% CI: {r_lo: .4f}, {r_hi: .4f}]  "
             f"R² = {r2: .4f} ({r2*100:5.1f}%)  "
@@ -335,14 +344,14 @@ def print_report(df, metric_col, label, params_of_interest):
         r2_adj = 1.0 - (1.0 - r2_multi) * (n_joint - 1) / (n_joint - p - 1)
 
         print(f"\n=== Multiple linear regression ({label}) ===")
-        print(f"  Predictors: {', '.join(params_of_interest)}")
+        print(f"  Predictors: {', '.join(disp(p) for p in params_of_interest)}")
         print(f"  R²          = {r2_multi:.4f} ({r2_multi*100:.1f}%)")
         print(f"  Adjusted R² = {r2_adj:.4f} ({r2_adj*100:.1f}%)")
         print(f"  (n={n_joint}, p={p})")
         print()
         print("  Coefficients:")
         for name, coef in zip(params_of_interest, model.coef_):
-            print(f"    {name:20s}: {coef: .6g}")
+            print(f"    {disp(name):20s}: {coef: .6g}")
         print(f"    {'(intercept)':20s}: {model.intercept_: .6g}")
     else:
         print(
@@ -423,7 +432,7 @@ def main():
         for param in params_of_interest:
             vals = df_filtered[param].dropna()
             if len(vals):
-                print(f"  {param:20s}: [{vals.min():.6g}, {vals.max():.6g}]")
+                print(f"  {disp(param):20s}: [{vals.min():.6g}, {vals.max():.6g}]")
         print("---------------------------------------------------")
 
     # --- Determine highlight threshold from FULL dataset (stable) ---
