@@ -280,10 +280,15 @@ def main():
         "--alphas",
         nargs=4,
         type=float,
-        metavar=("ALPHA_SAMPLE", "ALPHA_LENGTH", "ALPHA_GENOME", "ALPHA_DISTRIBUTION"),
+        # Order must match compare_genomes2.py's --alphas, which unpacks as
+        # (count, length, distribution, genome). The default 0 0 10 1 therefore
+        # weights the LTR distribution distance x10 and genome-size x1
+        # (distribution-dominant), which is intended.
+        metavar=("ALPHA_SAMPLE", "ALPHA_LENGTH", "ALPHA_DISTRIBUTION", "ALPHA_GENOME"),
         default=[0.0, 0.0, 10.0, 1.0],
-        help="Four alpha weights passed to compare_genomes2.py via --alphas "
-             "(default: 0 0 10 1).",
+        help="Four alpha weights forwarded to compare_genomes2.py via --alphas, "
+             "in the order (sample_count, cumulative_length, distribution, "
+             "genome_size). Default 0 0 10 1 = distribution x10, genome x1.",
     )
     parser.add_argument(
         "--threads",
@@ -418,8 +423,8 @@ def main():
                 imputed_d_distribution,
                 args.alphas[0], # alpha_sample_count
                 args.alphas[1], # alpha_cumulative_length
-                args.alphas[2], # alpha_genome_size
-                args.alphas[3], # alpha_distribution
+                args.alphas[3], # alpha_genome_size  (genome weight; alphas=(...,dist,genome))
+                args.alphas[2], # alpha_distribution (distribution weight)
                 imputed_composite,
             ])
 
@@ -433,7 +438,8 @@ def main():
             rows.append(params + [
                 0, 0, 0, 0, 0, 0, 0.0,
                 0.1, 0.1, 0.1, 0.1,
-                args.alphas[0], args.alphas[1], args.alphas[2], args.alphas[3],
+                # alpha cols in header order: sample, length, genome, distribution
+                args.alphas[0], args.alphas[1], args.alphas[3], args.alphas[2],
                 0.1,
             ])
 
