@@ -1,17 +1,27 @@
 #!/usr/bin/env python3
 """
-Make contour plots of Composite metric vs. pairs of parameters
-from a random grid search sample.
+Make contour plots of a Composite metric vs. pairs of parameters from an
+adaptive surrogate-guided search (guided_search.py / run_loop.py). Samples are
+NOT a uniform random grid: they cluster near the genome-size target and the
+insertion/deletion rates are drawn in log10 space, so the sensitivity report
+treats the data accordingly.
+
+Each panel interpolates the metric over the two plotted parameters (the other
+two vary freely across the points), so the smooth surface is an interpolation
+of a 4-D cloud onto 2-D rather than a true 2-parameter response surface — read
+it qualitatively. Imputed/failed runs (early-terminated sims, penalized to the
+worst score) ARE included in the surface so explored-but-failed regions render
+in the worst color; they are excluded from the stats and the highlighted points.
 
 Requires:
   - pandas
   - matplotlib
   - scipy
-  - scikit-learn  (for multiple R²)
+  - scikit-learn  (RandomForest sensitivity)
 
 Example usage:
-  python plot_sensitivity_contour.py \
-      --input params.tsv \
+  python contour_plot.py \
+      --input composite_matrix.tsv \
       --metric Composite \
       --output sensitivity_contours.pdf \
       --min_insertion_rate 0.2e-12 --max_insertion_rate 0.1e-11 \
@@ -27,8 +37,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from scipy.interpolate import griddata
-from scipy.stats import spearmanr
-from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.inspection import permutation_importance
+from sklearn.model_selection import KFold, cross_val_score
 
 
 def parse_args():
@@ -53,7 +64,15 @@ def parse_args():
     )
     parser.add_argument(
         "--grid_res", type=int, default=200,
-        help="Resolution of interpolation grid (default: 200). Higher = smoother but slower."
+        help="Resolution of interpolation grid (default: 200). Higher = finer raster."
+    )
+    parser.add_argument(
+        "--cmap", type=str, default="viridis_r",
+        help=(
+            "Matplotlib colormap for the metric surface (default: 'viridis_r', so "
+            "the worst/most-penalized scores are deep purple and the best are "
+            "yellow). Use 'viridis' to flip (worst = yellow)."
+        )
     )
 
     # --- Parameter range filters ---
@@ -125,32 +144,15 @@ def parse_args():
         )
     )
     parser.add_argument(
-        "--highlight_color", type=str, default="#FFD700",
-        help=(
-            "Color for the highlight boundary and fill "
-            "(default: '#FFD700' gold). Use any matplotlib color string."
-        )
-    )
-    parser.add_argument(
-        "--highlight_linewidth", type=float, default=2.0,
-        help="Line width for highlight boundary (default: 2.0)."
-    )
-    parser.add_argument(
         "--highlight_linestyle", type=str, default="--",
-        help="Line style for highlight boundary (default: '--' dashed)."
+        help="Line style for the colorbar threshold tick (default: '--' dashed)."
     )
     parser.add_argument(
-        "--highlight_fill_alpha", type=float, default=0.12,
+        "--highlight_marker_color", type=str, default="#D7191C",
         help=(
-            "Fill alpha for highlight region overlay (default: 0.12). "
-            "Set to 0.0 to disable the fill entirely."
-        )
-    )
-    parser.add_argument(
-        "--highlight_marker_color", type=str, default="#FFD700",
-        help=(
-            "Color for highlighted scatter points "
-            "(default: '#FFD700' gold)."
+            "Color for the top-PCT%% scatter points and the colorbar threshold "
+            "tick (default: '#D7191C' red, which contrasts with viridis at both "
+            "ends)."
         )
     )
 
@@ -170,47 +172,31 @@ def parse_args():
     parser.add_argument(
         "--report_on_filtered", action="store_true",
         help=(
-            "Compute summary statistics (correlations, optimal CIs) on the "
-            "filtered subset instead of the full dataset. By default, stats "
-            "are computed on the full (unfiltered) data so they remain stable "
-            "regardless of plot zoom level."
+            "Compute summary statistics (RandomForest sensitivity, best-5% "
+            "ranges) on the filtered subset instead of the full dataset. By "
+            "default, stats are computed on the full (unfiltered) data so they "
+            "remain stable regardless of plot zoom level. Note: imputed/failed "
+            "rows are always excluded from the sensitivity model."
         )
     )
 
     return parser.parse_args()
 
 
-def pearson_ci(r, n, alpha=0.05):
+def imputed_mask(df):
     """
-    Compute confidence interval for Pearson r using Fisher z-transform.
-    Returns (lower, upper). If n < 4, returns (nan, nan).
+    Boolean mask of synthetic/imputed rows.
+
+    build_composite_matrix.py penalizes simulations that never produced a
+    terminal genome (missing FASTA/TSV) with metric = max(real) + 0.1 and
+    writes their raw size columns as 0. Those rows are not real genome
+    comparisons, so the sensitivity analysis excludes them. Detection uses
+    exp_genome_size == 0 when that column is present; otherwise nothing is
+    flagged (the input may be a generic metric table).
     """
-    if n < 4 or np.isnan(r):
-        return np.nan, np.nan
-
-    z = np.arctanh(r)
-    se = 1.0 / np.sqrt(n - 3)
-    z_crit = 1.96  # 95% CI
-    lo_z, hi_z = z - z_crit * se, z + z_crit * se
-    return np.tanh(lo_z), np.tanh(hi_z)
-
-
-def r2_ci_from_r_ci(r_lo, r_hi):
-    """
-    Compute R² CI from the endpoints of a Pearson r CI.
-    If the r CI spans zero, the minimum possible R² is 0.
-    """
-    if np.isnan(r_lo) or np.isnan(r_hi):
-        return np.nan, np.nan
-
-    # If the CI for r contains zero, R² can be as low as 0
-    if r_lo <= 0 <= r_hi:
-        r2_lo = 0.0
-    else:
-        r2_lo = min(r_lo ** 2, r_hi ** 2)
-
-    r2_hi = max(r_lo ** 2, r_hi ** 2)
-    return r2_lo, r2_hi
+    if "exp_genome_size" in df.columns:
+        return pd.to_numeric(df["exp_genome_size"], errors="coerce").fillna(0) == 0
+    return pd.Series(False, index=df.index)
 
 
 def apply_filter(df, col_name, min_val, max_val, current_mask):
@@ -257,9 +243,12 @@ def print_report(df, metric_col, label, params_of_interest):
     threshold = df_metric.quantile(0.05)
     df_top = df[df_metric <= threshold]
 
-    print(f"\n=== Optimal parameter estimates – profile-based 95% CI ({label}) ===")
-    print(f"Best {metric_col} score: {best_score:.6g}")
-    print(f"95% threshold (5th percentile): {threshold:.6g}\n")
+    print(f"\n=== Near-optimal parameter ranges – min/max over best 5% of runs ({label}) ===")
+    print("    NOTE: a descriptive range of the best-scoring runs, NOT a confidence")
+    print("    interval — unlike a CI it tends to WIDEN with more sampling. 'best' is")
+    print("    a single stochastic simulation (one draw), so treat it as indicative.")
+    print(f"Best {metric_col} score (single run): {best_score:.6g}")
+    print(f"Best-5% threshold (5th percentile of {metric_col}): {threshold:.6g}\n")
 
     for param in params_of_interest:
         best_val = best_row[param]
@@ -269,95 +258,86 @@ def print_report(df, metric_col, label, params_of_interest):
         print(
             f"{disp(param):20s}: "
             f"{best_val:.6g} "
-            f"[95% CI: {lo:.6g}, {hi:.6g}] "
+            f"[best-5% range: {lo:.6g}, {hi:.6g}] "
             f"(n={df_top.shape[0]})"
         )
 
     print("==========================================================")
 
-    # --- Sensitivity summary (Pearson + Spearman) ---
-    print(f"\n=== Sensitivity summary – Pearson & Spearman ({label}) ===")
-    print(
-        "    Pearson r  = linear correlation "
-        "(R² = fraction of variance explained, linear & univariate)"
-    )
-    print(
-        "    Spearman ρ = rank correlation "
-        "(detects monotonic nonlinear relationships)"
-    )
-    print()
+    # --- Nonlinear sensitivity (RandomForest, cross-validated) ---
+    # Composite is a distance-to-reference, hence U-shaped / non-monotone in the
+    # rate parameters. Linear (Pearson) and rank (Spearman) statistics are blind
+    # to that and badly understate sensitivity (a U-shape has ~zero linear AND
+    # ~zero rank correlation). We instead fit the same model family the guided
+    # search uses — a RandomForest on log10-rates — and report a cross-validated
+    # R² plus permutation importances.
+    print(f"\n=== Sensitivity summary – RandomForest, cross-validated ({label}) ===")
 
+    imp = imputed_mask(df)
+    n_imp = int(imp.sum())
+    df_real = df[~imp]
+
+    feat_names = []
+    x_cols = []
     for col in params_of_interest:
-        valid = ~(df_metric.isna() | df[col].isna())
-        n = int(valid.sum())
-
-        if n < 4:
-            r = np.nan
-            r_lo, r_hi = np.nan, np.nan
-            r2 = np.nan
-            r2_lo, r2_hi = np.nan, np.nan
-            rho = np.nan
-            sp_pval = np.nan
+        v = pd.to_numeric(df_real[col], errors="coerce").values.astype(float)
+        if "rate" in col:  # log10 the rate params (matches plot axes + surrogate)
+            v = np.log10(np.where(v > 0, v, np.nan))
+            feat_names.append(f"log10({disp(col)})")
         else:
-            metric_valid = df_metric[valid].values
-            col_valid = df[col][valid].values
+            feat_names.append(disp(col))
+        x_cols.append(v)
+    X = np.column_stack(x_cols)
+    y = pd.to_numeric(df_real[metric_col], errors="coerce").values.astype(float)
 
-            # Pearson
-            r = float(pd.Series(metric_valid).corr(pd.Series(col_valid)))
-            r_lo, r_hi = pearson_ci(r, n)
-            r2 = r ** 2
-            r2_lo, r2_hi = r2_ci_from_r_ci(r_lo, r_hi)
+    ok = np.isfinite(y) & np.isfinite(X).all(axis=1)
+    X, y = X[ok], y[ok]
+    n_rf = len(y)
 
-            # Spearman
-            rho, sp_pval = spearmanr(col_valid, metric_valid)
-
-        print(
-            f"  {disp(col):20s}:  "
-            f"Pearson r = {r: .4f}  "
-            f"[95% CI: {r_lo: .4f}, {r_hi: .4f}]  "
-            f"R² = {r2: .4f} ({r2*100:5.1f}%)  "
-            f"[95% CI: {r2_lo: .4f}, {r2_hi: .4f}]"
-        )
-        print(
-            f"  {'':20s}   "
-            f"Spearman ρ = {rho: .4f}  "
-            f"(p = {sp_pval:.2e})  "
-            f"(n={n})"
-        )
-
-    # --- Multiple R² (joint linear model) ---
-    valid_all = np.ones(len(df), dtype=bool)
-    for col in params_of_interest:
-        valid_all &= ~df[col].isna()
-    valid_all &= ~df_metric.isna()
-    n_joint = int(valid_all.sum())
-
-    if n_joint >= len(params_of_interest) + 1:
-        X = df.loc[valid_all, params_of_interest].values
-        y = df_metric[valid_all].values
-
-        model = LinearRegression().fit(X, y)
-        r2_multi = model.score(X, y)
-
-        # Adjusted R²
-        p = X.shape[1]
-        r2_adj = 1.0 - (1.0 - r2_multi) * (n_joint - 1) / (n_joint - p - 1)
-
-        print(f"\n=== Multiple linear regression ({label}) ===")
-        print(f"  Predictors: {', '.join(disp(p) for p in params_of_interest)}")
-        print(f"  R²          = {r2_multi:.4f} ({r2_multi*100:.1f}%)")
-        print(f"  Adjusted R² = {r2_adj:.4f} ({r2_adj*100:.1f}%)")
-        print(f"  (n={n_joint}, p={p})")
-        print()
-        print("  Coefficients:")
-        for name, coef in zip(params_of_interest, model.coef_):
-            print(f"    {disp(name):20s}: {coef: .6g}")
-        print(f"    {'(intercept)':20s}: {model.intercept_: .6g}")
+    if n_imp:
+        print(f"  Excluded {n_imp} imputed/failed sim(s); using {n_rf} real simulations.")
     else:
-        print(
-            f"\n=== Multiple linear regression ({label}) ===\n"
-            f"  Skipped: not enough complete cases (n={n_joint})\n"
+        print(f"  n = {n_rf} simulations.")
+
+    if n_rf < 30:
+        print("  Skipped: need >= 30 real simulations for a stable RandomForest.")
+    else:
+        print("    Importances are permutation-based (mean drop in R² when a feature")
+        print("    is shuffled) and describe the *explored* region, which the adaptive")
+        print("    search concentrated near the optimum — not the global space.")
+        print()
+
+        rf = RandomForestRegressor(
+            n_estimators=400, oob_score=True, random_state=0, n_jobs=-1
         )
+        cv = KFold(n_splits=min(5, n_rf), shuffle=True, random_state=0)
+        cv_r2 = cross_val_score(rf, X, y, cv=cv, scoring="r2")
+        rf.fit(X, y)
+
+        print(f"  Joint R² (5-fold CV): {cv_r2.mean(): .4f}  (+/- {cv_r2.std():.4f})")
+        print(f"  Joint R² (OOB):       {rf.oob_score_: .4f}")
+        print(f"  (n={n_rf}, p={len(feat_names)})")
+        print()
+
+        perm = permutation_importance(
+            rf, X, y, n_repeats=20, random_state=0, n_jobs=-1, scoring="r2"
+        )
+
+        print("  Per-parameter sensitivity (ranked by permutation importance):")
+        print(f"    {'parameter':22s} {'perm. importance':>20s}   {'solo CV R²':>11s}")
+        for i in np.argsort(perm.importances_mean)[::-1]:
+            solo = cross_val_score(
+                RandomForestRegressor(n_estimators=300, random_state=0, n_jobs=-1),
+                X[:, [i]], y, cv=cv, scoring="r2",
+            ).mean()
+            print(
+                f"    {feat_names[i]:22s} "
+                f"{perm.importances_mean[i]: .4f} +/- {perm.importances_std[i]:.4f}   "
+                f"{solo: 11.4f}"
+            )
+        print()
+        print("    perm. importance = joint contribution (accounts for redundancy);")
+        print("    solo CV R² = variance each parameter explains alone (can be < 0).")
 
     print("==================================================================")
 
@@ -435,19 +415,31 @@ def main():
                 print(f"  {disp(param):20s}: [{vals.min():.6g}, {vals.max():.6g}]")
         print("---------------------------------------------------")
 
-    # --- Determine highlight threshold from FULL dataset (stable) ---
+    # The plotted SURFACE uses every sampled run, including imputed/failed sims:
+    # those were explored and penalized to the worst score (metric = max(real)+0.1),
+    # so painting them in the worst color shows which regions were tried and failed.
+    # Real rows still drive the STATS, the scatter points, and the top-PCT% markers
+    # (imputed values are placeholders, not true genome comparisons).
+    df_real = df[~imputed_mask(df)]
+    df_filt_real = df_filtered[~imputed_mask(df_filtered)]
+    n_imp_plot = len(df) - len(df_real)
+    if n_imp_plot:
+        print(f"\n(Surface shows {n_imp_plot} imputed/failed rows at the worst "
+              f"color; stats and highlighted points use {len(df_real)} real sims.)")
+
+    # --- Determine highlight threshold from the REAL dataset (stable) ---
     highlight_enabled = args.highlight_top_pct is not None
     if highlight_enabled:
         if not (0 < args.highlight_top_pct < 100):
             raise ValueError("--highlight_top_pct must be between 0 and 100 (exclusive).")
-        # Threshold always computed on full data so it means the same thing
-        # regardless of zoom
-        highlight_threshold = df[metric_col].quantile(args.highlight_top_pct / 100.0)
-        n_best = int((df[metric_col] <= highlight_threshold).sum())
+        # Threshold computed on the real data so "best X%" is independent of zoom
+        # and of how many sims failed.
+        highlight_threshold = df_real[metric_col].quantile(args.highlight_top_pct / 100.0)
+        n_best = int((df_real[metric_col] <= highlight_threshold).sum())
         print(
             f"\n=== Highlighting best {args.highlight_top_pct:.3g}% region on plots ===\n"
             f"Highlight threshold ({args.highlight_top_pct:.3g}th percentile of {metric_col}): "
-            f"{highlight_threshold:.6g}  (n={n_best} points in full dataset)\n"
+            f"{highlight_threshold:.6g}  (n={n_best} real simulations)\n"
             "==============================================================="
         )
     else:
@@ -464,89 +456,69 @@ def main():
         "length_bias":    (args.min_length_bias,    args.max_length_bias),
     }
 
+    def to_plot_coord(val, use_log, fallback):
+        if val is None:
+            return fallback
+        return np.log10(max(val, args.log_epsilon)) if use_log else val
+
+    def get_coords(frame, x_param, y_param, use_log_x, use_log_y):
+        """Numeric, validity-filtered, optionally-log10 (x, y, z) arrays."""
+        xs = pd.to_numeric(frame[x_param], errors="coerce")
+        ys = pd.to_numeric(frame[y_param], errors="coerce")
+        zs = pd.to_numeric(frame[metric_col], errors="coerce")
+        good = ~(xs.isna() | ys.isna() | zs.isna())
+        if use_log_x:
+            good &= xs > 0
+        if use_log_y:
+            good &= ys > 0
+        xv = xs[good].values.astype(float)
+        yv = ys[good].values.astype(float)
+        zv = zs[good].values.astype(float)
+        if use_log_x:
+            xv = np.log10(xv)
+        if use_log_y:
+            yv = np.log10(yv)
+        return xv, yv, zv
+
     with PdfPages(args.output) as pdf:
         for x_param, y_param in param_pairs:
-            # ---- FULL dataset for interpolation ----
-            x_full_s = df[x_param]
-            y_full_s = df[y_param]
-            z_full_s = df[metric_col]
-
             use_log_x = args.log_x or (args.log_params and ("rate" in x_param))
             use_log_y = args.log_y or (args.log_params and ("rate" in y_param))
 
-            valid_full = ~(x_full_s.isna() | y_full_s.isna() | z_full_s.isna())
-            if use_log_x:
-                valid_full &= (x_full_s > 0)
-            if use_log_y:
-                valid_full &= (y_full_s > 0)
+            # All sampled rows (incl. imputed/failed at their worst-color penalty)
+            # build the interpolated surface, so explored-but-failed regions read as
+            # worst. Only real, range-filtered rows are scattered as points on top.
+            x_surf, y_surf, z_surf = get_coords(df, x_param, y_param,
+                                                use_log_x, use_log_y)
+            x_filt, y_filt, z_filt = get_coords(df_filt_real, x_param, y_param,
+                                                use_log_x, use_log_y)
 
-            x_full = x_full_s[valid_full].values.astype(float)
-            y_full = y_full_s[valid_full].values.astype(float)
-            z_full = z_full_s[valid_full].values.astype(float)
-
-            if use_log_x:
-                x_full = np.log10(np.maximum(x_full, args.log_epsilon))
-            if use_log_y:
-                y_full = np.log10(np.maximum(y_full, args.log_epsilon))
-
-            if len(x_full) < 3:
-                print(
-                    f"Skipping plot for ({x_param}, {y_param}) "
-                    f"– not enough valid points in full data (n={len(x_full)})"
-                )
+            if len(x_surf) < 3:
+                print(f"Skipping ({x_param}, {y_param}) – only {len(x_surf)} points.")
                 continue
 
-            # ---- View window from filter bounds ----
+            # ---- View window (filter bounds, else real-data range) ----
             x_lo_bound, x_hi_bound = param_filter_bounds[x_param]
             y_lo_bound, y_hi_bound = param_filter_bounds[y_param]
 
-            def to_plot_coord(val, use_log, fallback):
-                if val is None:
-                    return fallback
-                return np.log10(max(val, args.log_epsilon)) if use_log else val
+            x_view_lo = to_plot_coord(x_lo_bound, use_log_x, float(x_surf.min()))
+            x_view_hi = to_plot_coord(x_hi_bound, use_log_x, float(x_surf.max()))
+            y_view_lo = to_plot_coord(y_lo_bound, use_log_y, float(y_surf.min()))
+            y_view_hi = to_plot_coord(y_hi_bound, use_log_y, float(y_surf.max()))
 
-            x_view_lo = to_plot_coord(x_lo_bound, use_log_x, x_full.min())
-            x_view_hi = to_plot_coord(x_hi_bound, use_log_x, x_full.max())
-            y_view_lo = to_plot_coord(y_lo_bound, use_log_y, y_full.min())
-            y_view_hi = to_plot_coord(y_hi_bound, use_log_y, y_full.max())
-
-            # ---- Interpolate FULL data onto grid spanning the VIEW window ----
+            # ---- Interpolate onto a grid spanning the view window ----
             grid_res = args.grid_res
             xi = np.linspace(x_view_lo, x_view_hi, grid_res)
             yi = np.linspace(y_view_lo, y_view_hi, grid_res)
             Xi, Yi = np.meshgrid(xi, yi)
 
-            pts_full = np.column_stack((x_full, y_full))
-
-            Zi = griddata(pts_full, z_full, (Xi, Yi), method="linear")
-
+            pts = np.column_stack((x_surf, y_surf))
+            Zi = griddata(pts, z_surf, (Xi, Yi), method="linear")
             nan_mask = np.isnan(Zi)
             if nan_mask.any():
                 Zi[nan_mask] = griddata(
-                    pts_full, z_full,
-                    (Xi[nan_mask], Yi[nan_mask]),
-                    method="nearest"
+                    pts, z_surf, (Xi[nan_mask], Yi[nan_mask]), method="nearest"
                 )
-
-            # ---- Filtered points for scatter overlay ----
-            x_filt_s = df_filtered[x_param]
-            y_filt_s = df_filtered[y_param]
-            z_filt_s = df_filtered[metric_col]
-
-            valid_filt = ~(x_filt_s.isna() | y_filt_s.isna() | z_filt_s.isna())
-            if use_log_x:
-                valid_filt &= (x_filt_s > 0)
-            if use_log_y:
-                valid_filt &= (y_filt_s > 0)
-
-            x_filt = x_filt_s[valid_filt].values.astype(float)
-            y_filt = y_filt_s[valid_filt].values.astype(float)
-            z_filt = z_filt_s[valid_filt].values.astype(float)
-
-            if use_log_x:
-                x_filt = np.log10(np.maximum(x_filt, args.log_epsilon))
-            if use_log_y:
-                y_filt = np.log10(np.maximum(y_filt, args.log_epsilon))
 
             if highlight_enabled:
                 best_mask = z_filt <= highlight_threshold
@@ -558,53 +530,24 @@ def main():
             # ---- Plot ----
             fig, ax = plt.subplots(figsize=(6, 5))
 
-            # Color scale spans the view window's interpolated range,
-            # optionally capped at --color_ceiling.
             z_min, z_max = float(Zi.min()), float(Zi.max())
             if z_min == z_max:
                 z_max = z_min + 1e-6
-
             if args.color_ceiling is not None and args.color_ceiling > z_min:
                 z_max_plot = args.color_ceiling
             else:
                 z_max_plot = z_max
 
             contour_levels = np.linspace(z_min, z_max_plot, args.levels)
+            contour = ax.contourf(Xi, Yi, Zi, levels=contour_levels,
+                                  cmap=args.cmap, extend="both")
 
-            contour = ax.contourf(
-                Xi, Yi, Zi,
-                levels=contour_levels,
-                extend="both",
-            )
-
-            # Highlight best region — publication-quality contrasting style
-            if highlight_enabled and highlight_threshold is not None:
-                if n_best_pair >= 1 and z_min < highlight_threshold < z_max:
-                    # Subtle semi-transparent fill to tint the best region
-                    if args.highlight_fill_alpha > 0:
-                        ax.contourf(
-                            Xi, Yi, Zi,
-                            levels=[z_min, highlight_threshold],
-                            colors=[args.highlight_color],
-                            alpha=args.highlight_fill_alpha,
-                        )
-
-                    # Bold contrasting boundary line
-                    cs_line = ax.contour(
-                        Xi, Yi, Zi,
-                        levels=[highlight_threshold],
-                        colors=[args.highlight_color],
-                        linewidths=args.highlight_linewidth,
-                        linestyles=args.highlight_linestyle,
-                    )
-
-            # Scatter filtered points only
+            # Scatter real, range-filtered points
             if not args.no_points:
                 ax.scatter(
                     x_filt, y_filt,
                     s=2, alpha=0.7, color="0.35",
-                    edgecolor="k", linewidth=0.3,
-                    zorder=3,
+                    edgecolor="k", linewidth=0.3, zorder=3,
                 )
 
             if highlight_enabled and (best_mask is not None) and (n_best_pair >= 1):
@@ -612,16 +555,13 @@ def main():
                     x_filt[best_mask], y_filt[best_mask],
                     s=12, alpha=0.95,
                     facecolor=args.highlight_marker_color,
-                    edgecolor="k", linewidth=0.4,
-                    zorder=4,
+                    edgecolor="k", linewidth=0.4, zorder=4,
                     label=f"Top {args.highlight_top_pct:.3g}%",
                 )
-                ax.legend(
-                    loc="best", fontsize=8, framealpha=0.85,
-                    edgecolor="0.6", fancybox=False,
-                )
+                ax.legend(loc="best", fontsize=8, framealpha=0.85,
+                          edgecolor="0.6", fancybox=False)
 
-            ax.set_title(f"{metric_col} vs {x_param} & {y_param}\n(lower is better)")
+            # No title — caption belongs in the manuscript (lower metric = better).
             ax.set_xlabel(f"log10({x_param})" if use_log_x else x_param)
             ax.set_ylabel(f"log10({y_param})" if use_log_y else y_param)
 
@@ -631,11 +571,11 @@ def main():
                 cbar_label += f" (ceiling={args.color_ceiling:g})"
             cbar.set_label(cbar_label)
 
-            # Draw the highlight threshold on the colorbar for reference
+            # Mark the top-PCT% threshold on the colorbar (same color as the points)
             if highlight_enabled and highlight_threshold is not None:
                 if z_min < highlight_threshold < z_max_plot:
                     cbar.ax.axhline(
-                        y=highlight_threshold, color=args.highlight_color,
+                        y=highlight_threshold, color=args.highlight_marker_color,
                         linewidth=1.5, linestyle=args.highlight_linestyle,
                     )
 
@@ -647,7 +587,7 @@ def main():
 
     if figures_made == 0:
         raise ValueError(
-            "No plots were generated (all parameter pairs had < 3 valid points)."
+            "No plots were generated (no parameter pair had >= 3 real points)."
         )
 
     print(f"\nSaved {figures_made} contour plots to multi-page PDF: {args.output}")
