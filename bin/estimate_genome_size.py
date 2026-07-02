@@ -5,6 +5,13 @@ OBSERVE-ONLY. Predicts, before a fixed-rate run, the per-step genome-size
 trajectory (bp and FASTA bytes) and cumulative insertion/deletion event
 counts, and (in --check mode) compares the prediction to the actual
 per-step trajectory. Makes NO decisions. See the design spec.
+
+The raw fixed-rate model compounds a constant per-step net rate r; empirically
+(389 grid sims, see grid/aggregate_napkin.py) it over-predicts the *magnitude*
+of change when |r| per step is large, while the small-|r| bulk is near-exact.
+A smooth, sign-symmetric saturation of r (saturate_rate) corrects the extremes
+without touching the bulk. It is ON by default (--rate-sat) and remains a pure
+prediction: still observe-only, still no decisions.
 """
 import argparse
 import gzip
@@ -18,11 +25,39 @@ import numpy as np
 
 BYTES_PER_BP = 61.0 / 60.0  # Biopython SeqIO "fasta" wraps at 60 chars (+1 newline)
 
+# Empirical per-step-rate calibration constant (see saturate_rate). Fit on 389
+# grid sims by minimizing terminal-size error; the objective is flat over
+# s in [3.5, 4.5], so 4.0 is used as a stable round value. 0/None disables.
+RATE_SAT_DEFAULT = 4.0
+
 _LTRLEN_RE = re.compile(r"LTRlen:(\d+)")
 
 _EST_COLS = ["ins", "del", "sr", "k", "ge", "step", "iterations",
              "g0_bp", "e_lins", "e_lrem", "r", "bytes_factor",
-             "iter", "pred_size_bp", "pred_size_bytes", "pred_cum_nins", "pred_cum_ndel"]
+             "iter", "pred_size_bp", "pred_size_bytes", "pred_cum_nins", "pred_cum_ndel",
+             "rate_sat", "r_raw"]
+
+
+def saturate_rate(r: float, rate_sat: float) -> float:
+    """Empirical calibration of the per-step net growth rate r.
+
+    The fixed-rate model G_i = G_{i-1}*(1+r) over-predicts the magnitude of
+    change when |r| per step is large: strong-growth combos overshoot the
+    actual terminal size (up to ~+50%) and strong-shrink combos collapse into
+    the 1-bp floor (-100%), while the accurate small-|r| bulk is unaffected. A
+    smooth, sign-symmetric saturation reins in the extremes and leaves the
+    bulk essentially unchanged:
+
+        r_cal = r / (1 + |r| / rate_sat)
+
+    rate_sat -> +inf (or None / <= 0) recovers the raw, uncalibrated rate.
+    With the default (RATE_SAT_DEFAULT) this cut mean |pct_err| ~39% and p99
+    ~53% across the grid without moving the median. See grid/aggregate_napkin.py
+    for the calibration table this was fit on.
+    """
+    if not rate_sat or rate_sat <= 0:
+        return r
+    return r / (1.0 + abs(r) / rate_sat)
 
 
 def _open_text(path):
@@ -251,12 +286,17 @@ def bp_to_bytes(bp: float) -> int:
 
 
 def project_trajectory(g0_bp: float, ins: float, dele: float, step: float,
-                       iterations: int, e_lins: float, e_lrem: float):
-    """Iterate G_i = G_{i-1}*(1+r), r = step*(ins*E[L_ins] - del*E[L_rem]).
-    Returns (rows, r) where each row has iter, size_bp, cum_nins, cum_ndel.
-    Event counts use the size at the START of each step (as the simulator does).
-    Size is floored at 1 bp to avoid runaway-negative projections."""
-    r = step * (ins * e_lins - dele * e_lrem)
+                       iterations: int, e_lins: float, e_lrem: float,
+                       rate_sat: float = RATE_SAT_DEFAULT):
+    """Iterate G_i = G_{i-1}*(1+r), raw r = step*(ins*E[L_ins] - del*E[L_rem]),
+    then r is passed through saturate_rate(., rate_sat) before compounding.
+    Returns (rows, r, r_raw) where r is the calibrated rate actually compounded,
+    r_raw the uncalibrated rate, and each row has iter, size_bp, cum_nins,
+    cum_ndel. Event counts use the size at the START of each step (as the
+    simulator does). Size is floored at 1 bp to avoid runaway-negative
+    projections."""
+    r_raw = step * (ins * e_lins - dele * e_lrem)
+    r = saturate_rate(r_raw, rate_sat)
     g = float(g0_bp)
     cum_nins = 0.0
     cum_ndel = 0.0
@@ -266,12 +306,17 @@ def project_trajectory(g0_bp: float, ins: float, dele: float, step: float,
         cum_ndel += dele * g * step
         g = max(1.0, g * (1.0 + r))
         rows.append({"iter": i, "size_bp": g, "cum_nins": cum_nins, "cum_ndel": cum_ndel})
-    return rows, r
+    return rows, r, r_raw
 
 
-def write_estimate(path, params, g0_bp, e_lins, e_lrem, r, rows):
-    """Long format: one row per iteration, scalars repeated (easy to concat)."""
+def write_estimate(path, params, g0_bp, e_lins, e_lrem, r, rows,
+                   r_raw=None, rate_sat=RATE_SAT_DEFAULT):
+    """Long format: one row per iteration, scalars repeated (easy to concat).
+    `r` is the calibrated per-step rate that produced these sizes; `r_raw` and
+    `rate_sat` record the raw rate and the calibration constant for provenance."""
     iterations = max(row["iter"] for row in rows)
+    if r_raw is None:
+        r_raw = r
     with open(path, "w") as fh:
         fh.write("\t".join(_EST_COLS) + "\n")
         for row in rows:
@@ -282,6 +327,7 @@ def write_estimate(path, params, g0_bp, e_lins, e_lrem, r, rows):
                 f"{BYTES_PER_BP:.6f}",
                 row["iter"], f"{row['size_bp']:.0f}", bp_to_bytes(row["size_bp"]),
                 f"{row['cum_nins']:.2f}", f"{row['cum_ndel']:.2f}",
+                f"{rate_sat:g}" if rate_sat else "0", f"{r_raw:.8g}",
             ]
             fh.write("\t".join(str(x) for x in rec) + "\n")
 
@@ -341,6 +387,10 @@ def main():
     p.add_argument("--ins", type=float); p.add_argument("--del", dest="dele", type=float)
     p.add_argument("--step", type=int); p.add_argument("--ge", type=int)
     p.add_argument("--solo-rate", type=float, default=95.0); p.add_argument("--k", type=float, default=10.0)
+    p.add_argument("--rate-sat", type=float, default=RATE_SAT_DEFAULT,
+                   help="per-step-rate saturation constant s in r_cal=r/(1+|r|/s); "
+                        "0 disables (raw fixed-rate model). Default %(default)s "
+                        "(empirically calibrated on the grid).")
     p.add_argument("--out", default="napkin_estimate.tsv",
                    help="estimate mode: where to WRITE the prediction")
     # check-mode inputs
@@ -369,14 +419,17 @@ def main():
     e_lins = expected_insertion_length(ratios, libm)
     e_lrem = expected_removal_length(parse_bed_elements(args.bed), args.k, args.solo_rate)
     iterations = args.ge // args.step
-    rows, r = project_trajectory(g0, args.ins, args.dele, args.step, iterations, e_lins, e_lrem)
+    rows, r, r_raw = project_trajectory(g0, args.ins, args.dele, args.step, iterations,
+                                        e_lins, e_lrem, rate_sat=args.rate_sat)
     write_estimate(args.out, {"ins": args.ins, "del": args.dele, "sr": args.solo_rate,
                               "k": args.k, "ge": args.ge, "step": args.step},
-                   g0, e_lins, e_lrem, r, rows)
+                   g0, e_lins, e_lrem, r, rows, r_raw=r_raw, rate_sat=args.rate_sat)
 
     term = rows[-1]
+    cal = (f" [calibrated: raw r={r_raw:.4g}, s={args.rate_sat:g}]"
+           if args.rate_sat and args.rate_sat > 0 else " [raw, uncalibrated]")
     print(f"Napkin estimate (fixed-rate): E[L_ins]={e_lins:.1f} bp, E[L_rem]={e_lrem:.1f} bp, "
-          f"per-step r={r:.4g}")
+          f"per-step r={r:.4g}{cal}")
     print(f"  G0={g0:,} bp  ->  predicted terminal={term['size_bp']:,.0f} bp "
           f"({bp_to_bytes(term['size_bp']):,} bytes) over {iterations} steps")
     print(f"  predicted cumulative events: insertions={term['cum_nins']:,.0f}, "
