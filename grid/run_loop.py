@@ -26,8 +26,10 @@ Re-launching the script is safe: on startup it reconciles the current round
 before the first harvest.  In slurm mode, reconcile_round_slurm attaches to an
 in-flight array job, skips a round that already completed, submits one that was
 never launched, or proceeds directly to harvest when tasks ran with partial
-failures.  In local mode the script waits for any in-progress pipeline.log
-files to reach their completion marker before harvesting.
+failures.  In local mode the script waits for any genuinely-running sims (a
+live worker process, or a param dir with recent on-disk writes) to finish
+before harvesting; idle dirs left behind by a killed run are treated as dead
+and are not waited on.
 
 State lives in search_state.json, training_data.tsv, and the on-disk param dirs.
 
@@ -74,6 +76,14 @@ _DIR_RE = re.compile(
 )
 _FINISHED_MARKER = "Pipeline completed at"
 
+# A local sim worker is launched by slurm_grid/submit_array.sh as:
+#   python <GUIDED_SEARCH> --run-one --combo-file ... --combo-index N ...
+# so a live worker's argv always contains the guided_search.py path immediately
+# followed by --run-one. Both markers sit near the front of argv (so `ps` command
+# truncation can't hide them) and together match this checkout's workers only:
+# never run_loop itself, and never `guided_search.py harvest/next` (no --run-one).
+_WORKER_MARKERS = (str(GUIDED_SEARCH), "--run-one")
+
 
 def read_search_state(run_dir: Path) -> dict:
     """Parse search_state.json from the run directory."""
@@ -112,16 +122,100 @@ def is_finished(log_path: Path) -> bool:
         return False
 
 
-def count_inflight(run_dir: Path) -> int:
-    """Count parameter dirs whose pipeline.log lacks the completion marker."""
+def count_live_workers() -> int:
+    """Count this checkout's live sim worker processes (portable: Linux + macOS).
+
+    Uses `ps -A -ww -o pid=,args=`, accepted by both procps (Linux) and BSD ps
+    (macOS): -A selects every process, -ww disables command-line truncation, and
+    the trailing '=' on each -o field suppresses the header row. A worker is
+    identified by _WORKER_MARKERS (the guided_search.py path + --run-one) both
+    appearing in its argv. Best-effort: returns 0 if ps is missing, errors, or
+    prints nothing parseable — mtime staleness (see inflight_summary) then carries
+    the liveness decision alone, so a `ps` quirk can never make startup hang.
+    """
+    try:
+        res = subprocess.run(
+            ["ps", "-A", "-ww", "-o", "pid=,args="],
+            capture_output=True, text=True, check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return 0
+    if res.returncode != 0:
+        return 0
+    self_pid = os.getpid()
     n = 0
+    for line in res.stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        pid_str, argv = parts
+        try:
+            pid = int(pid_str)
+        except ValueError:
+            continue
+        if pid == self_pid:
+            continue
+        if all(marker in argv for marker in _WORKER_MARKERS):
+            n += 1
+    return n
+
+
+def _dir_last_mtime(d: Path) -> float:
+    """Newest mtime among a param dir and its immediate files.
+
+    PrinTE writes pipeline.log and the gen*_final.* outputs directly into the
+    param dir, so a top-level (non-recursive) scan captures active progress
+    cheaply. Returns 0.0 if nothing under the dir can be stat'd.
+    """
+    newest = 0.0
+    try:
+        newest = d.stat().st_mtime
+    except OSError:
+        pass
+    try:
+        entries = list(d.iterdir())
+    except OSError:
+        return newest
+    for f in entries:
+        try:
+            m = f.stat().st_mtime
+        except OSError:
+            continue
+        if m > newest:
+            newest = m
+    return newest
+
+
+def inflight_summary(run_dir: Path, stale_secs: int) -> tuple:
+    """Classify unfinished param dirs by liveness -> (workers, fresh, stale).
+
+    workers : live sim worker processes for this checkout (process-table signal;
+              coarse — not attributed to a specific dir).
+    fresh   : dirs with an unfinished pipeline.log written within stale_secs
+              (recent on-disk activity -> genuinely progressing).
+    stale   : dirs with an unfinished pipeline.log idle >= stale_secs (candidate
+              ghosts left by a sim that was killed mid-run).
+
+    A dir counts as "in progress" only when work is actually happening: a live
+    worker exists, or the dir shows recent writes. An unfinished-but-idle dir with
+    no worker is dead — the old marker-only check treated it as running forever,
+    which is what hung the orchestrator on ghost sims.
+    """
+    workers = count_live_workers()
+    now = time.time()
+    fresh = 0
+    stale = 0
     for d in run_dir.iterdir():
         if not d.is_dir() or not _DIR_RE.match(d.name):
             continue
         log_path = d / "pipeline.log"
-        if log_path.exists() and not is_finished(log_path):
-            n += 1
-    return n
+        if not log_path.exists() or is_finished(log_path):
+            continue
+        if (now - _dir_last_mtime(d)) < stale_secs:
+            fresh += 1
+        else:
+            stale += 1
+    return workers, fresh, stale
 
 
 def count_hits(tsv_path: Path) -> int:
@@ -295,30 +389,45 @@ def reconcile_round_slurm(run_dir: Path, slurm_dir: str, job_name: str,
             f"squeue empty -> ran with failures; proceeding to harvest (partial)")
 
 
-def wait_for_inflight(run_dir: Path, poll_seconds: int) -> None:
-    n = count_inflight(run_dir)
-    if n == 0:
+def wait_for_inflight(run_dir: Path, poll_seconds: int, stale_secs: int) -> None:
+    """Block until no prior sim batch is still running, then return.
+
+    "Running" = at least one live worker process OR at least one param dir with
+    recent writes (see inflight_summary). Unfinished-but-idle dirs with no live
+    worker are treated as dead leftovers from a killed run and do NOT block — this
+    is the fix for the orchestrator hanging forever on ghost sims.
+    """
+    workers, fresh, stale = inflight_summary(run_dir, stale_secs)
+    if workers == 0 and fresh == 0:
+        if stale:
+            log(f"Startup: {stale} unfinished sim dir(s) present but none are "
+                f"running (no live worker; logs idle >= {stale_secs}s). Treating "
+                f"them as dead from a prior run and proceeding to harvest.")
         return
-    log(f"Found {n} in-progress sim(s) at startup. Waiting before first harvest...")
-    last_n = n
+    log(f"Sims still running at startup: {workers} live worker(s), {fresh} dir(s) "
+        f"with recent activity"
+        + (f" ({stale} idle dir(s) ignored as dead)" if stale else "")
+        + ". Waiting before first harvest...")
+    last = (workers, fresh)
     same_count = 0
     while True:
-        n = count_inflight(run_dir)
-        if n == 0:
-            log("All in-progress sims complete; proceeding.")
+        time.sleep(poll_seconds)
+        workers, fresh, stale = inflight_summary(run_dir, stale_secs)
+        if workers == 0 and fresh == 0:
+            log("No sims still running; proceeding to harvest.")
             return
-        if n == last_n:
+        if (workers, fresh) == last:
             same_count += 1
         else:
             same_count = 0
-            last_n = n
+            last = (workers, fresh)
         if same_count and same_count % 30 == 0:
-            log(f"  WARNING: in-progress count stuck at {n} for "
-                f"{same_count * poll_seconds}s — sims may be hung. "
-                "Investigate or kill orchestrator + clean up.")
+            log(f"  WARNING: {workers} worker(s) / {fresh} active dir(s) unchanged "
+                f"for {same_count * poll_seconds}s — sims may be hung. Investigate "
+                "or kill orchestrator + clean up.")
         else:
-            log(f"  {n} sim(s) still in-progress; sleeping {poll_seconds}s")
-        time.sleep(poll_seconds)
+            log(f"  {workers} live worker(s), {fresh} active dir(s); "
+                f"sleeping {poll_seconds}s")
 
 
 def run_cmd(label: str, cmd, cwd: Path, capture_to: Path = None) -> int:
@@ -355,6 +464,11 @@ def main():
                     help="--explore-frac passed to 'next' (default: 0.1)")
     ap.add_argument("--poll-seconds", type=int, default=60,
                     help="Polling interval while waiting for in-progress sims (default: 60)")
+    ap.add_argument("--stale-secs", type=int, default=600,
+                    help="A sim dir with an unfinished pipeline.log but no live "
+                         "worker process and no file writes within this many "
+                         "seconds is treated as dead (killed mid-run), not "
+                         "in-progress, so startup won't hang on it (default: 600)")
     ap.add_argument("--no-purge", action="store_true",
                     help="Skip the purge_intermediates step")
     ap.add_argument("--start-round", type=int, default=1,
@@ -399,7 +513,7 @@ def main():
     if scheduler == "slurm":
         reconcile_round_slurm(run_dir, slurm_dir, job_name, args.poll_seconds)
     else:
-        wait_for_inflight(run_dir, args.poll_seconds)
+        wait_for_inflight(run_dir, args.poll_seconds, args.stale_secs)
 
     for r in range(args.start_round, args.start_round + args.max_rounds):
         log(f"=== Round {r} ===")
