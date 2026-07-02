@@ -307,8 +307,15 @@ for (sp in tip_species) {
 
   cat("Reading values for", sp, "from", res_file, "...\n")
 
-  df <- tryCatch(
-    read.table(res_file, header = FALSE, sep = "\t", comment.char = "", quote = "", stringsAsFactors = FALSE),
+  df <- tryCatch({
+    # Result files carry a '#'-prefixed header line (e.g. "#name<TAB>LTR_len<TAB>...").
+    # We cannot use comment.char="#" to skip it because the name column contains a
+    # '#' mid-field (e.g. "CP094635.1:4318-9747#LTR/Copia/Ale"), which would be
+    # truncated. Instead drop only lines that START with '#', then parse the rest.
+    lines <- readLines(res_file)
+    lines <- lines[!startsWith(lines, "#")]
+    read.table(text = lines, header = FALSE, sep = "\t", comment.char = "", quote = "", stringsAsFactors = FALSE)
+  },
     error = function(e) stop("Error reading ", res_file, ": ", conditionMessage(e))
   )
 
