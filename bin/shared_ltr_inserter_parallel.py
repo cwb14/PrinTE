@@ -118,7 +118,7 @@ def extract_te_info(header):
     '>TE_name#TE_class/TE_superfamily'
     '>TE_name#TE_class/TE_superfamily;TE_supplemental_info'
     """
-    match = re.match(r"[^#]+#([^/]+)/([^~]+)", header)
+    match = re.match(r"[^#]+#([^/]+)/([^/~;]+)", header)
     if match:
         te_class = match.group(1).strip()
         te_superfamily = match.group(2).strip()
