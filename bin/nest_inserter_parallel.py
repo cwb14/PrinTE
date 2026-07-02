@@ -115,7 +115,7 @@ def convert_genome_back_to_fasta(genome_dict_of_lists):
     return out
 
 def extract_te_info(header):
-    match = re.match(r"[^#]+#([^/]+)/([^~;]+)", header)
+    match = re.match(r"[^#]+#([^/]+)/([^/~;]+)", header)
     if match:
         te_class = match.group(1).strip()
         te_superfamily = match.group(2).strip()
