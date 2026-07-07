@@ -10,6 +10,16 @@ import math
 import matplotlib.pyplot as plt
 import multiprocessing
 
+# ── Developer toggle (NOT user-facing; PrinTE never sets this) ──────────────
+# When True, FRAGMENTED insertions of well-formed LTR-RTs are chopped down to
+# their 5' LTR only (the first LTRlen bp) instead of the default random 50–90%
+# end-chop. Non-LTR TEs, and LTR headers missing/short on LTRlen, are
+# unaffected and keep the stock behavior. Default False = stock behavior.
+# A developer edits this constant in-source to activate; because the value is
+# baked into the source, it survives both multiprocessing 'fork' (inherited)
+# and 'spawn' (re-imported) start methods.
+FRAG_LTR_SOLO = False
+
 def parse_fasta(file_path):
     fasta_dict = {}
     header = None
@@ -518,6 +528,42 @@ def mutate_ltr3_from_ltr5(ltr5, target_divergence_percent, ts_tv_ratio):
     # If you want to guarantee EXACT divergence even with Ns, we can re-sample positions until n_mut changes occur.
     return ''.join(ltr3), n_mut, transitioned, transverted
 
+def fragment_te(te_sequence_full, te_class=None, ltr_len=None, frag_ltr_solo=False):
+    """
+    Decide the fragmented subsequence to insert for a FRAGMENTED insertion.
+
+    Default behavior: chop between 50% and 90% off one (randomly chosen) end,
+    returning the remaining 10–50% of the sequence.
+
+    If frag_ltr_solo is True AND the TE is a well-formed LTR-RT
+    (te_class == 'ltr', case-insensitive; a valid ltr_len > 0; and the full
+    sequence is at least 2*ltr_len so it actually has the
+    [5' LTR][internal][3' LTR] structure), return ONLY the 5' LTR
+    (the first ltr_len bp), ignoring the 50–90% logic.
+
+    Anything that is not a well-formed LTR-RT (non-LTR TEs, or LTR headers
+    missing/short on LTRlen) falls back to the default chop.
+
+    The default path consumes the RNG in the original order (randint then
+    choice) so seeded runs reproduce byte-for-byte.
+    """
+    if (frag_ltr_solo
+            and (te_class or "").strip().lower() == "ltr"
+            and ltr_len is not None and ltr_len > 0
+            and len(te_sequence_full) >= 2 * ltr_len):
+        # solo 5' LTR (recombination-product-like fragment)
+        return te_sequence_full[:ltr_len]
+
+    # default: chop between 50% and 90% from one end
+    pct_chop = random.randint(50, 90) / 100.0
+    chop_left = random.choice([True, False])
+    cut = int(round(len(te_sequence_full) * pct_chop))
+    if chop_left:
+        return te_sequence_full[cut:]
+    else:
+        return te_sequence_full[:len(te_sequence_full) - cut]
+
+
 def add_frag_tag(header):
     """
     Insert _FRAG before the first '#' in header; if no '#', append.
@@ -760,14 +806,12 @@ def process_chromosome(task):
             else:  # 'frag'
                 selected_te = pick_header(frag_weights if frag_weights is not None else None)
                 te_sequence_full = te_dict[selected_te]
-                # fragmenting: chop between 50% and 90% from one end
-                pct_chop = random.randint(50, 90) / 100.0
-                chop_left = random.choice([True, False])
-                cut = int(round(len(te_sequence_full) * pct_chop))
-                if chop_left:
-                    te_sequence = te_sequence_full[cut:]
-                else:
-                    te_sequence = te_sequence_full[:len(te_sequence_full) - cut]
+                # fragmenting: default chops 50–90% off one end; with the
+                # FRAG_LTR_SOLO developer toggle, LTR-RTs are chopped to their
+                # 5' LTR only (see fragment_te()).
+                te_class = te_info_dict[selected_te]['class']
+                ltr_len = extract_ltr_length(selected_te)
+                te_sequence = fragment_te(te_sequence_full, te_class, ltr_len, FRAG_LTR_SOLO)
                 if len(te_sequence) <= 0:
                     continue  # extremely unlikely with 50–90 range, but guard anyway
 
@@ -917,6 +961,9 @@ def main():
         print(f"Global random seed set to {args.seed}.")
     else:
         print("No random seed provided. Results will be non-reproducible.")
+
+    if FRAG_LTR_SOLO:
+        print("[dev] FRAG_LTR_SOLO enabled: fragmented LTR-RTs chopped to 5' LTR only.")
 
     # Mutation bins: override k/Mmax if provided
     mutation_bins = None
