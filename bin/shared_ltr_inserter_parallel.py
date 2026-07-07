@@ -249,6 +249,82 @@ def compute_allowed_intervals(seq_length, exclusion_intervals):
         allowed.append((current, seq_length))
     return allowed
 
+# ── Fast-path geometry helpers ──────────────────────────────────────────────
+# These accelerate the placement hot loop WITHOUT changing results. The original
+# code re-sorted the whole (growing) exclusion list on every placement attempt
+# and after every insertion via merge_intervals(), giving O(N^2 log N) behavior
+# that dominates at high -p_frag. We instead track the free-space "gaps" (the
+# complement of the exclusions) directly and update them incrementally, so no
+# per-attempt sort or per-insertion list rebuild is ever done.
+# Equivalences (verified byte-for-byte against the originals):
+#   compute_gaps()   == compute_allowed_intervals(), for an already-merged list
+#   sample_position()== compute_allowed() candidate build + the r->position walk
+#   split_gap()      == recomputing the gaps after appending one exclusion
+def compute_gaps(chr_length, exclusion_intervals):
+    """Return (gap_lo, gap_hi) int64 arrays = the complement of the (already
+    sorted+merged) exclusion intervals within [0, chr_length]. Equivalent to
+    compute_allowed_intervals() but returned as parallel arrays for vectorized
+    sampling. Used once per chromosome to seed the gaps from the gene exclusions;
+    thereafter the gaps are maintained incrementally by split_gap()."""
+    if not exclusion_intervals:
+        return (np.array([0], dtype=np.int64),
+                np.array([chr_length], dtype=np.int64))
+    ex = np.asarray(exclusion_intervals, dtype=np.int64)
+    m = ex.shape[0]
+    starts = np.empty(m + 1, dtype=np.int64)
+    ends = np.empty(m + 1, dtype=np.int64)
+    starts[0] = 0
+    starts[1:] = ex[:, 1]
+    ends[:-1] = ex[:, 0]
+    ends[-1] = chr_length
+    keep = starts < ends
+    return starts[keep], ends[keep]
+
+def sample_position(gap_lo, gap_hi, tsd_length, deletion_length, randint):
+    """Vectorized equivalent of the original placement step:
+        candidate_intervals, total = compute_allowed(deletion_length, tsd_length)
+        if total <= 0: return None
+        r = randint(0, total-1); <linear walk over candidate_intervals> -> pos
+    RNG is consumed identically: randint() is called exactly once, with the same
+    `total`, and maps to the same position (searchsorted reproduces the walk).
+    Returns (deletion_start, gap_index) or (None, -1). gap_index is the index of
+    the gap the insertion lands in, used by split_gap()."""
+    lo = gap_lo + tsd_length
+    hi = gap_hi - deletion_length
+    sizes = hi - lo + 1
+    if sizes.size:
+        np.clip(sizes, 0, None, out=sizes)      # gaps too small -> 0 candidates
+    csum = np.cumsum(sizes)
+    total = int(csum[-1]) if csum.size else 0
+    if total <= 0:
+        return None, -1
+    r = randint(0, total - 1)
+    i = int(np.searchsorted(csum, r, side='right'))
+    prev = int(csum[i - 1]) if i > 0 else 0
+    return int(lo[i] + (r - prev)), i
+
+def split_gap(gap_lo, gap_hi, i, es, ee):
+    """Update the gap arrays after excluding [es, ee) which falls inside gap i.
+    Returns the new (gap_lo, gap_hi). Equivalent to recomputing the complement
+    after appending exclusion (es, ee): because every exclusion is >= 21 bp wide,
+    the +/-20 footprint can only touch gap i, so gap i splits into its remaining
+    left part (gap_lo[i], es) and/or right part (ee, gap_hi[i])."""
+    a = gap_lo[i]
+    b = gap_hi[i]
+    left = es > a
+    right = ee < b
+    if left and right:                     # exclusion strictly inside -> two gaps
+        gap_lo = np.concatenate((gap_lo[:i], np.array((a, ee), dtype=np.int64), gap_lo[i + 1:]))
+        gap_hi = np.concatenate((gap_hi[:i], np.array((es, b), dtype=np.int64), gap_hi[i + 1:]))
+    elif left:                             # right edge consumed -> shrink in place
+        gap_hi[i] = es
+    elif right:                            # left edge consumed -> shrink in place
+        gap_lo[i] = ee
+    else:                                  # whole gap consumed -> drop it
+        gap_lo = np.concatenate((gap_lo[:i], gap_lo[i + 1:]))
+        gap_hi = np.concatenate((gap_hi[:i], gap_hi[i + 1:]))
+    return gap_lo, gap_hi
+
 def mutate_sequence(seq, mutation_rate, ts_tv_ratio):
     ts_map = {'A': 'G', 'G': 'A', 'C': 'T', 'T': 'C'}
     tv_map = {
@@ -699,20 +775,13 @@ def process_chromosome(task):
         # If percent mode, they are bp (floats); if count, ints. Both ok for weights.
         return random.choices(['intact', 'frag'], weights=[wi, wf], k=1)[0]
 
-    def compute_allowed(deletion_length, tsd_length):
-        allowed = compute_allowed_intervals(chr_length, exclusion_intervals)
-        candidate_intervals = []
-        total_candidates = 0
-        for (a, b) in allowed:
-            lower_bound = a + tsd_length
-            upper_bound = b - deletion_length
-            if lower_bound <= upper_bound:
-                candidate_intervals.append((lower_bound, upper_bound))
-                total_candidates += (upper_bound - lower_bound + 1)
-        return candidate_intervals, total_candidates
+    # Free-space "gaps" = complement of the exclusions. Seeded once from the gene
+    # exclusions, then maintained incrementally by split_gap() as TEs are inserted
+    # (exclusions only ever grow, so gaps only shrink/split -- never merge).
+    gap_lo, gap_hi = compute_gaps(chr_length, exclusion_intervals)
 
     def try_insertion(which):
-        nonlocal exclusion_intervals, seq
+        nonlocal seq, gap_lo, gap_hi
         max_attempts_local = 10
         for _ in range(max_attempts_local):
             if which == 'intact':
@@ -761,21 +830,9 @@ def process_chromosome(task):
                 TE_length = len(te_sequence)
                 deletion_length = TE_length + tsd_length
 
-                candidate_intervals, total_candidates = compute_allowed(deletion_length, tsd_length)
-                if total_candidates <= 0:
+                deletion_start, gap_idx = sample_position(gap_lo, gap_hi, tsd_length, deletion_length, random.randint)
+                if deletion_start is None:
                     continue
-
-                r = random.randint(0, total_candidates - 1)
-                chosen_deletion_start = None
-                for (low, high) in candidate_intervals:
-                    interval_length = high - low + 1
-                    if r < interval_length:
-                        chosen_deletion_start = low + r
-                        break
-                    r -= interval_length
-                if chosen_deletion_start is None:
-                    continue
-                deletion_start = chosen_deletion_start
 
                 tsd_seq = ''.join(seq[deletion_start - tsd_length: deletion_start]) if tsd_length > 0 else ''
 
@@ -798,8 +855,7 @@ def process_chromosome(task):
                 # expand exclusion ±20 bp around the full deletion footprint
                 new_excl_start = max(0, deletion_start - 20)
                 new_excl_end = min(chr_length, deletion_start + deletion_length + 20)
-                exclusion_intervals.append((new_excl_start, new_excl_end))
-                exclusion_intervals = merge_intervals(exclusion_intervals)
+                gap_lo, gap_hi = split_gap(gap_lo, gap_hi, gap_idx, new_excl_start, new_excl_end)
 
                 return TE_length, len(te_seq_final), 'intact'  # (deleted TE len, inserted len, type)
 
@@ -830,21 +886,9 @@ def process_chromosome(task):
                 TE_length = len(te_sequence)  # no TSD
                 deletion_length = TE_length
 
-                candidate_intervals, total_candidates = compute_allowed(deletion_length, tsd_length)
-                if total_candidates <= 0:
+                deletion_start, gap_idx = sample_position(gap_lo, gap_hi, tsd_length, deletion_length, random.randint)
+                if deletion_start is None:
                     continue
-
-                r = random.randint(0, total_candidates - 1)
-                chosen_deletion_start = None
-                for (low, high) in candidate_intervals:
-                    interval_length = high - low + 1
-                    if r < interval_length:
-                        chosen_deletion_start = low + r
-                        break
-                    r -= interval_length
-                if chosen_deletion_start is None:
-                    continue
-                deletion_start = chosen_deletion_start
 
                 strand = random.choice(['+', '-'])
                 te_seq_final = reverse_complement(te_sequence) if strand == '-' else te_sequence
@@ -864,8 +908,7 @@ def process_chromosome(task):
 
                 new_excl_start = max(0, deletion_start - 20)
                 new_excl_end = min(chr_length, deletion_start + deletion_length + 20)
-                exclusion_intervals.append((new_excl_start, new_excl_end))
-                exclusion_intervals = merge_intervals(exclusion_intervals)
+                gap_lo, gap_hi = split_gap(gap_lo, gap_hi, gap_idx, new_excl_start, new_excl_end)
 
                 return TE_length, len(te_seq_final), 'frag'
 
