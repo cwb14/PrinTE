@@ -99,6 +99,23 @@ def parse_attributes(name):
     return name, []
 
 
+LINEAGE_PREFIXES = ("shared_", "uniq_")
+
+
+def strip_lineage_prefix(feature_id):
+    """
+    Drop a leading lineage tag (see util/LTR_phylo.R) from a BED feature_id.
+
+    The per-generation library is recycled as the insertion source for the next
+    generation, so a tag left on a header is inherited verbatim by every new
+    insertion drawn from it, and by everything drawn from their descendants.
+    """
+    for prefix in LINEAGE_PREFIXES:
+        if feature_id.startswith(prefix):
+            return feature_id[len(prefix):]
+    return feature_id
+
+
 def extract_TE_info(feature_id):
     """
     From a feature_id like "TE#LTR/Super~LTRlen:100", extract:
@@ -235,7 +252,7 @@ def extract_intact_TEs(records, genome):
             internal = seq[ltr_len:-ltr_len]
             seq = five + internal + five
 
-        out.append((rec['feature_id'], seq))
+        out.append((strip_lineage_prefix(rec['feature_id']), seq))
     return out
 
 
