@@ -128,12 +128,12 @@ A PrinTE run has two phases:
   library*, then write `gen<N>_final.{fasta,bed,lib}`.
 
 PrinTE models both **copy-and-paste** (Type 1) and **cut-and-paste** (Type 2) transposition.
-Families flagged `cutpaste` in the `transposition` column of `ratios.tsv` are conserved. Ie, they
-are excluded from replicative amplification, and when an *intact* element is excised it
-relocates (an element of the same superfamily is re-inserted the next generation, keeping copy
-number constant); a *fragmented* copy (`_FRAG`, `_SOLO`, or one cut by a nested insertion) is
-simply lost. Every other family is copy-and-paste and can amplify. Older 4-column `ratios.tsv`
-files (no `transposition` column) behave as all copy-and-paste, exactly as before.
+Families flagged `cutpaste` in the `transposition` column of `ratios.tsv` are excluded from
+replicative amplification, but real cut-and-paste transposons often do not precisely conserve copy 
+number in a 1:1 way. PrinTE controls the balance between excision and successful re-insertion 
+is set by `--cutpaste_reinsertion` (default 1.0: each excision is repaid by exactly one re-insertion, 
+conserving copy number).  Set the ratio <1.0 for a net loss (failed re-insertion) or >1.0 for net 
+amplification (insertions without excision). 
 
 ### Phase 1 - the burn-in genome
 
