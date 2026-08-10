@@ -233,6 +233,8 @@ Phase 1 is skipped when you supply --fasta/--bed or --continue.
   -ir,  --insert_rate RATE     Insertions per intact TE per generation (default: 1e-8).
   -dr,  --delete_rate RATE     Deletions  per intact TE per generation (default: 1e-7).
   -br,  --birth_rate RATE      Rate of reintroducing TEs from the original library (default: 1e-3).
+  -cpr, --cutpaste_reinsertion F  Expected re-insertions per cut-and-paste excision (default: 1.0
+                               = conserve copy number; <1 net loss, >1 net amplification).
   Fixed -- constant per-base rates:
   -F,   --fix INS,DEL          Fixed insertion,deletion per bp per generation, e.g. -F 5e-9,1e-8.
   -dg,  --disable_genes        Forbid TE insertion into genes (Fixed mode only).
@@ -394,6 +396,9 @@ while [[ $# -gt 0 ]]; do
     -sr|--solo_rate)
       solo_rate="$2"
       shift; shift;;
+    -cpr|--cutpaste_reinsertion)
+      cutpaste_reinsertion="$2"
+      shift; shift;;
     -TsTv|--TsTv)
       TsTv="$2"
       shift; shift;;
@@ -489,6 +494,7 @@ insert_rate="${insert_rate:-1e-8}"
 birth_rate="${birth_rate:-1e-3}"
 delete_rate="${delete_rate:-1e-7}"
 solo_rate="${solo_rate:-95}"
+cutpaste_reinsertion="${cutpaste_reinsertion:-1.0}"
 k="${k:-10}"
 sigma="${sigma:-1.0}"
 max_size="${max_size:-}" # If not set, remains empty
@@ -887,7 +893,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
   # (2b) Insert new TEs (allowing for nesting) using the parallel nest inserter.
   # Now using nest_inserter_parallel.py and adding --disable_genes if specified.
   nest_prefix="gen${current_gen}_nest"
-  cmd="python ${BIN_DIR}/nest_inserter_parallel.py --genome ${mut_prefix}.fa --TE ${prev_lib} --generations ${step} --bed ${prev_bed} --output ${nest_prefix} --seed ${current_seed} --rate ${insert_rate} ${extra_fix_in} --TE_ratio ${TE_ratio} -bf burnin.stat --birth_rate ${birth_rate}"
+  cmd="python ${BIN_DIR}/nest_inserter_parallel.py --genome ${mut_prefix}.fa --TE ${prev_lib} --generations ${step} --bed ${prev_bed} --output ${nest_prefix} --seed ${current_seed} --rate ${insert_rate} ${extra_fix_in} --TE_ratio ${TE_ratio} -bf burnin.stat --birth_rate ${birth_rate} --cutpaste_reinsertion ${cutpaste_reinsertion}"
   cmd+=" --euch_het_bias ${euch_bias_insert} --euch_het_buffer ${euch_buffer} -m ${threads}"
   if [[ $disable_genes -eq 1 ]]; then
     cmd+=" --disable_genes"
