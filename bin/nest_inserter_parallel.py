@@ -73,7 +73,16 @@ def parse_args():
                         help="Number of chromosomes to process simultaneously. Default=1")
     parser.add_argument("--disable_genes", action="store_true",
                         help="Disable insertion into genes (only effective if --fix_in is provided).")
-    return parser.parse_args()
+    parser.add_argument("--cutpaste_reinsertion", type=float, default=1.0,
+                        help="Expected successful re-insertions per excised cut-and-paste "
+                             "element. 1.0 conserves copy number (strict one-to-one "
+                             "excision-reinsertion); <1.0 models failed re-insertion "
+                             "(net loss); >1.0 models replication/repair-coupled "
+                             "amplification (net gain). Default=1.0")
+    args = parser.parse_args()
+    if args.cutpaste_reinsertion < 0:
+        parser.error("--cutpaste_reinsertion must be >= 0.")
+    return args
 
 def read_fasta(fasta_path):
     sequences = {}
@@ -812,20 +821,32 @@ def main():
         print(f"Total insertion events after adding born TEs: {len(insertion_events)}")
     # --- End New TE Birth functionality ---
 
-    # --- Consume conserved cut-and-paste relocation debt from prior gen ---
+    # --- Consume cut-and-paste relocation debt from prior gen ---
+    # Each excised element yields on average --cutpaste_reinsertion successful
+    # re-insertions: 1.0 conserves copy number, <1.0 nets loss (failed
+    # re-insertion), >1.0 nets gain (replication/repair-coupled amplification).
+    # The fractional remainder is resolved by one stochastic-rounding draw per
+    # family; the frac > 0 guard keeps the random stream untouched at 1.0.
     if os.path.exists(_DEBT_FILE):
         debt = _cc.read_debt(_DEBT_FILE)
-        added = skipped = 0
+        excised = added = skipped = 0
         for fam, cnt in debt.items():
             if fam in te_by_category:
-                insertion_events.extend([fam] * cnt)
-                added += cnt
+                excised += cnt
+                expected = cnt * args.cutpaste_reinsertion
+                n = int(expected)
+                frac = expected - n
+                if frac > 0 and random.random() < frac:
+                    n += 1
+                insertion_events.extend([fam] * n)
+                added += n
             else:
                 skipped += cnt
         os.remove(_DEBT_FILE)
-        print(f"Cut-and-paste relocation: re-inserted {added} element(s) "
-              f"from {_DEBT_FILE}; skipped {skipped} (family extinct in "
-              f"library). Consumed and removed {_DEBT_FILE}.")
+        print(f"Cut-and-paste relocation: {excised} excised element(s) -> "
+              f"{added} re-inserted (reinsertion ratio "
+              f"{args.cutpaste_reinsertion}); skipped {skipped} (family "
+              f"extinct in library). Consumed and removed {_DEBT_FILE}.")
 
     random.shuffle(insertion_events)
 
