@@ -1,0 +1,25 @@
+Bootstrap: docker
+From: ghcr.io/cwb14/printe:latest
+
+# Apptainer needs no daemon and no root to pull or run this, which is what shared
+# clusters allow. Build a local .sif with:  make apptainer
+# Or skip the build entirely:  apptainer pull docker://ghcr.io/cwb14/printe:latest
+
+%labels
+    Maintainer Chris Benson
+    Source     https://github.com/cwb14/PrinTE
+
+%environment
+    export PRINTE_MUTATOR=/opt/conda/bin/ltr_mutator
+    export PRINTE_SCRIPT=/opt/printe/PrinTE.sh
+    export PRINTE_DATA=/opt/printe/data
+    export PRINTE_CACHE=${TMPDIR:-/tmp}/printe
+    export PATH=/opt/conda/bin:$PATH
+
+%runscript
+    exec printe "$@"
+
+%test
+    printe --version
+    printe --help > /dev/null
+    ltr_mutator 2>&1 | head -1

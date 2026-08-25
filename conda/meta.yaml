@@ -1,0 +1,57 @@
+{% set name = "printe" %}
+{% set version = "1.0.0" %}
+
+package:
+  name: {{ name }}
+  version: {{ version }}
+
+source:
+  url: https://github.com/cwb14/PrinTE/archive/refs/tags/v{{ version }}.tar.gz
+  sha256: 0000000000000000000000000000000000000000000000000000000000000000
+
+build:
+  number: 0
+  script: bash conda/build.sh
+  run_exports:
+    - {{ pin_subpackage(name, max_pin="x") }}
+
+requirements:
+  build:
+    - {{ compiler('cxx') }}
+    - make
+  host:
+    - python >=3.10
+    - pip
+    - setuptools >=68
+  run:
+    - python >=3.10
+    - biopython >=1.80
+    - matplotlib-base >=3.7
+    - numpy >=1.24
+    - pandas >=2.0
+    - pysam >=0.21
+    - scikit-learn >=1.3
+    - scipy >=1.10
+    - seaborn >=0.12
+    - blast
+    - samtools
+    - minimap2
+
+test:
+  commands:
+    - printe --version
+    - printe --help > /dev/null
+    - printe-benchmark --help > /dev/null
+    - printe-score --help > /dev/null
+    - ltr_mutator 2>&1 | head -1
+
+about:
+  home: https://github.com/cwb14/PrinTE
+  license: GPL-3.0-or-later
+  license_file: LICENSE
+  summary: Forward, per-generation simulator of transposable-element genome evolution
+  doc_url: https://github.com/cwb14/PrinTE#readme
+
+extra:
+  recipe-maintainers:
+    - cwb14
