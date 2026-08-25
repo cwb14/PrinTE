@@ -66,25 +66,40 @@ mamba install -y -c conda-forge apptainer     # skip if `apptainer --version` al
 
 apptainer pull printe.sif docker://ghcr.io/cwb14/printe:latest
 
-# Make `printe` mean "run PrinTE inside that image", now and at every future login.
-mkdir -p ~/.local/bin
-cat > ~/.local/bin/printe <<EOF
-#!/bin/bash
-exec apptainer exec "$PWD/printe.sif" printe "\$@"
-EOF
-chmod +x ~/.local/bin/printe
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-export PATH="$HOME/.local/bin:$PATH"
-
-printe --version
+./printe.sif --version
 ```
 
-You should see `PrinTE 1.0.0`. Apptainer automatically makes your current directory
+You should see `PrinTE 1.0.0`. **The image is the program** - run it as `./printe.sif`
+followed by the usual options. Nothing was installed anywhere else, `ls` shows you the
+whole of PrinTE, and `rm printe.sif` removes it. Apptainer makes your current directory
 visible inside the image, so results land where you ran the command.
 
-This makes a small `printe` script rather than a shell alias on purpose: an alias would
-not work inside a SLURM job script, and this does. Keep `printe.sif` where it is - the
-wrapper points at that exact path.
+In the examples below, wherever you see `printe`, type `./printe.sif` instead (or the full
+path to it, if you are working in a different directory).
+
+<details>
+<summary><b>Optional:</b> type <code>printe</code> from anywhere instead of <code>./printe.sif</code></summary>
+
+This is the only step in these instructions that changes anything outside the current
+folder. It writes one small launcher and adds one line to `~/.bashrc`. Re-running it is
+harmless, and the last line tells you how to undo it.
+
+```bash
+mkdir -p ~/.local/bin
+printf '#!/bin/bash\nexec "%s/printe.sif" "$@"\n' "$PWD" > ~/.local/bin/printe
+chmod +x ~/.local/bin/printe
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' ~/.bashrc \
+  || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+export PATH="$HOME/.local/bin:$PATH"
+
+printe --version        # to undo later:  rm ~/.local/bin/printe
+```
+
+The launcher points at that exact `printe.sif`, so do not move the image afterwards. If
+you later install PrinTE from source as well, delete this launcher first - it sits ahead
+of your conda environment on `PATH` and would shadow the other copy.
+
+</details>
 
 ### 2. From source - if you want to read or change the code
 
@@ -103,6 +118,10 @@ on your PATH - without it the quick start below will not run. You can also call
 `bash PrinTE.sh` from inside the clone instead; it is the same program.
 
 Remember to `conda activate PrinTE` in every new terminal.
+
+If `printe --version` fails with `apptainer: not found`, you have a leftover wrapper from
+route 1 shadowing this install. Run `command -v printe` to confirm, then
+`rm ~/.local/bin/printe`.
 
 ### 3. Nextflow - if you want to run many parameter sets, or use a cluster
 

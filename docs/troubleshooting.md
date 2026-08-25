@@ -34,6 +34,39 @@ More threads (`-t`) means more concurrent chromosome copies, so on a memory-tigh
 lower `-t` before you lower anything else. Under Nextflow the `process_high` label
 retries with double the memory, which covers most first-attempt OOMs.
 
+### `printe` runs the wrong PrinTE, or fails with `apptainer`/`run-singularity` not found
+
+You installed PrinTE more than one way. The container route's optional launcher lives in
+`~/.local/bin/printe` and that directory sits at the front of your `PATH`, so it wins over
+the `printe` that `pip install -e .` puts in your conda environment. Depending on whether
+Apptainer is on your `PATH` you will either get an error like
+
+```
+printe: line 2: exec: apptainer: not found
+/usr/bin/env: 'run-singularity': No such file or directory
+```
+
+or, more confusingly, no error at all - just the container's PrinTE rather than the source
+copy you meant to run.
+
+Find out which one you are getting:
+
+```bash
+command -v printe
+```
+
+If that prints `~/.local/bin/printe` and you meant to use the source or conda install,
+delete the launcher:
+
+```bash
+rm ~/.local/bin/printe
+```
+
+If you did mean to use the container, the message means Apptainer is not available in this
+shell - load the module that provides it, or `mamba install -y -c conda-forge apptainer`.
+You can always skip the launcher entirely and run the image directly as
+`/full/path/to/printe.sif --burnin_only ...`.
+
 ### ltr_mutator will not build
 
 PrinTE compiles the point-mutation binary on first use rather than shipping one, so a
