@@ -62,6 +62,10 @@ produce byte-identical output to the pre-packaging code for the same seed.
 - `genome_plot.py` executed its whole body on import.
 - A malformed weight in `ratios.tsv` silently disabled that TE family for the entire run.
   It now warns on stderr; the fallback value is unchanged.
+- The container could not be run as a command. `printe` was the Docker `CMD`, and
+  arguments replace the CMD, so `./printe.sif --version` or `docker run printe --version`
+  dropped `printe` and tried to exec `--version`. It is part of the `ENTRYPOINT` now, so
+  the image works as `./printe.sif <options>`.
 - `plot_pipeline_report.R` reported saving a different filename than it wrote.
 
 ### Removed

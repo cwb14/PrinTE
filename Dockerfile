@@ -39,5 +39,8 @@ ENV PRINTE_MUTATOR=/opt/conda/bin/ltr_mutator \
 
 USER $MAMBA_USER
 WORKDIR /work
-ENTRYPOINT ["/usr/local/bin/_entrypoint.sh"]
-CMD ["printe"]
+# printe belongs in the ENTRYPOINT, not the CMD: arguments replace CMD, so with
+# CMD ["printe"] a `docker run printe --version` would drop printe and try to exec
+# --version. Putting it here makes the image runnable as a command, which is also
+# what lets `./printe.sif --burnin_only ...` work under Apptainer.
+ENTRYPOINT ["/usr/local/bin/_entrypoint.sh", "printe"]
