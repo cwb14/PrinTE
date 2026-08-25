@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check src tests
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - run: shellcheck -S warning PrinTE.sh scripts/*.sh
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.12"]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libomp
+        if: runner.os == 'macOS'
+        run: brew install libomp
+
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          create-args: python=${{ matrix.python }}
+          cache-environment: true
+
+      - name: Build ltr_mutator
+        run: make ltr-mutator
+
+      - name: Unit tests
+        run: make test-fast
+
+      # The end-to-end runs are Linux-only: macOS runners are slower and this adds
+      # nothing the Linux matrix does not already cover. macOS earns its place by
+      # exercising the clang/libomp build above.
+      - name: End-to-end tests
+        if: runner.os == 'Linux'
+        run: PYTHONPATH=src python -m pytest tests -v -m slow
+
+      - name: Install the package and check the entry points
+        run: |
+          pip install .
+          printe --help > /dev/null
+          printe-benchmark --help > /dev/null
+          printe-score --help > /dev/null
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: printe:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Run a burn-in inside the image
+        run: |
+          mkdir -p out
+          docker run --rm -u "$(id -u):$(id -g)" -v "$PWD/out:/work" -w /work \
+            -v "$PWD/tests/data:/fixtures:ro" printe:ci \
+            printe --burnin_only -sz 60kb -cn 1 -P 4 -itp 10 \
+                   -cl /fixtures/tiny_TE.lib -c /fixtures/tiny_cds.fa \
+                   -r /fixtures/tiny_ratios.tsv -t 2 -s 42
+          test -s out/burnin.fasta
+          test -s out/burnin.bed
+
+  nextflow:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: nf-core/setup-nextflow@v2
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          cache-environment: true
+      - run: make ltr-mutator
+      # The pipeline calls `printe`, which is not in environment.yml.
+      - run: pip install .
+      - run: nextflow run . -profile test,local --outdir nf_results
+      - run: test -s nf_results/burnin/burnin.fasta
+      - run: test -s nf_results/simulations/single/gen200_final.fasta

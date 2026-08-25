@@ -1,0 +1,53 @@
+name: Bug report
+description: Something went wrong during a run
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: on a failed run, `pipeline.error` in the working directory holds
+        the traceback. On a successful run it contains only a start banner, so anything
+        else in it is the real failure. Please paste the end of it below.
+  - type: input
+    id: version
+    attributes:
+      label: PrinTE version
+      description: Output of `printe --version`, or the commit you are on.
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - conda / mamba
+        - container (Apptainer or Docker)
+        - pip
+        - from source
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS and machine
+      placeholder: "Ubuntu 22.04, 32 cores, 128 GB / macOS 14.6 Apple M2"
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: The exact command you ran
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Tail of pipeline.error
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?

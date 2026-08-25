@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest a capability or a change to how something is modelled
+labels: [enhancement]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to model?
+      description: The biological question, not the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: gap
+    attributes:
+      label: Why do the current options not cover it?
+      description: Which flags you tried and where they fell short.
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: Do you have a genome or annotation to test against?
