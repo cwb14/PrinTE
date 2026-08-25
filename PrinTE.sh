@@ -16,7 +16,7 @@
 # Post-processing then dates the LTR-RTs and draws the summary figures.
 #
 # The per-step work lives in the printe Python package under src/, invoked here as
-# 'python -m printe.<module>'. SRC_DIR is put on PYTHONPATH below so this runs from
+# 'python -m printe.<module>'. src/ is put on PYTHONPATH below so this runs from
 # a plain clone as well as from an installed package.
 #
 # Run with -h for the full option list.
@@ -24,16 +24,33 @@
 
 # --- Determine directories ---
 TOOL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-SRC_DIR="${TOOL_DIR}/src"
 
 # Run the bundled package whether or not PrinTE has been pip-installed. The :+ guard
 # keeps an unset PYTHONPATH from turning into a leading colon, which would put the
 # working directory on the import path.
-PYTHONPATH="${SRC_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+PYTHONPATH="${TOOL_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONPATH
 
-# ltr_mutator is compiled on first use rather than shipped; see Makefile.
-BIN_DIR="${PRINTE_MUTATOR_DIR:-${TOOL_DIR}/bin}"
+# Ask Python where the package landed rather than guessing from this script's location:
+# in a checkout that is <repo>/src/printe, but an install puts the script in
+# <prefix>/share/printe and the package in site-packages. The data files and the
+# ltr_mutator source travel with the package either way.
+PKG_DIR="$(python -c 'import printe, pathlib; print(pathlib.Path(printe.__file__).parent)' 2>/dev/null)"
+if [[ -z "$PKG_DIR" ]]; then
+  echo "Error: cannot import the printe package. From a checkout, run this script in place;" >&2
+  echo "       otherwise install it with 'pip install printe'." >&2
+  exit 1
+fi
+
+# ltr_mutator is compiled on first use rather than shipped; see Makefile. A conda or
+# container install already put it on PATH, so look there before building anything.
+if [[ -n "${PRINTE_MUTATOR_DIR:-}" ]]; then
+  BIN_DIR="${PRINTE_MUTATOR_DIR}"
+elif mkdir -p "${TOOL_DIR}/bin" 2>/dev/null && [[ -w "${TOOL_DIR}/bin" ]]; then
+  BIN_DIR="${TOOL_DIR}/bin"
+else
+  BIN_DIR="${PRINTE_CACHE:-${HOME}/.cache/printe}/bin"
+fi
 
 # --- Check the OS is one we build for ---
 OS="$(uname)"
@@ -45,14 +62,20 @@ case "$OS" in
     exit 1
     ;;
 esac
-mutator_exec="${PRINTE_MUTATOR:-${BIN_DIR}/ltr_mutator}"
+if [[ -n "${PRINTE_MUTATOR:-}" ]]; then
+  mutator_exec="${PRINTE_MUTATOR}"
+elif command -v ltr_mutator &>/dev/null; then
+  mutator_exec="$(command -v ltr_mutator)"
+else
+  mutator_exec="${BIN_DIR}/ltr_mutator"
+fi
 
 # --- Make sure ltr_mutator is built and runnable; build it if not ---
 # The binary is compiled on first use rather than shipped, so a clone works on any
 # libc without carrying a platform-specific blob. Called once after LOG/ERR exist.
 ensure_mutator() {
   local bin="${mutator_exec}"
-  local src="${SRC_DIR}/printe/cpp/ltr_mutator.cpp"
+  local src="${PKG_DIR}/cpp/ltr_mutator.cpp"
 
   # Probe it. Anything that fails before main() runs - a missing file, a wrong ELF
   # class, a GLIBC mismatch - shows up either as a loader message or as exit 126/127.
@@ -487,7 +510,7 @@ size="${size:-400Mb}"
 seed="${seed:-42}"
 TE_lib="${TE_lib:-$(python -m printe.paths maize_rice_arab_curated_TE.lib.gz 2>/dev/null || echo "${TOOL_DIR}/data/maize_rice_arab_curated_TE.lib.gz")}"
 mutation_rate="${mutation_rate:-1.3e-8}"
-TE_ratio="${TE_ratio:-${SRC_DIR}/printe/data/ratios.tsv}"
+TE_ratio="${TE_ratio:-${PKG_DIR}/data/ratios.tsv}"
 threads="${threads:-4}"
 insert_rate="${insert_rate:-1e-8}"
 birth_rate="${birth_rate:-1e-3}"
@@ -1213,28 +1236,20 @@ eval $cmd
 ###############################################################################
 echo "=== Per-Generation Post-Processing ===" | tee -a "$LOG"
 
-# Ensure Kmer2LTR is available (clone into TOOL_DIR if missing)
-if [[ ! -d "${TOOL_DIR}/Kmer2LTR" ]]; then
-  echo "Cloning Kmer2LTR into ${TOOL_DIR}..." | tee -a "$LOG"
-  (
-    cd "${TOOL_DIR}" \
-      && git clone https://github.com/cwb14/Kmer2LTR.git
-  ) >> "$LOG" 2>> "$ERR"
-  if [ $? -ne 0 ]; then
-    echo "Error cloning Kmer2LTR" | tee -a "$ERR"
-    exit 1
-  fi
+# Kmer2LTR dates the LTR-RTs below. Prefer an existing in-tree clone so setups from
+# before 1.0.0 keep working; otherwise put it in the cache, since an installed or
+# containerised PrinTE cannot write next to its own script.
+if [[ -d "${TOOL_DIR}/Kmer2LTR" ]]; then
+  KMER2LTR_DIR="${TOOL_DIR}/Kmer2LTR"
+else
+  KMER2LTR_DIR="${PRINTE_CACHE:-${HOME}/.cache/printe}/Kmer2LTR"
 fi
-
-# Ensure Kmer2LTR is available (clone into TOOL_DIR if missing)
-if [[ ! -d "${TOOL_DIR}/Kmer2LTR" ]]; then
-  echo "Cloning Kmer2LTR into ${TOOL_DIR}..." | tee -a "$LOG"
-  (
-    cd "${TOOL_DIR}" \
-      && git clone https://github.com/cwb14/Kmer2LTR.git
-  ) >> "$LOG" 2>> "$ERR"
+if [[ ! -d "${KMER2LTR_DIR}" ]]; then
+  echo "Cloning Kmer2LTR into ${KMER2LTR_DIR}..." | tee -a "$LOG"
+  mkdir -p "$(dirname "${KMER2LTR_DIR}")"
+  git clone https://github.com/cwb14/Kmer2LTR.git "${KMER2LTR_DIR}" >> "$LOG" 2>> "$ERR"
   if [ $? -ne 0 ]; then
-    echo "Error cloning Kmer2LTR" | tee -a "$ERR"
+    echo "Error cloning Kmer2LTR into ${KMER2LTR_DIR}" | tee -a "$ERR"
     exit 1
   fi
 fi
@@ -1355,7 +1370,7 @@ for i_idx in "${desc_idx[@]}"; do
   eval $cmd
 
   # (b2) Kmer2LTR
-  cmd="python ${TOOL_DIR}/Kmer2LTR/Kmer2LTR.py -p ${threads} -i ${final_prefix}_LTR.fasta -D ${final_prefix}_LTR.domain -o ${final_prefix}_LTR.tsv -u ${mutation_rate} --no-plot --purge-subdirs"
+  cmd="python ${KMER2LTR_DIR}/Kmer2LTR.py -p ${threads} -i ${final_prefix}_LTR.fasta -D ${final_prefix}_LTR.domain -o ${final_prefix}_LTR.tsv -u ${mutation_rate} --no-plot --purge-subdirs"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd
 

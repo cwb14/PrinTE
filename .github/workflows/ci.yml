@@ -49,6 +49,10 @@ jobs:
       - name: Build ltr_mutator
         run: make ltr-mutator
 
+      # pytest lives in the dev extra, not environment.yml, which is the runtime env.
+      - name: Install with dev dependencies
+        run: pip install -e '.[dev]'
+
       - name: Unit tests
         run: make test-fast
 
@@ -59,9 +63,10 @@ jobs:
         if: runner.os == 'Linux'
         run: PYTHONPATH=src python -m pytest tests -v -m slow
 
-      - name: Install the package and check the entry points
+      - name: Check a non-editable install and its entry points
         run: |
-          pip install .
+          pip install --force-reinstall --no-deps .
+          printe --version
           printe --help > /dev/null
           printe-benchmark --help > /dev/null
           printe-score --help > /dev/null
