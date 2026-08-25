@@ -1,0 +1,16 @@
+# Optional. Needed only for Track 1 ancestral reconstruction and the R plotters in R/.
+name: PrinTE-R
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - r-base >=4.2
+  - r-ape
+  - r-phytools
+  - r-optparse
+  - r-ggplot2
+  - r-dplyr
+  - r-tidyr
+  - r-stringr
+  - r-viridis
+  - bioconductor-ggtree

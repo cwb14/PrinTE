@@ -1,5 +1,41 @@
-# ignore fasta file
-*.fasta
+# Build output
+bin/
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
 
-# ignore gff
+# Test and tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Nextflow
+work/
+.nextflow*
+results/
+
+# Cloned at runtime, and built images
+Kmer2LTR/
+*.sif
+
+# Simulation output. These patterns are deliberately broad because runs happen in
+# whatever directory the user picks, including inside a checkout. Anything in the
+# repository that they would otherwise swallow is un-ignored below.
+*.fasta
 *.gff
+pipeline.log
+pipeline.error
+pipeline.report
+gen*_final.*
+gen*_mut.*
+burnin.*
+lib_clean.fa
+lib.fa
+lib.txt
+backbone.*
+
+# Tracked files the patterns above would otherwise hide.
+!nf/modules/burnin.nf
+!tests/data/*.gff

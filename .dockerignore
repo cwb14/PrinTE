@@ -1,0 +1,13 @@
+.git
+.github
+work
+.nextflow*
+results
+bin
+build
+dist
+*.egg-info
+__pycache__
+.pytest_cache
+.ruff_cache
+*.sif

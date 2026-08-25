@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "printe"
+dynamic = ["version"]
+description = "Forward, per-generation simulator of transposable-element genome evolution"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Chris Benson" }]
+keywords = [
+  "transposable elements",
+  "genome evolution",
+  "forward simulation",
+  "LTR retrotransposon",
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS :: MacOS X",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+  "biopython>=1.80",
+  "matplotlib>=3.7",
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "pysam>=0.21",
+  "scikit-learn>=1.3",
+  "scipy>=1.10",
+  "seaborn>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "pytest-xdist>=3.5", "ruff>=0.16", "pre-commit>=3.5"]
+
+[project.scripts]
+printe = "printe._cli:main"
+printe-grid = "printe.grid.guided_search:main"
+printe-score = "printe.grid.build_composite_matrix:main"
+printe-benchmark = "printe.util.bedtools:main"
+
+[project.urls]
+Homepage = "https://github.com/cwb14/PrinTE"
+Issues = "https://github.com/cwb14/PrinTE/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "printe.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+printe = ["data/*.tsv", "cpp/*.cpp"]
+
+[tool.setuptools.data-files]
+"share/printe" = ["PrinTE.sh"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "slow: runs the pipeline end to end (tens of seconds)",
+  "needs_blast: requires blastn on PATH",
+  "needs_r: requires Rscript with ape and phytools",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = [
+  "E501",  # long lines are mostly help text and BLAST format strings
+  "B905",  # zip(strict=) reads worse than it helps in the numeric loops here
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The header is a verbatim record of how the input library was normalised.
+"src/printe/util/fasta_to_RepeatMasker.py" = ["E402"]
