@@ -1,0 +1,508 @@
+#!/usr/bin/env python3
+
+# Extracts an updated TE library from bed and fasta. 
+# Non-LTRs are extracted directly.
+# LTR-RTs are modified so that the 3' LTR matches the 5' LTR.
+# Script works well, but some minor confusion when seq_divergence.py has a tough time identifying exact LTR lengths (probably doesnt matter).
+# To resolve, I can consider pre-processing TE library such that the 5' and 3' LTRs are forced to be exactly identical and exact specified length. # I added library mode to do this.
+# Our length based deletions leads to pereferential loss of long elements. I added '--weight_by' to offset this. The fasta provided here is the base TE library. 
+
+"""
+extract_intact_TEs
+
+Extracts TE sequences from a genome (--bed + --genome) or processes a TE library (--lib),
+with optional length-weighted resampling to match a guide distribution.
+
+Usage:
+  Genome mode:
+    printe.extract_intact_TEs --bed file1.bed file2.bed --genome genome.fa \
+        --out_fasta out.fa [--weight_by guide.fa] [--plot_kde_comparison] [--exclude_missing_ltr_len] [--exclude_truncated]
+  Library mode:
+    printe.extract_intact_TEs --lib te_library.fa --out_fasta out.fa \
+        [--exclude_missing_ltr_len] [--weight_by guide.fa] [--exclude_truncated]
+
+Options:
+  -h, --help            Show this help message and exit
+  --bed BED [BED ...]   One or more BED files specifying TE coordinates (genome mode)
+  --genome FASTA        Reference genome FASTA (required with --bed)
+  --lib FASTA           TE library FASTA to correct LTR ends (library mode)
+  --out_fasta FILE      Output FASTA path (required)
+  --weight_by FASTA     Guide FASTA whose length distribution is targeted and,
+                        if --exclude_truncated is set, used as the reference
+                        full-length TE set.
+  --duplication_mode    Retain all original sequences and duplicate additional copies according to importance weights (only with --weight_by)
+  --plot_kde_comparison Save KDE comparison plot as <out_basename>_kde_comparison.pdf
+  --exclude_missing_ltr_len  Exclude intact LTR elements that are missing LTR length info (~LTRlen) from output
+  --exclude_truncated   Exclude intact TEs that are <90%% of the length of the
+                        matching TE in --weight_by (matched by feature_id)
+"""
+
+import argparse
+import os
+import sys
+
+import matplotlib
+import numpy as np
+from scipy.stats import gaussian_kde
+
+matplotlib.use("Agg")  # for non-interactive / cluster use
+import matplotlib.pyplot as plt
+
+# ---------- Fast FASTA helpers (replace BioPython SeqIO) ----------
+
+_COMPLEMENT = str.maketrans("ACGTacgtNnRYSWKMBDHVryswkmbdhv",
+                            "TGCAtgcaNnYRSWMKVHDByrswmkvhdb")
+
+
+def reverse_complement(seq):
+    """Fast reverse complement without BioPython."""
+    return seq.translate(_COMPLEMENT)[::-1]
+
+
+def parse_fasta(path):
+    """
+    Yield (header, sequence) tuples from a FASTA file.
+    ~5-10x faster than BioPython SeqIO.parse for plain FASTA.
+    """
+    with open(path) as fh:
+        header = None
+        chunks = []
+        for line in fh:
+            if line[0] == ">":
+                if header is not None:
+                    yield header, "".join(chunks)
+                header = line[1:].rstrip()
+                chunks = []
+            else:
+                chunks.append(line.rstrip())
+        if header is not None:
+            yield header, "".join(chunks)
+
+def parse_line(line):
+    """
+    Parse a BED line into its 6 mandatory columns.
+    Returns a dict or None if invalid.
+    """
+    parts = line.strip().split("\t")
+    if len(parts) < 6:
+        return None
+    chrom, start, end, name, tsd, strand = parts[:6]
+    return {'chrom': chrom, 'start': start, 'end': end, 'name': name,
+            'tsd': tsd, 'strand': strand}
+
+
+def parse_attributes(name):
+    """
+    Split the NAME field into feature_id before ';' and list of additional attrs.
+    """
+    if ";" in name:
+        parts = name.split(";")
+        return parts[0], parts[1:]
+    return name, []
+
+
+LINEAGE_PREFIXES = ("shared_", "uniq_")
+
+
+def strip_lineage_prefix(feature_id):
+    """
+    Drop a leading lineage tag (see util/LTR_phylo.R) from a BED feature_id.
+
+    The per-generation library is recycled as the insertion source for the next
+    generation, so a tag left on a header is inherited verbatim by every new
+    insertion drawn from it, and by everything drawn from their descendants.
+    """
+    for prefix in LINEAGE_PREFIXES:
+        if feature_id.startswith(prefix):
+            return feature_id[len(prefix):]
+    return feature_id
+
+
+def extract_TE_info(feature_id):
+    """
+    From a feature_id like "TE#LTR/Super~LTRlen:100", extract:
+      - te_name (before '#')
+      - te_class (e.g., 'LTR')
+      - te_superfamily
+      - ltr_len (int) or None
+    Returns (te_name, te_class, te_superfamily, ltr_len).
+    """
+    try:
+        te_name, rest = feature_id.split("#", 1)
+        te_class, remainder = rest.split("/", 1)
+        ltr_len = None
+        if te_class == "LTR" and "~" in remainder:
+            te_superfamily, ltr_info = remainder.split("~", 1)
+            if ltr_info.startswith("LTRlen:"):
+                try:
+                    ltr_len = int(ltr_info.split(':', 1)[1])
+                except ValueError:
+                    ltr_len = None
+        else:
+            te_superfamily = remainder.split("~")[0]
+        return te_name, te_class, te_superfamily, ltr_len
+    except Exception:
+        return None, None, None, None
+
+
+def process_bed_file(bed_file):
+    """
+    Load and classify records from a BED file (genome mode).
+    Returns a list of records (each is a dict) with additional fields:
+      - feature_id: parsed from the NAME column
+      - additional: additional attributes (if any)
+      - category: classification (e.g. Intact TE, Fragmented TE, etc.)
+    """
+    records = []
+    with open(bed_file) as f:
+        for line in f:
+            if line.startswith("#") or not line.strip():
+                continue
+            rec = parse_line(line)
+            if not rec:
+                continue
+            fid, attrs = parse_attributes(rec['name'])
+            rec.update({'feature_id': fid, 'additional': attrs,
+                        'category': None})
+            records.append(rec)
+
+    # Initial classification
+    for rec in records:
+        fid, add = rec['feature_id'], rec['additional']
+        if fid.startswith("gene"):
+            rec['category'] = "Intact gene" if not add else "Fragmented gene"
+        else:
+            if "_FRAG" in fid:
+                rec['category'] = "Fragmented TE"
+            elif "_SOLO" in fid:
+                rec['category'] = "SoloLTR"
+            elif add and "CUT_BY" in add[0]:
+                rec['category'] = "Fragmented TE"
+            else:
+                rec['category'] = "Potential intact TE"
+
+    # Pair potential intact TEs to reclassify as fragmented if needed
+    for i, rec in enumerate(records):
+        if rec['category'] != "Potential intact TE":
+            continue
+        for j in range(max(0, i - 100), min(len(records), i + 101)):
+            if i == j:
+                continue
+            other = records[j]
+            if other['feature_id'].startswith("gene"):
+                continue
+            if (other['tsd'] == rec['tsd'] and
+                other['strand'] == rec['strand'] and
+                (rec['name'].startswith(other['name']) or
+                 other['name'].startswith(rec['name']))):
+                rec['category'] = "Fragmented TE"
+                break
+
+    # Finalize intact TEs
+    for rec in records:
+        if rec['category'] == "Potential intact TE":
+            rec['category'] = "Intact TE"
+
+    return records
+
+
+def load_genome(genome_fasta):
+    """
+    Open genome FASTA via pysam for indexed random access.
+    Requires a .fai index (created automatically if missing).
+    Returns a pysam.FastaFile handle.
+    """
+    import pysam
+    return pysam.FastaFile(genome_fasta)
+
+
+def extract_intact_TEs(records, genome):
+    """
+    From genome‐mode records, extract intact TE sequences (with LTR fix
+    From the list of BED records, extract sequences of intact TEs (all types) 
+    from the genome FASTA.
+    
+    For each intact TE:
+      - The genomic region is extracted based on the BED coordinates.
+      - If the BED indicates the minus strand, the sequence is reverse complemented.
+    
+    Special handling for TEs where TE_class is LTR:
+      - The feature_id contains an LTR length field (e.g., ~LTRlen:4).
+      - The extracted sequence is assumed to consist of a 5' LTR, an internal region,
+        and a 3' LTR. The script will replace the 3' LTR with a copy of the 5' LTR.
+    
+    Returns a list of tuples: (fasta_header, sequence)
+    """
+    out = []
+    for rec in records:
+        if rec['category'] != "Intact TE":
+            continue
+        chrom = rec['chrom']
+        start, end = int(rec['start']), int(rec['end'])
+        try:
+            seq = genome.fetch(chrom, start, end)
+        except (KeyError, ValueError):
+            continue
+        if not seq:
+            continue
+        if rec['strand'] == "-":
+            seq = reverse_complement(seq)
+
+        _, te_class, _, ltr_len = extract_TE_info(rec['feature_id'])
+        if te_class == "LTR" and ltr_len and len(seq) >= 2 * ltr_len:
+            five = seq[:ltr_len]
+            internal = seq[ltr_len:-ltr_len]
+            seq = five + internal + five
+
+        out.append((strip_lineage_prefix(rec['feature_id']), seq))
+    return out
+
+
+def process_library_fasta(lib_fasta):
+    """
+    Library mode: read an existing TE library FASTA,
+    fix LTR entries by copying 5' LTR to 3' end.
+    """
+    out = []
+    for header, seq in parse_fasta(lib_fasta):
+        # pull only the first token of the header, then strip any ";"-attrs
+        name = header.split()[0]
+        feature_id, _ = parse_attributes(name)
+        _, te_class, _, ltr_len = extract_TE_info(feature_id)
+        if te_class == "LTR" and ltr_len and len(seq) >= 2 * ltr_len:
+            five = seq[:ltr_len]
+            internal = seq[ltr_len:-ltr_len]
+            seq = five + internal + five
+        out.append((feature_id, seq))
+    return out
+
+
+def write_fasta(entries, out_file):
+    """Write (header, seq) pairs to FASTA, wrapping at 60 bp."""
+    with open(out_file, "w", buffering=1 << 20) as f:  # 1 MB buffer
+        for header, seq in entries:
+            lines = [f">{header}"]
+            for i in range(0, len(seq), 60):
+                lines.append(seq[i:i+60])
+            f.write("\n".join(lines) + "\n")
+
+
+def weighted_resample(entries, guide_fasta, out_base, *,
+                      plot=False, seed=42,
+                      duplication_mode=False,
+                      precomputed_guide_lengths=None):
+    """
+    KDE-based importance resampling that minimises the number of unique
+    records that are excluded when --duplication_mode is *not* requested.
+
+    * If --duplication_mode is given we keep the original behaviour
+      (retain all originals + add extra copies).
+    * Otherwise we:
+        1. Convert KDE weights -> expected copy counts.
+        2. Give each record floor(expected) copies.
+        3. Hand out the still-unassigned copies by a single weighted
+           draw **without replacement** using the fractional parts.
+    """
+    rng = np.random.default_rng(seed)
+
+    # ----------  KDE densities & importance weights  ----------
+    te_lengths   = np.fromiter((len(seq) for _, seq in entries), dtype=float)
+    if precomputed_guide_lengths is not None:
+        guide_lengths = np.fromiter(precomputed_guide_lengths.values(), dtype=float)
+    else:
+        guide_lengths = np.fromiter((len(seq) for _, seq in parse_fasta(guide_fasta)),
+                                    dtype=float)
+
+    kde_te    = gaussian_kde(te_lengths,    bw_method="scott")
+    kde_guide = gaussian_kde(guide_lengths, bw_method="scott")
+
+    dens_te     = kde_te(te_lengths)
+    dens_guide  = kde_guide(te_lengths)
+    weights     = dens_guide / (dens_te + 1e-8)          # importance weights
+
+    # ------------------------------------------------------------------
+    #  --duplication_mode : keep the original behaviour (all originals +
+    #                       extra copies proportional to weight)
+    # ------------------------------------------------------------------
+    if duplication_mode:
+        mean_w      = weights.mean()
+        dup_counts  = np.maximum(1, np.rint(weights / mean_w).astype(int))
+        resampled   = [entry
+                       for idx, cnt in enumerate(dup_counts)
+                       for entry in [entries[idx]] * cnt]
+
+        print(f"Original sequences : {len(entries)}")
+        print(f"Duplicated copies  : {resampled.__len__() - len(entries)}")
+        print(f"Total sequences    : {len(resampled)}", flush=True)
+
+    # ------------------------------------------------------------------
+    #  default : minimise exclusions, allow duplicates only when floor(ci) ≥ 2
+    # ------------------------------------------------------------------
+    else:
+        n = len(entries)
+        probs        = weights / weights.sum()
+        exp_counts   = probs * n                   # expected copies (may be <1 or >1)
+        base_counts  = np.floor(exp_counts).astype(int)
+        remaining    = n - base_counts.sum()      # slots that still need to be filled
+        if remaining:                             # distribute the residual slots
+            residual = exp_counts - base_counts
+            # If all residuals are 0 (rare edge-case), fall back to uniform draw
+            residual_prob = residual / residual.sum() if residual.sum() else \
+                            np.full_like(residual, 1 / len(residual))
+            extra_idx = rng.choice(len(entries), size=remaining,
+                                   replace=False, p=residual_prob)
+            base_counts[extra_idx] += 1
+
+        # Build the final sample list
+        resampled = [entry
+                     for idx, cnt in enumerate(base_counts)
+                     for entry in [entries[idx]] * cnt]
+
+        lost      = (base_counts == 0).sum()
+        dups      = (base_counts > 1).sum()
+        print(f"Total sequences   : {n}")
+        print(f"Unique lost       : {lost}")
+        print(f"Entries duplicated: {dups}", flush=True)
+
+    # ----------  Optional KDE comparison plot  ----------
+    if plot:
+        sampled_lengths = np.fromiter((len(seq) for _, seq in resampled), dtype=float)
+        x = np.linspace(min(te_lengths.min(), guide_lengths.min()),
+                        max(te_lengths.max(), guide_lengths.max()), 1000)
+
+        plt.figure()
+        plt.plot(x, kde_te(x),                        label="Original TE")
+        plt.plot(x, kde_guide(x),                     label="Guide")
+        plt.plot(x, gaussian_kde(sampled_lengths)(x), label="Resampled")
+        plt.xlabel("Sequence length")
+        plt.ylabel("Density")
+        plt.legend()
+        pdf = f"{out_base}_kde_comparison.pdf"
+        plt.savefig(pdf)
+        plt.close()
+        print(f"KDE plot saved to {pdf}", flush=True)
+
+    return resampled
+
+
+# ========= NEW helper: build guide length dict =========
+def build_guide_lengths(guide_fasta):
+    """
+    Build a dict: feature_id -> length from the guide (weight_by) FASTA.
+    Uses the same feature_id parsing logic (first token, strip ';' attrs).
+    """
+    guide_lengths = {}
+    for header, seq in parse_fasta(guide_fasta):
+        name = header.split()[0]
+        feature_id, _ = parse_attributes(name)
+        guide_lengths[feature_id] = len(seq)
+    return guide_lengths
+# =======================================================
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Extract TE sequences (genome or library mode) with optional length-weighted sampling",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--lib', help='Library-mode input FASTA')
+    group.add_argument('--bed', nargs='+', help='Genome-mode input BED file(s)')
+
+    parser.add_argument('--genome', help='Genome FASTA (required with --bed)')
+    parser.add_argument('--out_fasta', required=True, help='Output FASTA path')
+    parser.add_argument('--weight_by', help='Guide FASTA for length-weighted sampling and truncation checking')
+    parser.add_argument('--duplication_mode', action='store_true',
+                        help='Retain all original sequences and duplicate additional copies according to importance weights (only with --weight_by)')
+    parser.add_argument('--plot_kde_comparison', action='store_true',
+                        help='Save KDE comparison plot to PDF')
+    parser.add_argument('--exclude_missing_ltr_len', action='store_true',
+                        help='Exclude intact LTR elements missing LTR length info (~LTRlen)')
+    # ========= NEW flag =========
+    parser.add_argument('--exclude_truncated', action='store_true',
+                        help='Exclude intact TEs that are <90%% of the length of the matching TE in --weight_by')
+    # ============================
+
+    args = parser.parse_args()
+
+    # Determine entries based on mode
+    if args.lib:
+        entries = process_library_fasta(args.lib)
+    else:
+        if not args.genome:
+            parser.error('--genome is required when using --bed')
+        genome = load_genome(args.genome)
+        recs = []
+        for b in args.bed:
+            recs.extend(process_bed_file(b))
+        entries = extract_intact_TEs(recs, genome)
+        genome.close()
+
+        if not entries:
+            print('No intact TE entries found.', file=sys.stderr)
+            sys.exit(1)
+
+    # Optional: filter out intact LTRs missing length info
+    if args.exclude_missing_ltr_len:
+        filtered = []
+        for header, seq in entries:
+            _, te_class, _, ltr_len = extract_TE_info(header)
+            if te_class == 'LTR' and ltr_len is None:
+                continue
+            filtered.append((header, seq))
+        entries = filtered
+
+    # Pre-parse guide lengths once (used by both --exclude_truncated and --weight_by)
+    guide_lengths = None
+    if args.weight_by:
+        guide_lengths = build_guide_lengths(args.weight_by)
+
+    # ========= NEW: exclude_truncated (requires weight_by) =========
+    if args.exclude_truncated:
+        if not args.weight_by:
+            parser.error('--exclude_truncated requires --weight_by')
+        kept = []
+        dropped = 0
+        missing_guide = 0
+
+        for header, seq in entries:
+            guide_len = guide_lengths.get(header)
+            if guide_len is None:
+                # No reference in weight_by → keep (cannot judge truncation)
+                missing_guide += 1
+                kept.append((header, seq))
+                continue
+
+            if len(seq) >= 0.9 * guide_len:
+                kept.append((header, seq))
+            else:
+                dropped += 1
+
+        entries = kept
+        print(
+            f"exclude_truncated: removed {dropped} sequences <90% of guide length; "
+            f"{missing_guide} sequences had no guide match and were kept.",
+            file=sys.stderr,
+            flush=True
+        )
+    # ===============================================================
+
+    # Genome-mode: weighted resampling (applied *after* truncation filter)
+    if (not args.lib) and args.weight_by:
+        base = os.path.splitext(os.path.basename(args.out_fasta))[0]
+        entries = weighted_resample(
+            entries,
+            args.weight_by,
+            out_base=base,
+            plot=args.plot_kde_comparison,
+            duplication_mode=args.duplication_mode,
+            precomputed_guide_lengths=guide_lengths,
+        )
+
+    write_fasta(entries, args.out_fasta)
+    print(f"Processed {len(entries)} entries → {args.out_fasta}", flush=True)
+
+
+if __name__ == '__main__':
+    main()

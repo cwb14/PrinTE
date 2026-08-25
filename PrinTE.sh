@@ -1,125 +1,116 @@
 #!/bin/bash
+# shellcheck disable=SC2181  # `if [ $? -ne 0 ]` after each step is this script's error
+                            # idiom; it lets each failure name the step that produced it.
+# shellcheck disable=SC2086  # word splitting inside the `eval $cmd` strings is deliberate.
+# shellcheck disable=SC2207  # the suggested `mapfile` is bash 4+; macOS ships bash 3.2.
 ###############################################################################
 # PrinTE.sh
 #
-# A wrapper to run the TE evolution simulation pipeline in two phases,
-# and then perform supplemental post-processing.
+# Forward, per-generation simulator of transposable-element genome evolution.
 #
-# Phase 1 (Burn‐in) is performed unless the user provides starting input files
-# via --bed and --fasta, or if --continue is provided and previous outputs are found.
+# Phase 1 (burn-in) builds a synthetic starting genome seeded with genes and TEs.
+# It is skipped when the user supplies --fasta/--bed, or resumes with --continue.
 #
-# New functionality and changes:
+# Phase 2 loops over generations: mutate -> insert -> excise -> rebuild the TE
+# library, writing gen<N>_final.{fasta,bed,lib} for every sampled generation.
+# Post-processing then dates the LTR-RTs and draws the summary figures.
 #
-#  (1) New flag --continue:
-#      When provided, the script searches for existing final generation outputs
-#      (e.g., gen${i}_final.fasta) and resumes from the next iteration.
+# The per-step work lives in the printe Python package under src/, invoked here as
+# 'python -m printe.<module>'. SRC_DIR is put on PYTHONPATH below so this runs from
+# a plain clone as well as from an installed package.
 #
-#  (2) New flag --keep_temps (or -kt):
-#      When provided, temporary files are kept. Otherwise, they are removed after each loop.
-#
-#  (3) New user-friendly parameters --chromatin_bias_insert and --chromatin_buffer
-#      to control insertion bias. (Replaces old -w/--euch-bias and -j/--euch-buffer.)
-#
-#  (4) New flag -cbd, --chromatin_bias_delete to specify the deletion bias for TE excision.
-#
-#  (5) New option --model (and shorthand -md) for per-generation post-processing
-#      DNA mutation model for LTR dating (options: raw, K2P, JC69; default: K2P).
-#
-#  (6) New options -tk/--TE_mut_k and -tmx/--TE_mut_Mmax replace the old TE_mut_in parameter.
-#
-#  (7) New parallel versions of internal scripts:
-#         - Use 'shared_ltr_inserter_parallel2.py' (updated CLI: -n_intact/-p_intact plus -n_frag/-p_frag)
-#         - Use 'nest_inserter_parallel.py' with '-m' for threads and optional --disable_genes (-dg).
-#
-#  (8) New flag -bo, --burnin_only:
-#      When activated, the script will run the burn-in phase only and then exit.
-#      In this case, --generation_end and --step are not required.
-#
-#  (9) File naming: The output files from Phase 2 now have names
-#      reflecting the true generation simulated.
-#
-#  (10) Updated TE excision: Use "TE_exciser_parallel.py" (instead of TE_exciser2.py)
-#       which supports parallel execution with -m, and accepts extra parameters:
-#         --euch_het_buffer ${euch_buffer} and --euch_het_bias ${euch_bias_excise}.
-#
-# Directories:
-#   TOOL_DIR: Directory containing this script (assumed to be TESS/prinTE)
-#   BIN_DIR:  TESS/prinTE/bin
-#   UTIL_DIR: TESS/prinTE/util
-#
-# Usage:
-#   prinTE.sh [options]
-#
-# [A detailed options list follows...]
-#
+# Run with -h for the full option list.
 ###############################################################################
 
 # --- Determine directories ---
 TOOL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-BIN_DIR="${TOOL_DIR}/bin"
-UTIL_DIR="${TOOL_DIR}/util"
+SRC_DIR="${TOOL_DIR}/src"
 
-# --- Auto-detect OS and pick appropriate ltr_mutator binary ---
+# Run the bundled package whether or not PrinTE has been pip-installed. The :+ guard
+# keeps an unset PYTHONPATH from turning into a leading colon, which would put the
+# working directory on the import path.
+PYTHONPATH="${SRC_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH
+
+# ltr_mutator is compiled on first use rather than shipped; see Makefile.
+BIN_DIR="${PRINTE_MUTATOR_DIR:-${TOOL_DIR}/bin}"
+
+# --- Check the OS is one we build for ---
 OS="$(uname)"
 case "$OS" in
-  Darwin)
-    mutator_exec="ltr_mutator_mac"
-    ;;
-  Linux)
-    mutator_exec="ltr_mutator"
+  Darwin|Linux)
     ;;
   *)
     echo "Error: Unsupported OS '$OS'. Only macOS (Darwin) or Linux are supported." >&2
     exit 1
     ;;
 esac
+mutator_exec="${PRINTE_MUTATOR:-${BIN_DIR}/ltr_mutator}"
 
-# --- Verify mutator binary works; recompile from source if not ---
-# Called once after LOG/ERR are initialised (see Change 2).
+# --- Make sure ltr_mutator is built and runnable; build it if not ---
+# The binary is compiled on first use rather than shipped, so a clone works on any
+# libc without carrying a platform-specific blob. Called once after LOG/ERR exist.
 ensure_mutator() {
-  local bin="${BIN_DIR}/${mutator_exec}"
-  local src="${BIN_DIR}/ltr_mutator.cpp"
+  local bin="${mutator_exec}"
+  local src="${SRC_DIR}/printe/cpp/ltr_mutator.cpp"
 
-  # Try to execute the binary. Any exit that isn't a clean run
-  # (loader errors, GLIBC mismatches, wrong ELF class, etc.) will
-  # produce a non-zero exit before main() even starts.
+  # Probe it. Anything that fails before main() runs - a missing file, a wrong ELF
+  # class, a GLIBC mismatch - shows up either as a loader message or as exit 126/127.
   local probe_out probe_exit
   probe_out=$( "$bin" </dev/null 2>&1 )
   probe_exit=$?
 
-  # Exit 0 or a "usage / help" style non-zero (e.g. 1) where the binary
-  # actually printed something to stdout/stderr means it loaded fine.
-  # We distinguish a loader failure by checking for known error phrases.
   if echo "$probe_out" | grep -qiE \
        'not found|cannot execute|exec format|no such file|illegal instruction|GLIBC|version.*required'; then
-    :  # fall through to recompile
+    :  # fall through and build
   elif [[ $probe_exit -eq 126 || $probe_exit -eq 127 ]]; then
-    :  # permission denied / command not found → fall through
+    :  # not executable, or not there at all
   else
     echo "Mutator binary OK: ${bin}" | tee -a "$LOG"
     return 0
   fi
 
-  echo "WARNING: Pre-compiled binary '${bin}' does not run on this system." | tee -a "$LOG"
-  echo "  Reason hint: $(echo "$probe_out" | head -3)" | tee -a "$LOG"
-  echo "Attempting to recompile from source: ${src}" | tee -a "$LOG"
-
+  echo "Building ltr_mutator from ${src}" | tee -a "$LOG"
   if [[ ! -f "$src" ]]; then
-    echo "Error: Source file '${src}' not found. Cannot recompile ltr_mutator." | tee -a "$ERR"
+    echo "Error: Source file '${src}' not found. Cannot build ltr_mutator." | tee -a "$ERR"
     exit 1
   fi
+  mkdir -p "$(dirname "$bin")"
 
-  if ! command -v g++ &>/dev/null; then
-    echo "Error: 'g++' is not available on PATH. Cannot recompile ltr_mutator." | tee -a "$ERR"
-    exit 1
+  # Prefer the Makefile so the compiler flags live in exactly one place.
+  if command -v make &>/dev/null && [[ -f "${TOOL_DIR}/Makefile" ]]; then
+    if make -C "${TOOL_DIR}" ltr-mutator >> "$LOG" 2>> "$ERR"; then
+      echo "Build succeeded." | tee -a "$LOG"
+      return 0
+    fi
+    echo "make failed; falling back to a direct compile." | tee -a "$LOG"
   fi
 
-  local recompile_cmd="g++ -std=c++17 -O3 -fopenmp \"${src}\" -o \"${bin}\""
-  echo "Running: ${recompile_cmd}" | tee -a "$LOG"
-  if eval "$recompile_cmd" >> "$LOG" 2>> "$ERR"; then
-    echo "Recompile succeeded. Pipeline will use the freshly built binary." | tee -a "$LOG"
+  local cxx build_cmd
+  if [[ "$OS" == "Darwin" ]]; then
+    # Apple clang needs libomp from Homebrew; it has no -fopenmp driver flag.
+    cxx="${CXX:-clang++}"
+    local omp
+    omp="$(brew --prefix libomp 2>/dev/null)"
+    if [[ -z "$omp" ]]; then
+      echo "Error: libomp not found. Install it with 'brew install libomp'." | tee -a "$ERR"
+      exit 1
+    fi
+    build_cmd="${cxx} -std=c++17 -O3 -Xpreprocessor -fopenmp -I${omp}/include \"${src}\" -o \"${bin}\" ${omp}/lib/libomp.a"
   else
-    echo "Error: Recompile of ltr_mutator failed. See ${ERR} for details." | tee -a "$ERR"
+    cxx="${CXX:-g++}"
+    if ! command -v "$cxx" &>/dev/null; then
+      echo "Error: '${cxx}' is not on PATH. Install a C++ compiler, e.g. 'mamba install cxx-compiler'." | tee -a "$ERR"
+      exit 1
+    fi
+    build_cmd="${cxx} -std=c++17 -O3 -fopenmp \"${src}\" -o \"${bin}\""
+  fi
+
+  echo "Running: ${build_cmd}" | tee -a "$LOG"
+  if eval "$build_cmd" >> "$LOG" 2>> "$ERR"; then
+    echo "Build succeeded." | tee -a "$LOG"
+  else
+    echo "Error: Building ltr_mutator failed. See ${ERR} for details." | tee -a "$ERR"
     exit 1
   fi
 }
@@ -136,7 +127,8 @@ trap cleanup EXIT
 # --- Function: If a fasta file is gzipped, decompress it.
 decompress_if_gz() {
   local file="$1"
-  local base_name="$(basename "$file" .gz)"  # Remove .gz if present
+  local base_name
+  base_name="$(basename "$file" .gz)"   # strips .gz when present
   local decompressed_file="./${base_name}"
 
   if [[ ! -f "$file" && "$file" != *.gz ]]; then
@@ -273,6 +265,7 @@ Phase 1 is skipped when you supply --fasta/--bed or --continue.
   -s,   --seed N               Random seed (default: 42).
   -t,   --threads N            Threads (default: 4).
   -h,   --help                 Show this help and exit.
+  -v,   --version              Print the version and exit.
 
 Examples:
   # Burn-in only: 100 Mb, 1 chromosome, 4% CDS, 10% intact TE
@@ -297,6 +290,10 @@ if [[ "$1" == "-h" || "$1" == "--h" || "$1" == "-help" || "$1" == "--help" ]]; t
   print_help
   exit 0
 fi
+if [[ "$1" == "-v" || "$1" == "--version" ]]; then
+  echo "PrinTE $(python -c 'import printe; print(printe.__version__)' 2>/dev/null || echo unknown)"
+  exit 0
+fi
 #—-----------------------------------------
 
 # --- Log file names ---
@@ -305,7 +302,7 @@ ERR="pipeline.error"
 echo "Pipeline started at $(date)" > "$LOG"
 echo "Pipeline started at $(date)" > "$ERR"
 # --- Modification (1): Log the command used to run the script ---
-echo "Command: $0 $@" >> "$LOG"
+echo "Command: $0 $*" >> "$LOG"
 
 ensure_mutator   # verify / recompile ltr_mutator before anything else runs
 
@@ -482,13 +479,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- Set default values for options not provided ---
-cds="${cds:-${TOOL_DIR}/data/TAIR10.cds.fa}"
+# Bundled defaults resolve through printe.paths so an installed PrinTE finds them in
+# the user cache; the || keeps a plain clone working if the import fails.
+cds="${cds:-$(python -m printe.paths TAIR10.cds.fa.gz 2>/dev/null || echo "${TOOL_DIR}/data/TAIR10.cds.fa.gz")}"
 chr_number="${chr_number:-4}"
 size="${size:-400Mb}"
 seed="${seed:-42}"
-TE_lib="${TE_lib:-${TOOL_DIR}/data/maize_rice_arab_curated_TE.lib.gz}"
+TE_lib="${TE_lib:-$(python -m printe.paths maize_rice_arab_curated_TE.lib.gz 2>/dev/null || echo "${TOOL_DIR}/data/maize_rice_arab_curated_TE.lib.gz")}"
 mutation_rate="${mutation_rate:-1.3e-8}"
-TE_ratio="${TE_ratio:-${TOOL_DIR}/ratios.tsv}"
+TE_ratio="${TE_ratio:-${SRC_DIR}/printe/data/ratios.tsv}"
 threads="${threads:-4}"
 insert_rate="${insert_rate:-1e-8}"
 birth_rate="${birth_rate:-1e-3}"
@@ -585,7 +584,7 @@ else
     echo "=== TE Library Processing ===" | tee -a "$LOG"
 
     # (A) Compute divergence info from the TE library.
-    cmd="python ${BIN_DIR}/seq_divergence.py -i ${TE_lib} -o lib.txt -t ${threads} --min_align 100 --max_off 20 --miu ${mutation_rate} --blast_outfmt '6 qseqid sseqid sstart send slen qstart qend qlen length nident btop'"
+    cmd="python -m printe.seq_divergence -i ${TE_lib} -o lib.txt -t ${threads} --min_align 100 --max_off 20 --miu ${mutation_rate} --blast_outfmt '6 qseqid sseqid sstart send slen qstart qend qlen length nident btop'"
     echo "Running: $cmd" | tee -a "$LOG"
     eval $cmd >> "$LOG" 2>> "$ERR"
     if [ $? -ne 0 ]; then
@@ -594,7 +593,7 @@ else
     fi
 
     # (B) Append LTR lengths to TE library.
-    cmd="python ${BIN_DIR}/LTR_fasta_header_appender.py -fasta ${TE_lib} -domains lib.txt -div_type none"
+    cmd="python -m printe.LTR_fasta_header_appender -fasta ${TE_lib} -domains lib.txt -div_type none"
     if [[ "$ex_ltr" -eq 1 ]]; then
         cmd+=" -exclude_no_hits"
     fi
@@ -607,7 +606,7 @@ else
 
     # (C) Extract only intact TEs into a cleaned library
     echo "=== Extracting intact TEs to lib_clean.fa ===" | tee -a "$LOG"
-    cmd="python ${BIN_DIR}/extract_intact_TEs.py --lib lib.fa --out_fasta lib_clean.fa"
+    cmd="python -m printe.extract_intact_TEs --lib lib.fa --out_fasta lib_clean.fa"
     echo "Running: $cmd" | tee -a "$LOG"
     eval $cmd >> "$LOG" 2>> "$ERR"
     if [ $? -ne 0 ]; then
@@ -626,7 +625,7 @@ if [[ "$skip_burnin" -eq 0 ]]; then
     echo "=== Phase 1: Burn-in ===" | tee -a "$LOG"
 
     # (1a) Build synthetic genome with CDS using synthetic_genome.py.
-    cmd="python ${BIN_DIR}/synthetic_genome.py -cds ${cds} -out_prefix backbone -chr_number ${chr_number} -size ${size} -seed ${seed}"
+    cmd="python -m printe.synthetic_genome -cds ${cds} -out_prefix backbone -chr_number ${chr_number} -size ${size} -seed ${seed}"
     if [[ -n "$cds_num" ]]; then
         cmd+=" -cds_num ${cds_num}"
     elif [[ -n "$cds_percent" ]]; then
@@ -640,7 +639,7 @@ if [[ "$skip_burnin" -eq 0 ]]; then
     fi
 
     # (1b) Insert TEs into the synthetic genome using the updated parallel inserter.
-    cmd="python ${BIN_DIR}/shared_ltr_inserter_parallel.py -genome backbone.fa -TE ${clean_lib}"
+    cmd="python -m printe.shared_ltr_inserter -genome backbone.fa -TE ${clean_lib}"
     # INTACT controls
     if [[ -n "$intact_TE_percent" ]]; then
         cmd+=" -p_intact ${intact_TE_percent}"
@@ -667,7 +666,7 @@ if [[ "$skip_burnin" -eq 0 ]]; then
     echo "Running: $cmd" | tee -a "$LOG"
     eval $cmd >> "$LOG" 2>> "$ERR"
     if [ $? -ne 0 ]; then
-        echo "Error running shared_ltr_inserter_parallel2.py" | tee -a "$ERR"
+        echo "Error running shared_ltr_inserter.py" | tee -a "$ERR"
         exit 1
     fi
 fi
@@ -763,7 +762,7 @@ fi
 
 # Generate a list of seeds for each iteration based on the provided base seed.
 seed_list=($(python -c "import random; random.seed(${seed}); print(' '.join([str(random.randint(1,10000)) for _ in range(${iterations})]))"))
-echo "Seed list for Phase 2 iterations: ${seed_list[@]}" | tee -a "$LOG"
+echo "Seed list for Phase 2 iterations: ${seed_list[*]}" | tee -a "$LOG"
 
 # Initialize prev_lib for first generation
 prev_lib="${clean_lib}"
@@ -787,7 +786,6 @@ if [[ -n "$max_size" || -n "$min_size" ]]; then
   fi
 fi
 
-last_gen_done=0
 # Arrays to track genome sizes across iterations for exponential projection.
 # On resume, backfill from existing gen*_final.fasta files so projection has history.
 genome_size_iters=()
@@ -820,7 +818,7 @@ if [[ -n "$fix" && ( -n "$max_size" || -n "$min_size" ) ]]; then
   fi
   if [[ -f "$napkin_fa" && -f "$napkin_bed" ]]; then
     echo "=== Back-of-napkin genome-size estimate (observe-only) ===" | tee -a "$LOG"
-    python "${BIN_DIR}/estimate_genome_size.py" \
+    python -m printe.estimate_genome_size \
       --fasta "$napkin_fa" --bed "$napkin_bed" \
       --lib "$clean_lib" --ratios "$TE_ratio" \
       --ins "$fix_in" --del "$fix_ex" --step "$step" --ge "$generation_end" \
@@ -864,7 +862,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
     mode=3
   fi
 
-  cmd="${BIN_DIR}/${mutator_exec} \
+  cmd="${mutator_exec} \
     -fasta ${prev_genome} \
     -bed   ${prev_bed} \
     -rate ${mutation_rate} \
@@ -891,9 +889,19 @@ for (( i=start_iter; i<=iterations; i++ )); do
   fi
 
   # (2b) Insert new TEs (allowing for nesting) using the parallel nest inserter.
-  # Now using nest_inserter_parallel.py and adding --disable_genes if specified.
+  # Now using nest_inserter.py and adding --disable_genes if specified.
   nest_prefix="gen${current_gen}_nest"
-  cmd="python ${BIN_DIR}/nest_inserter_parallel.py --genome ${mut_prefix}.fa --TE ${prev_lib} --generations ${step} --bed ${prev_bed} --output ${nest_prefix} --seed ${current_seed} --rate ${insert_rate} ${extra_fix_in} --TE_ratio ${TE_ratio} -bf burnin.stat --birth_rate ${birth_rate} --cutpaste_reinsertion ${cutpaste_reinsertion}"
+  # burnin.stat carries the initial intact-TE count that --birth_rate scales. It only
+  # exists when this run built its own burn-in; starting from --fasta/--bed there is
+  # nothing to count, so TE birth is skipped rather than failing the generation.
+  birth_args="--birth_rate ${birth_rate}"
+  if [[ -f burnin.stat ]]; then
+    birth_args="-bf burnin.stat ${birth_args}"
+  elif [[ "$first_loop_warned" != "1" ]]; then
+    echo "Note: no burnin.stat in the working directory, so --birth_rate has no initial TE count to scale and TE birth is disabled. This is expected when starting from --fasta/--bed." | tee -a "$LOG"
+    first_loop_warned=1
+  fi
+  cmd="python -m printe.nest_inserter --genome ${mut_prefix}.fa --TE ${prev_lib} --generations ${step} --bed ${prev_bed} --output ${nest_prefix} --seed ${current_seed} --rate ${insert_rate} ${extra_fix_in} --TE_ratio ${TE_ratio} ${birth_args} --cutpaste_reinsertion ${cutpaste_reinsertion}"
   cmd+=" --euch_het_bias ${euch_bias_insert} --euch_het_buffer ${euch_buffer} -m ${threads}"
   if [[ $disable_genes -eq 1 ]]; then
     cmd+=" --disable_genes"
@@ -901,13 +909,13 @@ for (( i=start_iter; i<=iterations; i++ )); do
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
   if [ $? -ne 0 ]; then
-    echo "Error running nest_inserter_parallel.py for generation ${current_gen}" | tee -a "$ERR"
+    echo "Error running nest_inserter.py for generation ${current_gen}" | tee -a "$ERR"
     exit 1
   fi
 
   # (2c) Purge some TEs and convert intact TEs to soloLTRs using TE excision.
-  # Updated to use TE_exciser_parallel.py with new parameters.
-  cmd="python ${BIN_DIR}/TE_exciser_parallel.py --genome ${nest_prefix}.fasta --bed ${nest_prefix}.bed --rate ${delete_rate} --generations ${step} --soloLTR_freq ${solo_rate} ${extra_fix_ex} --output gen${current_gen}_final --seed ${current_seed} --sigma ${sigma} --k ${k} --sel_coeff ${sel_coeff} -m ${threads} --euch_het_buffer ${euch_buffer} --euch_het_bias ${euch_bias_excise} --promoter-boundary ${promoter_boundary} --TE_ratio ${TE_ratio}"
+  # Updated to use TE_exciser.py with new parameters.
+  cmd="python -m printe.TE_exciser --genome ${nest_prefix}.fasta --bed ${nest_prefix}.bed --rate ${delete_rate} --generations ${step} --soloLTR_freq ${solo_rate} ${extra_fix_ex} --output gen${current_gen}_final --seed ${current_seed} --sigma ${sigma} --k ${k} --sel_coeff ${sel_coeff} -m ${threads} --euch_het_buffer ${euch_buffer} --euch_het_bias ${euch_bias_excise} --promoter-boundary ${promoter_boundary} --TE_ratio ${TE_ratio}"
 
   if [ $i -ne 1 ]; then
     cmd+=" --no_fig"
@@ -915,7 +923,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
   if [ $? -ne 0 ]; then
-    echo "Error running TE_exciser_parallel.py for generation ${current_gen}" | tee -a "$ERR"
+    echo "Error running TE_exciser.py for generation ${current_gen}" | tee -a "$ERR"
     exit 1
   fi
 
@@ -927,7 +935,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
   
   # (2d) Build the new per‑gen TE library
   echo "=== Extracting intact TEs for generation ${current_gen} into lib file ===" | tee -a "$LOG"
-  cmd="python ${BIN_DIR}/extract_intact_TEs.py \
+  cmd="python -m printe.extract_intact_TEs \
     --genome gen${current_gen}_final.fasta \
     --bed    gen${current_gen}_final.bed \
     --weight_by ${clean_lib} --exclude_missing_ltr_len \
@@ -945,7 +953,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
 
   # (2e) Update pipeline report
   echo "=== Step 2e: Updating insertion/deletion pipeline report ===" | tee -a "$LOG"
-  cmd="python ${UTIL_DIR}/log_to_report.py -in ${LOG} -out pipeline.report"
+  cmd="python -m printe.util.log_to_report -in ${LOG} -out pipeline.report"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd >> "$LOG" 2>> "$ERR"
   if [ $? -ne 0 ]; then
@@ -962,7 +970,6 @@ for (( i=start_iter; i<=iterations; i++ )); do
   prev_lib="gen${current_gen}_final.lib"
   
   # record that we successfully reached this generation
-  last_gen_done=$current_gen
   
   # --- Exponential regression with empirical prediction interval ---
   # After observing >= 10% of total iterations, project the terminal genome
@@ -1003,7 +1010,7 @@ for (( i=start_iter; i<=iterations; i++ )); do
         # defaults if a bound is unset.
         clamp_lo=$(( ${min_bytes:-1000000} / 4 ))
         clamp_hi=$(( ${max_bytes:-1000000000} * 4 ))
-        breach_out=$(python "${BIN_DIR}/project_terminal.py" \
+        breach_out=$(python -m printe.project_terminal \
           --iters "$breach_iters" --sizes "$breach_sizes" \
           --target "$iterations" \
           ${max_size:+--mxgs "$max_bytes"} ${min_size:+--mngs "$min_bytes"} \
@@ -1140,7 +1147,7 @@ fi
 # --- Napkin check (observe-only): predicted vs actual per-step ---
 if [[ -f "napkin_estimate.tsv" && -f "genome_size_trajectory.tsv" ]]; then
   echo "=== Napkin check (predicted vs actual) ===" | tee -a "$LOG"
-  python "${BIN_DIR}/estimate_genome_size.py" --check \
+  python -m printe.estimate_genome_size --check \
     --estimate-in "napkin_estimate.tsv" --trajectory "genome_size_trajectory.tsv" \
     --check-out "napkin_check.tsv" 2>&1 | tee -a "$LOG" || \
     echo "WARNING: napkin check failed (non-fatal; observe-only)." | tee -a "$LOG"
@@ -1172,32 +1179,32 @@ else
 fi
 
 # 1. Plot TE fraction (includes starting file and all gen*_final files)
-cmd="python ${UTIL_DIR}/plot_TE_frac.py --bed \$(echo \"${initial_bed}\"; ls gen*_final.bed | sort -V) --fasta \$(echo \"${initial_fasta}\"; ls gen*_final.fasta | sort -V) --feature Intact_TE:SoloLTR:Fragmented_TE --out_prefix percent_TE"
+cmd="python -m printe.util.plot_TE_frac --bed \$(echo \"${initial_bed}\"; ls gen*_final.bed | sort -V) --fasta \$(echo \"${initial_fasta}\"; ls gen*_final.fasta | sort -V) --feature Intact_TE:SoloLTR:Fragmented_TE --out_prefix percent_TE"
 echo "Running: $cmd" | tee -a "$LOG"
 eval $cmd
 
 # 2. Plot solo versus intact TE proportions.
-cmd="python ${UTIL_DIR}/plot_solo_intact.py --bed \$(echo \"${initial_bed}\"; ls gen*_final.bed | sort -V) --out_prefix solo_intact"
+cmd="python -m printe.util.plot_solo_intact --bed \$(echo \"${initial_bed}\"; ls gen*_final.bed | sort -V) --out_prefix solo_intact"
 echo "Running: $cmd" | tee -a "$LOG"
 eval $cmd
 
 # 3. Generate overall statistics report.
-cmd="python ${UTIL_DIR}/stats_report.py --bed \$(ls gen*_final.bed burnin.bed | sort -V) --out_prefix stat"
+cmd="python -m printe.util.stats_report --bed \$(ls gen*_final.bed burnin.bed | sort -V) --out_prefix stat"
 echo "Running: $cmd" | tee -a "$LOG"
 eval $cmd
 
 # 4. Plot superfamily count.
-cmd="python ${UTIL_DIR}/plot_superfamily_count.py"
+cmd="python -m printe.util.plot_superfamily_count"
 echo "Running: $cmd" | tee -a "$LOG"
 eval $cmd
 
 # 5. Plot category bar.
-cmd="python ${UTIL_DIR}/plot_category_bar.py"
+cmd="python -m printe.util.plot_category_bar"
 echo "Running: $cmd" | tee -a "$LOG"
 eval $cmd
 
 # 6. Genome size through time.
-cmd="python ${UTIL_DIR}/genome_plot.py"
+cmd="python -m printe.util.genome_plot"
 echo "Running: $cmd" | tee -a "$LOG"
 eval $cmd
 
@@ -1235,7 +1242,6 @@ fi
 # Determine how many generations we actually ran
 # (i.e. highest_gen / step)
 # total_gens=$iterations
-total_gens=$(( last_gen_done / step ))
 
 # Build the list of available generations from files, treating burnin as generation 0.
 # Always include 0 if burnin files exist.
@@ -1339,12 +1345,12 @@ for i_idx in "${desc_idx[@]}"; do
   echo "Processing per-generation analysis for ${final_prefix}" | tee -a "$LOG"
 
   # (a) Extract intact LTR sequences.
-  cmd="python ${BIN_DIR}/extract_intact_LTR.py --bed ${final_prefix}.bed --genome ${final_prefix}.fasta --out_fasta ${final_prefix}_LTR.fasta"
+  cmd="python -m printe.extract_intact_LTR --bed ${final_prefix}.bed --genome ${final_prefix}.fasta --out_fasta ${final_prefix}_LTR.fasta"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd
 
   # (b1) Pull domains
-  cmd="python ${BIN_DIR}/ltr_domain_puller.py ${final_prefix}_LTR.fasta.key.tsv ${final_prefix}_LTR.domain"
+  cmd="python -m printe.ltr_domain_puller ${final_prefix}_LTR.fasta.key.tsv ${final_prefix}_LTR.domain"
   echo "Running: $cmd" | tee -a "$LOG"
   eval $cmd
 
@@ -1358,7 +1364,7 @@ for i_idx in "${desc_idx[@]}"; do
 done
 
 # Run ltr_dens.py once after per-generation analyses.
-cmd="python ${BIN_DIR}/ltr_dens.py --model ${model} --output all_LTR_density.pdf --miu ${mutation_rate} --gradient"
+cmd="python -m printe.ltr_dens --model ${model} --output all_LTR_density.pdf --miu ${mutation_rate} --gradient"
 echo "Running: $cmd" | tee -a "$LOG"
 eval $cmd
 
