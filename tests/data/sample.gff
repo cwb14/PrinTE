@@ -1,0 +1,6 @@
+##gff-version 3
+chr1	TEgenomeSimulator	repeat_region	1001	5200	.	+	.	ID=chr1_TE000001;Name=ATCOPIA67_LTR;Classification=LTR/Copia;Integrity=1.0;TSD_5=ATGCA;TSD_3=ATGCA
+chr1	TEgenomeSimulator	repeat_region	8000	9100	.	-	.	ID=chr1_TE000002;Name=Os2721_hAT;Classification=DNAnona/hAT;Integrity=0.62;TSD_5=None;TSD_3=CTTCCG
+chr1	TEgenomeSimulator	repeat_region	12000	13500	.	+	.	ID=chr1_TE000003;Name=GYPSY3_int;Classification=LTR/Gypsy;Integrity=1.0
+chr2	TEgenomeSimulator	repeat_region	500	2400	.	-	.	ID=chr2_TE000004;Name=MITE1_x;Classification=MITE/DTH;Integrity=1.0;TSD_5=GCGCG
+chr2	TEgenomeSimulator	repeat_region	3000	3900	.	+	.	ID=chr2_TE000005;Name=Helit1_y;Classification=DNA/Helitron;Integrity=0.45;TSD_3=None

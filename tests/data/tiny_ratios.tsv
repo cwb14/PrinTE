@@ -1,0 +1,12 @@
+# Superfamily weights for the test fixture library.
+# class	superfamily	intact	fragmented	transposition
+DNA	DTC	0.0476	0.0476	cutpaste
+DNA	DTM	0.0476	0.0476	cutpaste
+DNA	Helitron	0.2381	0.2381	copypaste
+LINE	unknown	0.0952	0.0952	copypaste
+LTR	Copia	0.1905	0.1905	copypaste
+LTR	Gypsy	0.0476	0.0476	copypaste
+LTR	unknown	0.1905	0.1905	copypaste
+MITE	DTC	0.0476	0.0476	cutpaste
+MITE	DTM	0.0476	0.0476	cutpaste
+SINE	unknown	0.0476	0.0476	copypaste
