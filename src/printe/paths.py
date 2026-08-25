@@ -56,7 +56,34 @@ def config_file(name):
     return _resolve(name, "data")
 
 
+# Everything that ships with PrinTE, so `python -m printe.paths` can list it.
+CONFIG_FILES = ("ratios.tsv", "ratios_ltr_only.tsv")
+DATA_FILES = (
+    "maize_rice_arab_curated_TE.lib.gz",
+    "TAIR10.cds.fa.gz",
+    "TAIR10.pep.fa.gz",
+    "athrep.updated.fasta_062024.ltr.full.gz",
+    "rice7.0.0.liban.ltr.full.gz",
+    "maizeTE02052020.ltr.full.gz",
+    "ltr-db.fa.gz",
+)
+
+
+def find(name):
+    """Resolve a bundled file whether it is a config table or a reference library."""
+    return config_file(name) if name in CONFIG_FILES else data_file(name)
+
+
 if __name__ == "__main__":
     import sys
 
-    print(data_file(sys.argv[1]) if len(sys.argv) > 1 else _PKG)
+    if len(sys.argv) > 1:
+        print(find(sys.argv[1]))
+    else:
+        for name in CONFIG_FILES + DATA_FILES:
+            try:
+                print(f"{name:38s} {find(name)}")
+            except FileNotFoundError:
+                # fetch-data only pulls ltr-db; the rest ship with a clone or the image
+                hint = "make fetch-data" if name == "ltr-db.fa.gz" else "use a clone or the container"
+                print(f"{name:38s} not found  ({hint})")
