@@ -88,11 +88,13 @@ jobs:
       - name: Run a burn-in inside the image
         run: |
           mkdir -p out
+          # printe is the ENTRYPOINT, so pass options only - naming it here again
+          # would hand printe its own name as the first argument.
           docker run --rm -u "$(id -u):$(id -g)" -v "$PWD/out:/work" -w /work \
             -v "$PWD/tests/data:/fixtures:ro" printe:ci \
-            printe --burnin_only -sz 60kb -cn 1 -P 4 -itp 10 \
-                   -cl /fixtures/tiny_TE.lib -c /fixtures/tiny_cds.fa \
-                   -r /fixtures/tiny_ratios.tsv -t 2 -s 42
+            --burnin_only -sz 60kb -cn 1 -P 4 -itp 10 \
+            -cl /fixtures/tiny_TE.lib -c /fixtures/tiny_cds.fa \
+            -r /fixtures/tiny_ratios.tsv -t 2 -s 42
           test -s out/burnin.fasta
           test -s out/burnin.bed
 
