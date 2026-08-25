@@ -1,0 +1,26 @@
+# Same checks CI runs, so lint failures show up before you push.
+#   pip install pre-commit && pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.10.0
+    hooks:
+      - id: shellcheck
+        args: [-S, warning]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+        exclude: ^conda/meta\.yaml$      # jinja templating is not valid YAML
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        # the bundled reference libraries are a few MB; this catches a stray genome
+        args: [--maxkb=6000]

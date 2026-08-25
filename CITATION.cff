@@ -1,0 +1,32 @@
+# Before tagging a release: add the paper's DOI, volume, and page numbers under
+# preferred-citation, and confirm the author list matches the manuscript.
+cff-version: 1.2.0
+message: If you use PrinTE in your research, please cite the paper below.
+title: "PrinTE: a forward simulator of transposable-element genome evolution"
+abstract: >-
+  PrinTE evolves a genome one generation at a time, repeatedly mutating the DNA,
+  inserting new transposable elements and excising old ones, with realistic nesting,
+  solo-LTR formation, cut-and-paste and copy-and-paste transposition, selection against
+  gene disruption, and chromatin bias.
+type: software
+authors:
+  - family-names: Benson
+    given-names: Chris
+    orcid: "https://orcid.org/0000-0002-3752-6378"
+repository-code: https://github.com/cwb14/PrinTE
+license: GPL-3.0-or-later
+version: 1.0.0
+keywords:
+  - transposable elements
+  - genome evolution
+  - forward simulation
+  - LTR retrotransposon
+preferred-citation:
+  type: article
+  title: "PrinTE: a forward simulator of transposable-element genome evolution"
+  authors:
+    - family-names: Benson
+      given-names: Chris
+      orcid: "https://orcid.org/0000-0002-3752-6378"
+  journal: Nature Communications
+  year: 2026
