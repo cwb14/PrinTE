@@ -9,14 +9,21 @@ scatters a parameter sweep across whatever the executor gives it.
 
 ### Try it
 
+You need Nextflow itself first - `mamba install -y -c bioconda nextflow`. Then, from any
+directory:
+
 ```bash
-nextflow run . -profile test,conda
+nextflow run cwb14/PrinTE -profile test,conda
 ```
 
-That runs the **simulate** path end to end on the fixtures in `tests/data/` in a couple of
-minutes: burn-in, then two generations. CI runs the same thing on every push as
-`-profile test,local`. The **sweep** path is not covered by CI, so run it once yourself
-before you trust it with a large grid.
+That pulls the pipeline from GitHub, so you do not need to clone anything. It runs the
+**simulate** path end to end on the bundled test fixtures in a couple of minutes: burn-in,
+then two generations. CI runs the same thing on every push as `-profile test,local`. The
+**sweep** path is not covered by CI, so run it once yourself before you trust it with a
+large grid.
+
+The examples below use `nextflow run .`, which works when you are inside a clone. Replace
+the `.` with `cwb14/PrinTE` to run from anywhere without cloning.
 
 ### The two modes
 

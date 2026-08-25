@@ -39,6 +39,9 @@ zcat data/maize_rice_arab_curated_TE.lib.gz \
 ### Step 1 - seed and launch the search
 
 ```bash
+# the bundled ratios file, wherever PrinTE was installed
+RATIOS=$(python -m printe.paths ratios_ltr_only.tsv)
+
 python -m printe.grid.guided_search init \
     --samples 100 --seed 7 \
     --ins-start 1e-9 --ins-end 1e-17 --del-start 1e-9 --del-end 1e-17 \
@@ -47,7 +50,7 @@ python -m printe.grid.guided_search init \
     --ge 5400000 --st 54000 --mut 2e-9 --tstv 2.0 \
     --mxgs 211730673 --mngs 211530673 \
     --bed burnin.bed --fasta burnin.fasta \
-    --clean-lib lib_clean.fa --ratios src/printe/data/ratios_ltr_only.tsv \
+    --clean-lib lib_clean.fa --ratios "$RATIOS" \
     --threads 250
 ```
 

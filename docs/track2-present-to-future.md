@@ -30,13 +30,16 @@ but with the **replica genome as the reference**, a **tight size band** around t
 and a **short horizon**. For example, with a current genome of ~180,000,000 bp:
 
 ```bash
+# the bundled ratios file, wherever PrinTE was installed
+RATIOS=$(python -m printe.paths ratios.tsv)
+
 python -m printe.grid.guided_search init --samples 100 --seed 7 \
     --ins-start 1e-10 --ins-end 1e-13 --del-start 1e-10 --del-end 1e-13 \
     --sr-start 5 --sr-end 95 --sr-step 10 --k-start 0 --k-end 10 --k-step 2 \
     --printe-script ./PrinTE.sh --ge 1000000 --st 100000 --mut 1.3e-8 --tstv 2.0 \
     --mxgs 181800000 --mngs 178200000 \
     --bed TEgenomeSimulator.bed --fasta TEgenomeSimulator.fa \
-    --clean-lib lib_clean.fa --ratios src/printe/data/ratios.tsv --threads 64
+    --clean-lib lib_clean.fa --ratios "$RATIOS" --threads 64
 ```
 
 A run **"held steady"** if its genome size and TE content stayed inside your tolerance band over

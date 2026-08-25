@@ -81,11 +81,14 @@ awk -v OFS='\t' '{a[NR]=$0; v[NR]=$3; s+=$3} END{for(i=1;i<=NR;i++) print a[i], 
 ### Step 3 - build the ancestor as a burn-in
 
 ```bash
+# the bundled ratios file, wherever PrinTE was installed
+RATIOS=$(python -m printe.paths ratios_ltr_only.tsv)
+
 printe --burnin_only \
     -sz "$sz" -itp "$itp" -ftp 50 \
     -mb ancestral.LTR.bins.freq \
     -m 2e-9 -TsTv 2.0 --ex_LTR \
-    -cl lib_clean.fa -r src/printe/data/ratios_ltr_only.tsv -t 200
+    -cl lib_clean.fa -r "$RATIOS" -t 200
 ```
 
 `-sz`, `-itp`, and `-mb` come from Step 2. `-ftp` is the **fragmented**-TE percent - it is *not*

@@ -9,8 +9,9 @@ produce byte-identical output to the pre-packaging code for the same seed.
 
 ### Added
 
-- Installable package. `pip install printe`, with `printe`, `printe-grid`, `printe-score`
-  and `printe-benchmark` on PATH. A bioconda recipe is in `conda/`, not yet submitted.
+- Installable package: `pip install -e .` from a clone puts `printe`, `printe-grid`,
+  `printe-score` and `printe-benchmark` on PATH. Not on PyPI or bioconda yet; the recipe
+  is in `conda/`.
 - Container images at `ghcr.io/cwb14/printe`, built and pushed on tag. Apptainer
   definition in `containers/` for clusters without a Docker daemon.
 - Nextflow pipeline (`main.nf`) with `--mode simulate` and `--mode sweep`, and profiles for

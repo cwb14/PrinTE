@@ -66,18 +66,29 @@ or skip that phase entirely with `--no_postproc`. A burn-in never needs the netw
 Set `PRINTE_CACHE` to move that directory somewhere else, which is what the container
 does so it can write into a read-only image.
 
-### Where did the bundled TE libraries go?
+### Where are the bundled TE libraries?
 
-`printe --version` works from anywhere, but the reference libraries only ship with a
-clone or a conda install. If a pip-installed PrinTE cannot find them:
+Ask PrinTE:
 
 ```bash
-make fetch-data                     # downloads into ~/.cache/printe/data
-export PRINTE_DATA=/path/to/data    # or point at a copy you already have
+python -m printe.paths                                # source install
+apptainer exec printe.sif python -m printe.paths      # container
 ```
 
-`ltr-db.fa.gz` is a release asset rather than a repo file, because it is 38 MB and
-nothing in the code reads it automatically.
+That lists every bundled file and where it resolves on your system. Anything shown as
+`not found` is just not present in the way you installed: the reference libraries come
+with a clone and with the container, but a bare `pip install` of the package gets the
+code and the small `.tsv` tables only.
+
+If you have the libraries elsewhere, point PrinTE at that directory:
+
+```bash
+export PRINTE_DATA=/path/to/your/data
+```
+
+`ltr-db.fa.gz` is different again - it is 38 MB and nothing reads it automatically, so it
+ships as a release asset rather than in the repository. `make fetch-data` downloads it
+into `~/.cache/printe/data`, where PrinTE looks by default.
 
 ### `mamba env create -f env.yml` fails
 

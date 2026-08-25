@@ -8,7 +8,8 @@ sequence characters.
 ---
 
 PrinTE ships with a curated maize/rice/Arabidopsis library
-(`data/maize_rice_arab_curated_TE.lib.gz`) and an LTR-RT exemplar database (`data/ltr-db.fa.gz`).
+(`maize_rice_arab_curated_TE.lib.gz`, the default `--TE_lib`) and, as a release asset,
+an LTR-RT exemplar database (`ltr-db.fa.gz` - fetch it with `make fetch-data`).
 For LTR-RT studies, the best library is usually a **species-specific** one built from your own
 genome - see [Annotating LTR-RTs](#annotating-ltr-rts-and-building-a-species-specific-library).
 To assemble a library by hand instead, a few helpers are provided:

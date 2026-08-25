@@ -51,55 +51,157 @@ PrinTE is four tools in one:
 
 ## Install
 
-PrinTE relies on **conda** and **mamba** - we recommend installing them via
-[Miniforge](https://github.com/conda-forge/miniforge/releases) (pick the installer for your
-OS and CPU). None of the routes below need root.
+Pick **one** of the three routes below and paste the whole block. Each one ends with the
+same check, so you know it worked before you go any further. None of them needs root, and
+after any of them the `printe` command works the same way.
 
-| | |
-|---|---|
-| **container** | `apptainer pull printe.sif docker://ghcr.io/cwb14/printe:latest`<br>**Usually the least trouble on a shared cluster** - Apptainer needs no daemon and no privileges. |
-| **source** | `git clone https://github.com/cwb14/PrinTE && cd PrinTE`<br>`mamba env create -f environment.yml && conda activate PrinTE` |
-| **pip** | `pip install printe` (code only - `make fetch-data` pulls the reference libraries) |
+### 1. Container - least trouble on a shared cluster
 
-A **bioconda** recipe is in `conda/`, but it has not been submitted yet, so
-`mamba install -c bioconda printe` will not work until it merges.
+Nothing to compile and nothing to resolve. Most HPC systems already have Apptainer
+(check with `apptainer --version`); if yours does not, the first line installs it into
+your own space.
 
-From a clone, `bash PrinTE.sh` and the installed `printe` command are the **same program**,
-so every example below works either way.
+```bash
+mamba install -y -c conda-forge apptainer     # skip if `apptainer --version` already works
 
-Track 1 additionally needs R (`mamba env create -f environment-r.yml`) and an LTR-RT
-discovery tool. Track 2 additionally needs
+apptainer pull printe.sif docker://ghcr.io/cwb14/printe:latest
+
+# Make `printe` mean "run PrinTE inside that image", now and at every future login.
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/printe <<EOF
+#!/bin/bash
+exec apptainer exec "$PWD/printe.sif" printe "\$@"
+EOF
+chmod +x ~/.local/bin/printe
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+export PATH="$HOME/.local/bin:$PATH"
+
+printe --version
+```
+
+You should see `PrinTE 1.0.0`. Apptainer automatically makes your current directory
+visible inside the image, so results land where you ran the command.
+
+This makes a small `printe` script rather than a shell alias on purpose: an alias would
+not work inside a SLURM job script, and this does. Keep `printe.sif` where it is - the
+wrapper points at that exact path.
+
+### 2. From source - if you want to read or change the code
+
+```bash
+git clone https://github.com/cwb14/PrinTE.git
+cd PrinTE
+mamba env create -f environment.yml
+conda activate PrinTE
+pip install -e .
+
+printe --version
+```
+
+You should see `PrinTE 1.0.0`. The `pip install -e .` line is the one that puts `printe`
+on your PATH - without it the quick start below will not run. You can also call
+`bash PrinTE.sh` from inside the clone instead; it is the same program.
+
+Remember to `conda activate PrinTE` in every new terminal.
+
+### 3. Nextflow - if you want to run many parameter sets, or use a cluster
+
+```bash
+mamba install -y -c bioconda nextflow
+
+nextflow run cwb14/PrinTE -profile test,conda
+```
+
+That downloads the pipeline from GitHub and runs a small test simulation, so you do not
+need to clone anything. See [the Nextflow pipeline](docs/nextflow.md) for real runs.
+
+### Not available yet
+
+`pip install printe` and `mamba install -c bioconda printe` do **not** work yet - the
+package is not on PyPI and the bioconda recipe in `conda/` has not been submitted. Use one
+of the three routes above.
+
+### Extras, only if you need them
+
+Track 1 (past to present) also needs R: `mamba env create -f environment-r.yml`, plus an
+LTR-RT discovery tool. Track 2 also needs
 [TEgenomeSimulator](https://github.com/Plant-Food-Research-Open/TEgenomeSimulator).
 
-PrinTE clones [Kmer2LTR](https://github.com/cwb14/Kmer2LTR) into `~/.cache/printe/` the
-first time it post-processes an evolve run, so that step needs network access once.
-Pre-clone it there to run offline.
+The first time PrinTE post-processes an evolve run it clones
+[Kmer2LTR](https://github.com/cwb14/Kmer2LTR) into `~/.cache/printe/` to date the LTR-RTs,
+so that one step needs internet. A burn-in never does, and `--no_postproc` skips it.
 
 ## Quick start
 
+These work whichever route you installed with. Run them in a directory you can write to.
+
 ```bash
-# 1) Build a burn-in genome and stop: 100 Mb, 1 chromosome, 4% CDS, 10% intact TE.
-#    Writes burnin.fasta, burnin.bed, burnin.stat to the current directory.
+# 1) Build a starting genome and stop: 100 Mb, 1 chromosome, 4% genes, 10% intact TE.
+#    Takes a few minutes. Writes burnin.fasta, burnin.bed and burnin.stat here.
 printe --burnin_only -sz 100Mb -cn 1 -P 4 -itp 10
 
-# 2) Evolve for 30,000 generations, sampling every 10,000 (variable rates).
+# 2) Evolve a genome for 30,000 generations, saving it every 10,000.
 printe -sz 135Mb -cn 5 -P 25 -itp 21 -ir 1e-6 -dr 4e-6 -ge 30000 -st 10000 -t 20
 
-# 3) Start from your OWN genome instead of a burn-in.
-#    Supply -i so new insertions match your clade.
+# 3) Start from YOUR genome instead of a simulated one. The BED must be in PrinTE's
+#    format (see docs/file-formats.md), and -i should be your clade's TE library.
 printe -f genome.fasta -b genome.bed -i my_TE.lib -ge 20000 -st 10000
 ```
 
-Run `printe` with no arguments for a short menu, or `printe -h` for every option.
+Run `printe` on its own for a short menu, or `printe -h` for every option.
 
-To run many parameter sets at once, or on a cluster or AWS, use the Nextflow pipeline:
+**Your first run will sit for several minutes on `=== TE Library Processing ===`.** That is
+normal. PrinTE is comparing every TE in the library against itself to work out how old each
+one is, and it only has to do that once. It writes the result as `lib_clean.fa` in your
+working directory, so pass that back on every later run and the step is skipped entirely:
 
 ```bash
-nextflow run . -profile test,conda            # tiny end-to-end run on the bundled fixtures
-nextflow run . -profile singularity,slurm --mode sweep \
-    --fasta burnin.fasta --bed burnin.bed \
-    --ref_tsv real_LTR.tsv --ref_fasta real_genome.fa
+printe --burnin_only -sz 100Mb -cn 1 -P 4 -itp 10 -cl lib_clean.fa
 ```
+
+**If something fails,** look at `pipeline.error` in the directory you ran from. On a
+successful run it contains only a start banner, so anything else in it is the real problem.
+[Troubleshooting](docs/troubleshooting.md) covers the common ones.
+
+## What comes with PrinTE
+
+You do not have to supply anything to try it - these ship with the tool and are used by
+default. Look at them before you build your own, so you can see the formats expected.
+
+| file | what it is |
+|---|---|
+| `ratios.tsv` | how often each TE superfamily is inserted, and which ones cut-and-paste. The default `-r`. |
+| `ratios_ltr_only.tsv` | the same, restricted to LTR retrotransposons |
+| `maize_rice_arab_curated_TE.lib.gz` | the TE library new insertions are drawn from. The default `-i`. |
+| `TAIR10.cds.fa.gz` | *Arabidopsis* CDS, used as the "genes" in a simulated genome. The default `-c`. |
+| `TAIR10.pep.fa.gz` | proteins, for classifying LTR-RTs during annotation |
+| `ltr-db.fa.gz` | a larger LTR-RT exemplar database. Not bundled - `make fetch-data` downloads it. |
+
+To see where they are on your system:
+
+```bash
+python -m printe.paths                       # source or pip install
+apptainer exec printe.sif python -m printe.paths     # if you installed the container
+```
+
+That prints one line per file. Add a filename to get just that path, which you can use
+straight away:
+
+```bash
+less "$(python -m printe.paths ratios.tsv)"
+zcat "$(python -m printe.paths TAIR10.cds.fa.gz)" | head
+```
+
+**To edit one**, copy it out first, change your copy, and pass it back:
+
+```bash
+cp "$(python -m printe.paths ratios.tsv)" my_ratios.tsv
+# edit my_ratios.tsv, then
+printe --burnin_only -sz 100Mb -cn 1 -P 4 -itp 10 -r my_ratios.tsv
+```
+
+The same applies to the TE library and CDS: `-i my_TE.lib` and `-c my_cds.fa`. For a
+species-specific library, see [Annotating LTR-RTs](docs/ltr-annotation.md).
 
 ## Documentation
 
