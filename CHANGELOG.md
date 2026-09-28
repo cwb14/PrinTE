@@ -2,6 +2,54 @@
 
 Notable changes to PrinTE. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+
+- One environment: the R stack moved from `environment-r.yml`, now removed, into
+  `environment.yml`. Most users need the R scripts, and `ancestral_reconstruction_ltr_age.R`
+  calls PrinTE's Python anyway. Update an existing env with
+  `mamba env update -n PrinTE -f environment.yml --prune`.
+- Nothing is written to `~/.cache` any more. `make fetch-data` downloads `ltr-db.fa.gz` into
+  `data/`, Kmer2LTR is cloned into the PrinTE directory, and `ltr_mutator` is built into its
+  `bin/`. `PRINTE_CACHE`, when set, holds `bin/` and `Kmer2LTR/` instead.
+- The container carries Kmer2LTR and the R scripts (`/opt/printe/R`), so post-processing
+  needs no network and clones nothing at runtime.
+- Kmer2LTR is fetched when a run starts rather than when post-processing begins, so a missing
+  network or an unwritable directory fails at once instead of after the simulation. Runs
+  started together, such as a job array or a sweep, share one clone.
+- A Kmer2LTR that fails, or a clone at another commit than the pinned one, now prints a
+  warning instead of passing silently.
+
+### Fixed
+
+- On a fresh setup, post-processing dated no LTR-RTs yet exited 0: it cloned Kmer2LTR's
+  `main` branch, a rewrite without the `Kmer2LTR.py` that PrinTE runs. Kmer2LTR is now
+  pinned to a commit on its `legacy` branch.
+- `ltr_dens.py` misread Kmer2LTR's 16-column output: pandas made the four surplus columns
+  the index and shifted every name four places, so `all_LTR_density.pdf` plotted LTR
+  coordinates in place of divergences. It now reads the first 12 columns by position.
+- `ltr_mutator` built through `make` always landed in PrinTE's own `bin/`, even when
+  `PRINTE_MUTATOR_DIR` said to put it elsewhere, so the run could not find it.
+- An `ltr_mutator` that no longer runs, such as one built on a machine with another C library,
+  is rebuilt; `make` used to call it up to date and the run failed at the first generation.
+
+### Added
+
+- `manuscript_figures/`: the paper's seven figures and the scripts that drew them.
+
+### Upgrading from 1.0.0
+
+PrinTE no longer looks in `~/.cache/printe`, so what 1.0.0 put there is ignored:
+
+- `ltr-db.fa.gz`: move it into `data/`, or point `PRINTE_DATA` at its directory.
+- A Kmer2LTR clone: to keep using it, `export PRINTE_CACHE=~/.cache/printe`. If it is a clone
+  of `main`, PrinTE says so and prints the `git checkout` that fixes it.
+- A read-only install that relied on the cache fallback now stops at startup until
+  `PRINTE_CACHE` names a writable directory.
+
+Otherwise `rm -r ~/.cache/printe`.
+
 ## [1.0.0]
 
 First packaged release. The simulator itself is unchanged: the burn-in and generation loop

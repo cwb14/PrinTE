@@ -5,7 +5,6 @@ BIN     := $(PREFIX)/bin
 MUTATOR := $(BIN)/ltr_mutator
 SRC     := src/printe/cpp/ltr_mutator.cpp
 VERSION := $(shell sed -n 's/^__version__ = "\(.*\)"/\1/p' src/printe/__init__.py)
-CACHE   := $(if $(XDG_CACHE_HOME),$(XDG_CACHE_HOME),$(HOME)/.cache)/printe
 
 UNAME := $(shell uname -s)
 ifeq ($(UNAME),Darwin)
@@ -29,7 +28,7 @@ help:
 	@echo "  make test          run the full test suite"
 	@echo "  make test-fast     skip the end-to-end tests"
 	@echo "  make lint          ruff + shellcheck"
-	@echo "  make fetch-data    download the optional LTR-RT exemplar database"
+	@echo "  make fetch-data    download the optional LTR-RT exemplar database into data/"
 	@echo "  make docker        build the container image"
 	@echo "  make apptainer     build a .sif from the published image"
 	@echo "  make clean         remove build output and caches"
@@ -39,7 +38,7 @@ all: ltr-mutator
 ltr-mutator: $(MUTATOR)
 
 $(MUTATOR): $(SRC)
-	@mkdir -p $(BIN)
+	@mkdir -p $(dir $@)
 ifeq ($(UNAME),Darwin)
 	@test -n "$(OMP_PREFIX)" || { echo "libomp not found. Run: brew install libomp"; exit 1; }
 endif
@@ -55,11 +54,11 @@ lint:
 	ruff check src tests
 	shellcheck -S warning PrinTE.sh scripts/*.sh
 
+# Next to the bundled libraries, where printe.paths looks.
 fetch-data:
-	@mkdir -p $(CACHE)/data
-	curl -fsSL -o $(CACHE)/data/ltr-db.fa.gz \
+	curl -fsSL -o data/ltr-db.fa.gz \
 	  https://github.com/cwb14/PrinTE/releases/download/v$(VERSION)/ltr-db.fa.gz
-	@echo "Fetched into $(CACHE)/data"
+	@echo "Fetched data/ltr-db.fa.gz"
 
 docker:
 	docker build -t printe:$(VERSION) -t printe:latest .

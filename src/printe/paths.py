@@ -1,9 +1,9 @@
 """Locate the reference libraries and config tables that ship with PrinTE.
 
-Data files are looked for in three places, in order: $PRINTE_DATA, the repo's data/
-directory next to the package, then the user cache that 'make fetch-data' writes into.
-A pip install carries the code but not the multi-MB libraries, so the cache is what
-makes an installed PrinTE usable without a clone.
+Data files are looked for in $PRINTE_DATA, then in the repo's data/ directory next to
+the package, which is also where 'make fetch-data' puts ltr-db.fa.gz. A pip install
+carries the code but not the multi-MB libraries, so point PRINTE_DATA at a copy of
+data/ there; the container sets it for you.
 """
 
 import os
@@ -12,18 +12,12 @@ from pathlib import Path
 _PKG = Path(__file__).resolve().parent
 
 
-def _cache_root():
-    xdg = os.environ.get("XDG_CACHE_HOME")
-    return Path(xdg) if xdg else Path.home() / ".cache"
-
-
 def _candidates(name, subdir):
     env = os.environ.get("PRINTE_DATA")
     if env:
         yield Path(env) / name
     # src/printe/ -> src/ -> repo root
     yield _PKG.parent.parent / subdir / name
-    yield _cache_root() / "printe" / subdir / name
 
 
 def _resolve(name, subdir):

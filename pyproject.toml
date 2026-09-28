@@ -68,12 +68,13 @@ testpaths = ["tests"]
 markers = [
   "slow: runs the pipeline end to end (tens of seconds)",
   "needs_blast: requires blastn on PATH",
-  "needs_r: requires Rscript with ape and phytools",
+  "needs_r: requires Rscript with the packages the R/ scripts load",
 ]
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+extend-exclude = ["manuscript_figures"]  # kept as they were run for the paper
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

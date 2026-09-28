@@ -15,7 +15,7 @@ simulated insertions resemble the real elements of your genome. The companion to
 
 ```bash
 git clone https://github.com/cwb14/synLTR.git
-git clone https://github.com/cwb14/Kmer2LTR.git    # also auto-cloned by PrinTE/synLTR when needed
+git clone -b legacy https://github.com/cwb14/Kmer2LTR.git   # the Kmer2LTR.py used below
 ```
 
 **Annotate LTR-RTs in a genome** (real or simulated). `--max-rounds 1` does a single, non-nested

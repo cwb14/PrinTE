@@ -26,13 +26,13 @@ intact on download and needed no reconstitution.
 These three are kept for provenance. Nothing reads them automatically; they are the inputs
 that `maize_rice_arab_curated_TE.lib.gz` was built from.
 
-## Not in this directory
+## Not bundled
 
 `ltr-db.fa.gz`, the LTR-RT exemplar database, is 38 MB and no code path reads it, so it
 ships as a release asset rather than a repository file:
 
 ```bash
-make fetch-data          # downloads it into ~/.cache/printe/data
+make fetch-data          # downloads it into this directory
 ```
 
-`printe.paths` finds it there, or wherever `$PRINTE_DATA` points.
+`printe.paths` finds it here, or wherever `$PRINTE_DATA` points.

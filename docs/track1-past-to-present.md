@@ -21,7 +21,9 @@ time-scaled with a tool such as [PATHd8](https://www2.math.su.se/PATHd8/).)
 
 ### Step 1 - reconstruct the ancestor
 
-Two R scripts run `phytools::fastAnc` over the tree. **File-naming/placement matters:**
+Two R scripts run `phytools::fastAnc` over the tree; the `PrinTE` environment has R and every
+package they need. From the container, run them as
+`apptainer exec printe.sif Rscript /opt/printe/R/<script>.R ...`. **File-naming/placement matters:**
 
 - `ancestral_reconstruction_gs.R` looks for each tip's file as `<tip_label><suffix>` **in the
   same directory as the Newick** (`<tip>` is the exact tip string in the tree).

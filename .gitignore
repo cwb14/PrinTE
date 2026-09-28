@@ -16,8 +16,9 @@ work/
 .nextflow*
 results/
 
-# Cloned at runtime, and built images
+# Cloned or downloaded at runtime, and built images
 Kmer2LTR/
+data/ltr-db.fa.gz
 *.sif
 
 # Simulation output. These patterns are deliberately broad because runs happen in

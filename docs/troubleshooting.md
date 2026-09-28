@@ -84,20 +84,31 @@ If you already have a binary somewhere, point at it and skip the build:
 export PRINTE_MUTATOR=/path/to/ltr_mutator
 ```
 
+### Where does PrinTE put what it builds or downloads?
+
+In its own directory, never a hidden one: `bin/ltr_mutator`, `Kmer2LTR/`, and
+`data/ltr-db.fa.gz` if you run `make fetch-data`. If that directory is read-only, set
+`PRINTE_CACHE` to a writable one and PrinTE keeps `bin/` and `Kmer2LTR/` there instead.
+The container needs neither: both are built into the image.
+
 ### Can I run without network access?
 
-The simulation itself, yes. Post-processing clones
-[Kmer2LTR](https://github.com/cwb14/Kmer2LTR) to date the LTR-RTs, which needs network
-the first time. Either pre-clone it:
+Yes with the container, which has [Kmer2LTR](https://github.com/cwb14/Kmer2LTR) built in.
+From source, post-processing clones Kmer2LTR into the PrinTE directory on the first evolve
+run to date the LTR-RTs. To stay offline, clone it there yourself beforehand:
 
 ```bash
-mkdir -p ~/.cache/printe && git clone https://github.com/cwb14/Kmer2LTR.git ~/.cache/printe/Kmer2LTR
+cd PrinTE && git clone -b legacy https://github.com/cwb14/Kmer2LTR.git
 ```
 
-or skip that phase entirely with `--no_postproc`. A burn-in never needs the network.
+(or into `$PRINTE_CACHE/Kmer2LTR` if you set that), or skip that phase entirely with
+`--no_postproc`. A burn-in never needs the network. PrinTE
+checks for Kmer2LTR before it starts simulating, so a missing network fails straight away
+rather than after the run.
 
-Set `PRINTE_CACHE` to move that directory somewhere else, which is what the container
-does so it can write into a read-only image.
+PrinTE runs Kmer2LTR's original `Kmer2LTR.py`, which lives on its `legacy` branch; `main` is a
+rewrite with a different interface. If PrinTE reports that your copy has no `Kmer2LTR.py`, it
+is a `main` clone: switch it with the `git checkout` command in the message, or delete it.
 
 ### Where are the bundled TE libraries?
 
@@ -121,7 +132,7 @@ export PRINTE_DATA=/path/to/your/data
 
 `ltr-db.fa.gz` is different again - it is 38 MB and nothing reads it automatically, so it
 ships as a release asset rather than in the repository. `make fetch-data` downloads it
-into `~/.cache/printe/data`, where PrinTE looks by default.
+into `data/`, next to the other libraries.
 
 ### `mamba env create -f env.yml` fails
 

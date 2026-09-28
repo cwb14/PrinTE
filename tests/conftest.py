@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,12 +30,19 @@ def tiny_ratios():
     return DATA / "tiny_ratios.tsv"
 
 
-def run_printe(cwd, *args, timeout=1800):
+# Where PrinTE builds and fetches things. A developer's own setting must not steer the
+# tests, so run_printe drops these unless a test passes its own env.
+LOCATION_VARS = ("PRINTE_CACHE", "PRINTE_MUTATOR_DIR")
+
+
+def run_printe(cwd, *args, timeout=1800, env=None):
     """Invoke PrinTE.sh in cwd. On failure, surface pipeline.error - that is where
     the actual traceback lands, and a bare exit code says nothing useful."""
+    if env is None:
+        env = {k: v for k, v in os.environ.items() if k not in LOCATION_VARS}
     proc = subprocess.run(
         ["bash", str(REPO / "PrinTE.sh"), *(str(a) for a in args)],
-        cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
+        cwd=str(cwd), capture_output=True, text=True, timeout=timeout, env=env,
     )
     if proc.returncode != 0:
         err = cwd / "pipeline.error"

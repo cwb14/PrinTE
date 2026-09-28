@@ -1,11 +1,14 @@
 # Same checks CI runs, so lint failures show up before you push.
 #   pip install pre-commit && pre-commit install
+# The figure scripts in manuscript_figures/ are kept as they were run for the paper, so
+# the hooks that rewrite files skip them; the large-file check still covers them.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.4
     hooks:
       - id: ruff
         args: [--fix]
+        exclude: ^manuscript_figures/
 
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.10.0
@@ -17,7 +20,9 @@ repos:
     rev: v5.0.0
     hooks:
       - id: end-of-file-fixer
+        exclude: ^manuscript_figures/
       - id: trailing-whitespace
+        exclude: ^manuscript_figures/
       - id: check-yaml
         exclude: ^conda/meta\.yaml$      # jinja templating is not valid YAML
       - id: check-merge-conflict

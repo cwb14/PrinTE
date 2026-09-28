@@ -44,13 +44,19 @@ fi
 
 # ltr_mutator is compiled on first use rather than shipped; see Makefile. A conda or
 # container install already put it on PATH, so look there before building anything.
+# Whatever PrinTE builds or downloads goes in its own directory, or under $PRINTE_CACHE
+# when that is set, e.g. for a read-only install.
 if [[ -n "${PRINTE_MUTATOR_DIR:-}" ]]; then
   BIN_DIR="${PRINTE_MUTATOR_DIR}"
-elif mkdir -p "${TOOL_DIR}/bin" 2>/dev/null && [[ -w "${TOOL_DIR}/bin" ]]; then
-  BIN_DIR="${TOOL_DIR}/bin"
 else
-  BIN_DIR="${PRINTE_CACHE:-${HOME}/.cache/printe}/bin"
+  BIN_DIR="${PRINTE_CACHE:-${TOOL_DIR}}/bin"
 fi
+
+# Kmer2LTR dates the LTR-RTs in post-processing. PrinTE runs the original Kmer2LTR.py,
+# kept on Kmer2LTR's legacy branch; its main branch is a rewrite with a different
+# command line and output. The Dockerfile reads this line to build the same commit in.
+KMER2LTR_REF=bce65d73bdab69a8e441f4c5b6a6c0ba4253fc17
+KMER2LTR_DIR="${PRINTE_CACHE:-${TOOL_DIR}}/Kmer2LTR"
 
 # --- Check the OS is one we build for ---
 OS="$(uname)"
@@ -98,11 +104,24 @@ ensure_mutator() {
     echo "Error: Source file '${src}' not found. Cannot build ltr_mutator." | tee -a "$ERR"
     exit 1
   fi
-  mkdir -p "$(dirname "$bin")"
+  local bin_dir fix
+  bin_dir="$(dirname "$bin")"
+  if ! mkdir -p "$bin_dir" 2>/dev/null || [[ ! -w "$bin_dir" ]]; then
+    # PRINTE_CACHE only helps when it is what chose this location.
+    fix="set PRINTE_MUTATOR to a working ltr_mutator"
+    [[ "$bin" == "${BIN_DIR}/ltr_mutator" && -z "${PRINTE_MUTATOR_DIR:-}" ]] &&
+      fix+=", or PRINTE_CACHE to a writable directory"
+    echo "Error: no working ltr_mutator at ${bin}, and ${bin_dir} is not writable to build" \
+         "one there; ${fix}." | tee -a "$ERR"
+    exit 1
+  fi
 
-  # Prefer the Makefile so the compiler flags live in exactly one place.
+  # Prefer the Makefile so the compiler flags live in exactly one place. It runs in
+  # TOOL_DIR, so name the target by its absolute path. -B because the binary just failed
+  # its probe: one built on a machine with another C library still looks up to date.
   if command -v make &>/dev/null && [[ -f "${TOOL_DIR}/Makefile" ]]; then
-    if make -C "${TOOL_DIR}" ltr-mutator >> "$LOG" 2>> "$ERR"; then
+    if make -B -C "${TOOL_DIR}" ltr-mutator MUTATOR="$(cd "$bin_dir" && pwd)/$(basename "$bin")" \
+         >> "$LOG" 2>> "$ERR"; then
       echo "Build succeeded." | tee -a "$LOG"
       return 0
     fi
@@ -135,6 +154,52 @@ ensure_mutator() {
   else
     echo "Error: Building ltr_mutator failed. See ${ERR} for details." | tee -a "$ERR"
     exit 1
+  fi
+}
+
+# --- Make sure the pinned Kmer2LTR is present; clone it if not ---
+# Called before the simulation starts, so a missing network or an unwritable directory
+# fails at once instead of after the whole run.
+ensure_kmer2ltr() {
+  if [[ ! -d "${KMER2LTR_DIR}" ]]; then
+    if ! command -v git &>/dev/null; then
+      echo "Error: PrinTE needs git to fetch Kmer2LTR into ${KMER2LTR_DIR}, and git is not" \
+           "on PATH. Install it, or skip post-processing with --no_postproc." | tee -a "$ERR"
+      exit 1
+    fi
+    echo "Cloning Kmer2LTR into ${KMER2LTR_DIR}" | tee -a "$LOG"
+    # Clone beside the target and rename it into place, so a run started alongside this
+    # one never sees a half-made clone. os.rename refuses to replace a finished copy, so
+    # if another run gets there first, its copy is kept and this one is dropped.
+    local tmp=""
+    if ! { mkdir -p "$(dirname "${KMER2LTR_DIR}")" &&
+           tmp="$(mktemp -d "${KMER2LTR_DIR}.XXXXXX")" &&
+           GIT_TERMINAL_PROMPT=0 git clone --quiet https://github.com/cwb14/Kmer2LTR.git "$tmp" &&
+           git -C "$tmp" checkout --quiet "${KMER2LTR_REF}"; } >> "$LOG" 2>> "$ERR"; then
+      [[ -n "$tmp" ]] && rm -rf "$tmp"
+      echo "Error: could not clone Kmer2LTR into ${KMER2LTR_DIR}. That needs network access" \
+           "and a writable directory: set PRINTE_CACHE to another one, or skip post-processing" \
+           "with --no_postproc." | tee -a "$ERR"
+      exit 1
+    fi
+    python -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$tmp" "${KMER2LTR_DIR}" \
+      2>/dev/null || rm -rf "$tmp"
+  fi
+  if [[ ! -f "${KMER2LTR_DIR}/Kmer2LTR.py" ]]; then
+    echo "Error: ${KMER2LTR_DIR} is not the Kmer2LTR that PrinTE runs (no Kmer2LTR.py)." \
+         "Switch it with 'git -C ${KMER2LTR_DIR} checkout ${KMER2LTR_REF}', or delete it and" \
+         "PrinTE will clone that version." | tee -a "$ERR"
+    exit 1
+  fi
+  # An older clone can lack flags PrinTE passes, and a failed Kmer2LTR does not stop the
+  # run, so point out a mismatch. Only a clone can say what it is: the copy built into
+  # the container has no .git, and asking git elsewhere would find PrinTE's own repo.
+  local head=""
+  [[ -e "${KMER2LTR_DIR}/.git" ]] && head="$(git -C "${KMER2LTR_DIR}" rev-parse HEAD 2>/dev/null)"
+  if [[ -n "$head" && "$head" != "${KMER2LTR_REF}" ]]; then
+    echo "Warning: ${KMER2LTR_DIR} is at ${head:0:7}, not ${KMER2LTR_REF:0:7}, the Kmer2LTR" \
+         "PrinTE is tested with. If LTR-RTs go undated, run: git -C ${KMER2LTR_DIR} fetch" \
+         "origin legacy && git -C ${KMER2LTR_DIR} checkout ${KMER2LTR_REF}" | tee -a "$ERR"
   fi
 }
 
@@ -577,6 +642,12 @@ fi
 # If --continue is provided, force skip burn-in.
 if [[ "$cont_flag" -eq 1 ]]; then
   skip_burnin=1
+fi
+
+# Post-processing dates LTR-RTs with Kmer2LTR. Fetch it once the arguments check out,
+# before any work, rather than after the simulation.
+if [[ "$burnin_only" -eq 0 && "$no_postproc" -eq 0 ]]; then
+  ensure_kmer2ltr
 fi
 
 # --- Preprocess fasta inputs: decompress if gzipped ---
@@ -1236,24 +1307,6 @@ eval $cmd
 ###############################################################################
 echo "=== Per-Generation Post-Processing ===" | tee -a "$LOG"
 
-# Kmer2LTR dates the LTR-RTs below. Prefer an existing in-tree clone so setups from
-# before 1.0.0 keep working; otherwise put it in the cache, since an installed or
-# containerised PrinTE cannot write next to its own script.
-if [[ -d "${TOOL_DIR}/Kmer2LTR" ]]; then
-  KMER2LTR_DIR="${TOOL_DIR}/Kmer2LTR"
-else
-  KMER2LTR_DIR="${PRINTE_CACHE:-${HOME}/.cache/printe}/Kmer2LTR"
-fi
-if [[ ! -d "${KMER2LTR_DIR}" ]]; then
-  echo "Cloning Kmer2LTR into ${KMER2LTR_DIR}..." | tee -a "$LOG"
-  mkdir -p "$(dirname "${KMER2LTR_DIR}")"
-  git clone https://github.com/cwb14/Kmer2LTR.git "${KMER2LTR_DIR}" >> "$LOG" 2>> "$ERR"
-  if [ $? -ne 0 ]; then
-    echo "Error cloning Kmer2LTR into ${KMER2LTR_DIR}" | tee -a "$ERR"
-    exit 1
-  fi
-fi
-
 # Determine how many generations we actually ran
 # (i.e. highest_gen / step)
 # total_gens=$iterations
@@ -1372,7 +1425,7 @@ for i_idx in "${desc_idx[@]}"; do
   # (b2) Kmer2LTR
   cmd="python ${KMER2LTR_DIR}/Kmer2LTR.py -p ${threads} -i ${final_prefix}_LTR.fasta -D ${final_prefix}_LTR.domain -o ${final_prefix}_LTR.tsv -u ${mutation_rate} --no-plot --purge-subdirs"
   echo "Running: $cmd" | tee -a "$LOG"
-  eval $cmd
+  eval $cmd || echo "Warning: Kmer2LTR failed on ${final_prefix}_LTR.fasta, so those LTR-RTs are not dated." | tee -a "$ERR"
 
   # (b3) Clean up
   rm -f ${final_prefix}_LTR.domain ${final_prefix}_LTR.tsv.log ${final_prefix}_LTR.tsv.summary

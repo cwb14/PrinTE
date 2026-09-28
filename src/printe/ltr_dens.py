@@ -70,8 +70,11 @@ def read_ltr_tsv(fpath):
     except Exception:
         pass
 
-    # Second attempt: headerless new format
-    df = pd.read_csv(fpath, sep="\t", header=None, names=NEW_FORMAT_COLS, engine="python")
+    # Second attempt: headerless new format. Kmer2LTR appends four more columns (trims
+    # and LTR coordinates); without usecols pandas would turn the surplus leading
+    # columns into the index and shift every name four columns right.
+    df = pd.read_csv(fpath, sep="\t", header=None, names=NEW_FORMAT_COLS,
+                     usecols=range(len(NEW_FORMAT_COLS)), engine="python")
     # Ensure numeric columns are numeric
     num_cols = [c for c in NEW_FORMAT_COLS if c.endswith("_d") or c.endswith("_T") or c in ["LTR_LEN","ALN_LEN","substitutions","transitions","transversions"]]
     for c in num_cols:

@@ -1,8 +1,5 @@
-# Runtime environment for the simulator and the grid search.
-#
-# The R stack for Track 1 ancestral reconstruction lives in environment-r.yml. It is
-# kept separate because it roughly doubles the install size and only that one step
-# and the R plotters need it.
+# Runtime environment for all of PrinTE: the simulator, the grid search, and the R
+# scripts in R/ (Track 1 ancestral reconstruction and the R plotters).
 name: PrinTE
 channels:
   - conda-forge
@@ -21,6 +18,18 @@ dependencies:
   - samtools                 # R/ancestral_reconstruction_gs.R
   - minimap2                 # util/plot_indel.py
   - cxx-compiler             # builds ltr_mutator on first run, no root needed
+  # R/ scripts. ancestral_reconstruction_ltr_age.R also calls PrinTE's Python, which is
+  # why these share one environment.
+  - r-base >=4.2
+  - r-ape
+  - r-phytools
+  - r-optparse
+  - r-ggplot2
+  - r-dplyr
+  - r-tidyr
+  - r-stringr
+  - r-viridis
+  - bioconductor-ggtree
   # Used by Kmer2LTR and synLTR, which PrinTE calls during post-processing rather
   # than by PrinTE itself. Drop them if you skip post-processing (--no_postproc).
   - mafft

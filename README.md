@@ -142,13 +142,14 @@ of the three routes above.
 
 ### Extras, only if you need them
 
-Track 1 (past to present) also needs R: `mamba env create -f environment-r.yml`, plus an
+The R scripts in `R/` (Track 1 ancestral reconstruction and the R plotters) run in the same
+`PrinTE` environment, and the container has them in `/opt/printe/R`. Track 1 also needs an
 LTR-RT discovery tool. Track 2 also needs
 [TEgenomeSimulator](https://github.com/Plant-Food-Research-Open/TEgenomeSimulator).
 
-The first time PrinTE post-processes an evolve run it clones
-[Kmer2LTR](https://github.com/cwb14/Kmer2LTR) into `~/.cache/printe/` to date the LTR-RTs,
-so that one step needs internet. A burn-in never does, and `--no_postproc` skips it.
+Post-processing dates the LTR-RTs with [Kmer2LTR](https://github.com/cwb14/Kmer2LTR). The
+container has it built in. From source, the first evolve run clones it into `PrinTE/Kmer2LTR/`,
+so that one run needs internet; a burn-in never does, and `--no_postproc` skips it.
 
 ## Quick start
 
@@ -194,7 +195,7 @@ default. Look at them before you build your own, so you can see the formats expe
 | `maize_rice_arab_curated_TE.lib.gz` | the TE library new insertions are drawn from. The default `-i`. |
 | `TAIR10.cds.fa.gz` | *Arabidopsis* CDS, used as the "genes" in a simulated genome. The default `-c`. |
 | `TAIR10.pep.fa.gz` | proteins, for classifying LTR-RTs during annotation |
-| `ltr-db.fa.gz` | a larger LTR-RT exemplar database. Not bundled - `make fetch-data` downloads it. |
+| `ltr-db.fa.gz` | a larger LTR-RT exemplar database. Not bundled - `make fetch-data` downloads it into `data/`. |
 
 To see where they are on your system:
 
@@ -238,6 +239,7 @@ Then, depending on what you are doing:
 | [Nextflow](docs/nextflow.md) and [AWS Batch](docs/aws-batch.md) | Running sweeps on a cluster or on AWS |
 | [Custom TE libraries](docs/custom-te-library.md) | Assembling a library by hand |
 | [Troubleshooting](docs/troubleshooting.md) | Read `pipeline.error` first. Also memory, offline runs, and the compiler |
+| [Manuscript figures](manuscript_figures/) | The paper's figures and the scripts that drew them |
 
 ## Two ways to use PrinTE
 
@@ -491,6 +493,7 @@ library - supply `-i your_TE.lib` (RepeatMasker headers) so they match your orga
 ## Requirements & supported systems
 
 Supported on **Linux** and **macOS**. Tested on macOS 14.6.1 (Apple M2 Pro, 16 GB RAM) and
-Ubuntu 22.04.5 LTS (AMD EPYC 7763). Requires ~2 GB RAM minimum; 16 GB+, 4+ cores, and a network
-connection (to clone Kmer2LTR) are recommended. The bundled `ltr_mutator` binary is rebuilt
-automatically from source (`g++ -std=c++17 -O3 -fopenmp`) if the precompiled one won't run.
+Ubuntu 22.04.5 LTS (AMD EPYC 7763). Requires ~2 GB RAM minimum; 16 GB+ and 4+ cores are
+recommended. A source install needs a network connection once, to clone Kmer2LTR on the first
+post-processing run; the container needs none. The `ltr_mutator` binary is compiled from
+source on first use (`g++ -std=c++17 -O3 -fopenmp`), and again whenever the existing one won't run.
