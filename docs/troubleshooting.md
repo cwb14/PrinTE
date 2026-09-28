@@ -94,17 +94,16 @@ The container needs neither: both are built into the image.
 ### Can I run without network access?
 
 Yes with the container, which has [Kmer2LTR](https://github.com/cwb14/Kmer2LTR) built in.
-From source, post-processing clones Kmer2LTR into the PrinTE directory on the first evolve
-run to date the LTR-RTs. To stay offline, clone it there yourself beforehand:
+From source, post-processing clones Kmer2LTR into the PrinTE directory on the first
+`--postproc` run to date the LTR-RTs. To stay offline, clone it there yourself beforehand:
 
 ```bash
 cd PrinTE && git clone -b legacy https://github.com/cwb14/Kmer2LTR.git
 ```
 
-(or into `$PRINTE_CACHE/Kmer2LTR` if you set that), or skip that phase entirely with
-`--no_postproc`. A burn-in never needs the network. PrinTE
-checks for Kmer2LTR before it starts simulating, so a missing network fails straight away
-rather than after the run.
+(or into `$PRINTE_CACHE/Kmer2LTR` if you set that), or leave off `--postproc`, and PrinTE
+never fetches it. With `--postproc`, PrinTE checks for Kmer2LTR before it starts simulating,
+so a missing network fails straight away rather than after the run.
 
 PrinTE runs Kmer2LTR's original `Kmer2LTR.py`, which lives on its `legacy` branch; `main` is a
 rewrite with a different interface. If PrinTE reports that your copy has no `Kmer2LTR.py`, it

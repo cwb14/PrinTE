@@ -114,7 +114,8 @@ def test_kmer2ltr_that_cannot_be_fetched_fails_before_simulating(rundir, tmp_pat
     cache.mkdir(mode=0o500)
     try:
         with pytest.raises(AssertionError, match="Kmer2LTR"):
-            run_printe(rundir, *EVOLVE, env=clean_env(PRINTE_CACHE=str(cache), PRINTE_MUTATOR=TRUE))
+            run_printe(rundir, *EVOLVE, "--postproc",
+                       env=clean_env(PRINTE_CACHE=str(cache), PRINTE_MUTATOR=TRUE))
     finally:
         cache.chmod(0o700)
     assert not (rundir / "burnin.fasta").exists()
@@ -124,7 +125,7 @@ def test_incompatible_kmer2ltr_fails_before_simulating(rundir, tmp_path):
     # What a clone of Kmer2LTR's main branch looks like to PrinTE: no Kmer2LTR.py.
     (tmp_path / "cache" / "Kmer2LTR" / "src").mkdir(parents=True)
     with pytest.raises(AssertionError, match="Kmer2LTR"):
-        run_printe(rundir, *EVOLVE,
+        run_printe(rundir, *EVOLVE, "--postproc",
                    env=clean_env(PRINTE_CACHE=str(tmp_path / "cache"), PRINTE_MUTATOR=TRUE))
     assert not (rundir / "burnin.fasta").exists()
 
@@ -133,13 +134,13 @@ def test_argument_errors_are_reported_before_fetching_kmer2ltr(rundir, tmp_path,
     env = with_fake_git(clean_env(PRINTE_CACHE=str(tmp_path / "cache"), PRINTE_MUTATOR=TRUE),
                         fake_git)
     with pytest.raises(AssertionError):
-        run_printe(rundir, *EVOLVE, "-b", "genome.bed", env=env)  # --bed without --fasta
+        run_printe(rundir, *EVOLVE, "--postproc", "-b", "genome.bed", env=env)  # --bed without --fasta
     assert not fake_git[1].exists(), "git ran before the arguments were checked"
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("args", [BURNIN, (*EVOLVE, "--no_postproc")],
-                         ids=["burnin_only", "no_postproc"])
+@pytest.mark.parametrize("args", [BURNIN, EVOLVE, (*EVOLVE, "--no_postproc")],
+                         ids=["burnin_only", "default", "no_postproc"])
 def test_runs_without_postprocessing_never_fetch_kmer2ltr(rundir, tmp_path, fake_git,
                                                          built_mutator, args):
     env = with_fake_git(clean_env(PRINTE_CACHE=str(tmp_path / "cache"),
@@ -158,9 +159,9 @@ def test_runs_started_together_share_one_kmer2ltr_clone(tmp_path, fake_git, buil
         (tmp_path / name).mkdir()
         runs.append(_seed_dir(tmp_path / name))
     with ThreadPoolExecutor(2) as pool:
-        first = pool.submit(run_printe, runs[0], *EVOLVE, env=env)
+        first = pool.submit(run_printe, runs[0], *EVOLVE, "--postproc", env=env)
         time.sleep(1)  # the second run reaches the check while the first is still cloning
-        second = pool.submit(run_printe, runs[1], *EVOLVE, env=env)
+        second = pool.submit(run_printe, runs[1], *EVOLVE, "--postproc", env=env)
         first.result()
         second.result()
     assert (cache / "Kmer2LTR" / "Kmer2LTR.py").is_file()
@@ -172,8 +173,8 @@ def test_postprocessing_dates_the_ltr_rts(rundir, tmp_path, built_mutator):
     if not github_reachable():
         pytest.skip("clones Kmer2LTR from GitHub, which is not reachable")
     cache = tmp_path / "cache"
-    run_printe(rundir, *EVOLVE, env=clean_env(PRINTE_CACHE=str(cache),
-                                              PRINTE_MUTATOR=built_mutator))
+    run_printe(rundir, *EVOLVE, "--postproc",
+               env=clean_env(PRINTE_CACHE=str(cache), PRINTE_MUTATOR=built_mutator))
     assert (cache / "Kmer2LTR" / "Kmer2LTR.py").is_file()
     for label in ("burnin", "gen200_final"):
         # What the density plot reads: K2P distances, not columns shifted out of place.

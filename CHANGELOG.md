@@ -6,6 +6,9 @@ Notable changes to PrinTE. Format follows [Keep a Changelog](https://keepachange
 
 ### Changed
 
+- Post-processing is off by default. Pass `--postproc` (`-pp`) to date LTR-RTs and make the
+  plots and reports. `--no_postproc` still works and is now the default.
+- `--birth_rate` defaults to 1e-8 instead of 1e-3.
 - One environment: the R stack moved from `environment-r.yml`, now removed, into
   `environment.yml`. Most users need the R scripts, and `ancestral_reconstruction_ltr_age.R`
   calls PrinTE's Python anyway. Update an existing env with

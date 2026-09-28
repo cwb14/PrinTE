@@ -147,9 +147,9 @@ The R scripts in `R/` (Track 1 ancestral reconstruction and the R plotters) run 
 LTR-RT discovery tool. Track 2 also needs
 [TEgenomeSimulator](https://github.com/Plant-Food-Research-Open/TEgenomeSimulator).
 
-Post-processing dates the LTR-RTs with [Kmer2LTR](https://github.com/cwb14/Kmer2LTR). The
-container has it built in. From source, the first evolve run clones it into `PrinTE/Kmer2LTR/`,
-so that one run needs internet; a burn-in never does, and `--no_postproc` skips it.
+Post-processing, which is off unless you pass `--postproc`, dates the LTR-RTs with
+[Kmer2LTR](https://github.com/cwb14/Kmer2LTR). The container has it built in. From source, the
+first `--postproc` run clones it into `PrinTE/Kmer2LTR/`, so that one run needs internet.
 
 ## Quick start
 
@@ -370,8 +370,8 @@ are inherited by new copies.
 
 - **`--insert_rate` / `--delete_rate`** - insertions/deletions per intact TE per generation.
 - **`--birth_rate`** - occasionally resamples from the **original** library (`--TE_lib`),
-  modeling horizontal transfer or revival of an extinct lineage. Without it, only existing
-  intact TEs propagate.
+  modeling horizontal transfer or revival of an extinct lineage (default 1e-8). With
+  `--birth_rate 0`, only existing intact TEs propagate.
 
 **Selective constraint** (variable mode). PrinTE treats genes as selectively constrained and
 TEs + intergenic DNA as neutral.
@@ -417,7 +417,8 @@ shaped by genome composition, selection, and chromatin.
 - **`--pergen_select`** - how many generations get the (slower) per-generation LTR-RT dating
   analysis (default 2 = first + last).
 - **`--ex_LTR`** - drop library LTR-RTs that lack a detectable LTR.
-- **`--no_postproc` / `--keep_temps`** - skip all plots/reports / keep intermediate files.
+- **`--postproc`** - date LTR-RTs and make the plots and reports (off by default).
+- **`--keep_temps`** - keep intermediate files.
 - **`--seed` / `--threads`** - reproducibility and parallelism.
 
 ### Outputs
@@ -460,7 +461,7 @@ Other useful files:
 - **`pipeline.log` / `pipeline.error`** - full run log and error log. Both are always created;
   on success `pipeline.error` holds only a start banner, so **if a run dies, read
   `pipeline.error` for the traceback.**
-- **Figures** - `percent_TE.pdf` (TE fraction over time), `solo_intact.pdf` (solo:intact ratio),
+- **Figures** (with `--postproc`) - `percent_TE.pdf` (TE fraction over time), `solo_intact.pdf` (solo:intact ratio),
   `stat_intact_plot.pdf`/`stat_frag_plot.pdf` (superfamily counts), `genome_size_plot.pdf`,
   `all_LTR_density.pdf` (LTR-RT age distribution across generations).
 
@@ -495,5 +496,5 @@ library - supply `-i your_TE.lib` (RepeatMasker headers) so they match your orga
 Supported on **Linux** and **macOS**. Tested on macOS 14.6.1 (Apple M2 Pro, 16 GB RAM) and
 Ubuntu 22.04.5 LTS (AMD EPYC 7763). Requires ~2 GB RAM minimum; 16 GB+ and 4+ cores are
 recommended. A source install needs a network connection once, to clone Kmer2LTR on the first
-post-processing run; the container needs none. The `ltr_mutator` binary is compiled from
+`--postproc` run; the container needs none. The `ltr_mutator` binary is compiled from
 source on first use (`g++ -std=c++17 -O3 -fopenmp`), and again whenever the existing one won't run.

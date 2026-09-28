@@ -19,7 +19,7 @@ process SIMULATE {
     script:
     def libflag = params.clean_lib ? "-cl ${lib}" : "-i ${lib}"
     def ratflag = ratios.name != 'NO_RATIOS' ? "-r ${ratios}" : ''
-    def post    = params.postproc ? '' : '--no_postproc'
+    def post    = params.postproc ? '--postproc' : '--no_postproc'
     """
     printe \\
         -f ${fasta} -b ${bed} \\

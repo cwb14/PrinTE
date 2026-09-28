@@ -164,7 +164,7 @@ ensure_kmer2ltr() {
   if [[ ! -d "${KMER2LTR_DIR}" ]]; then
     if ! command -v git &>/dev/null; then
       echo "Error: PrinTE needs git to fetch Kmer2LTR into ${KMER2LTR_DIR}, and git is not" \
-           "on PATH. Install it, or skip post-processing with --no_postproc." | tee -a "$ERR"
+           "on PATH. Install it, or drop --postproc." | tee -a "$ERR"
       exit 1
     fi
     echo "Cloning Kmer2LTR into ${KMER2LTR_DIR}" | tee -a "$LOG"
@@ -178,8 +178,8 @@ ensure_kmer2ltr() {
            git -C "$tmp" checkout --quiet "${KMER2LTR_REF}"; } >> "$LOG" 2>> "$ERR"; then
       [[ -n "$tmp" ]] && rm -rf "$tmp"
       echo "Error: could not clone Kmer2LTR into ${KMER2LTR_DIR}. That needs network access" \
-           "and a writable directory: set PRINTE_CACHE to another one, or skip post-processing" \
-           "with --no_postproc." | tee -a "$ERR"
+           "and a writable directory: set PRINTE_CACHE to another one, or drop" \
+           "--postproc." | tee -a "$ERR"
       exit 1
     fi
     python -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$tmp" "${KMER2LTR_DIR}" \
@@ -312,7 +312,7 @@ Phase 1 is skipped when you supply --fasta/--bed or --continue.
   Variable -- rates scale with the evolving TE content; insertion mutations accrue over time:
   -ir,  --insert_rate RATE     Insertions per intact TE per generation (default: 1e-8).
   -dr,  --delete_rate RATE     Deletions  per intact TE per generation (default: 1e-7).
-  -br,  --birth_rate RATE      Rate of reintroducing TEs from the original library (default: 1e-3).
+  -br,  --birth_rate RATE      Rate of reintroducing TEs from the original library (default: 1e-8).
   -cpr, --cutpaste_reinsertion F  Expected re-insertions per cut-and-paste excision (default: 1.0
                                = conserve copy number; <1 net loss, >1 net amplification).
   Fixed -- constant per-base rates:
@@ -346,7 +346,8 @@ Phase 1 is skipped when you supply --fasta/--bed or --continue.
   -md,  --model {raw,K2P,JC69} Substitution model for LTR-RT dating (default: K2P).
   -pgs, --pergen_select N      How many generations get per-gen LTR-RT dating (default: 2 = first + last).
   -ex,  --ex_LTR               Drop library LTR-RTs that lack a detectable LTR.
-  -np,  --no_postproc          Stop after the final genome; skip all plots and reports.
+  -pp,  --postproc             Date LTR-RTs with Kmer2LTR and make plots and reports.
+  -np,  --no_postproc          Stop after the final genome, with no plots or reports (default).
   -kt,  --keep_temps           Keep per-generation intermediate files.
 
 --------------------------------------- GENERAL -------------------------------------------------
@@ -399,7 +400,7 @@ ensure_mutator   # verify / recompile ltr_mutator before anything else runs
 cont_flag=0
 keep_temps=0
 burnin_only=0
-no_postproc=0
+no_postproc=1
 euch_bias_insert=1.0
 euch_bias_excise=1.0
 euch_buffer=10000
@@ -532,6 +533,9 @@ while [[ $# -gt 0 ]]; do
     -ex|--ex_LTR)
       ex_ltr=1
       shift;;
+    -pp|--postproc)
+      no_postproc=0
+      shift;;
     -np|--no_postproc)
       no_postproc=1
       shift;;
@@ -578,7 +582,7 @@ mutation_rate="${mutation_rate:-1.3e-8}"
 TE_ratio="${TE_ratio:-${PKG_DIR}/data/ratios.tsv}"
 threads="${threads:-4}"
 insert_rate="${insert_rate:-1e-8}"
-birth_rate="${birth_rate:-1e-3}"
+birth_rate="${birth_rate:-1e-8}"
 delete_rate="${delete_rate:-1e-7}"
 solo_rate="${solo_rate:-95}"
 cutpaste_reinsertion="${cutpaste_reinsertion:-1.0}"
@@ -1254,7 +1258,7 @@ rm -f cutpaste_debt.tsv
 echo "Pipeline completed at $(date)" | tee -a "$LOG"
 
 if [[ "$no_postproc" -eq 1 ]]; then
-  echo "Skipping post-processing due to --no_postproc." | tee -a "$LOG"
+  echo "Skipping post-processing (add --postproc to run it)." | tee -a "$LOG"
   exit 0
 fi
 
