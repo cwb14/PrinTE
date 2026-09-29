@@ -69,7 +69,7 @@ apptainer pull printe.sif docker://ghcr.io/cwb14/printe:latest
 ./printe.sif --version
 ```
 
-You should see `PrinTE 1.0.0`. **The image is the program** - run it as `./printe.sif`
+You should see `PrinTE 1.0.3`. **The image is the program** - run it as `./printe.sif`
 followed by the usual options. Nothing was installed anywhere else, `ls` shows you the
 whole of PrinTE, and `rm printe.sif` removes it. Apptainer makes your current directory
 visible inside the image, so results land where you ran the command.
@@ -113,7 +113,7 @@ pip install -e .
 printe --version
 ```
 
-You should see `PrinTE 1.0.0`. The `pip install -e .` line is the one that puts `printe`
+You should see `PrinTE 1.0.3`. The `pip install -e .` line is the one that puts `printe`
 on your PATH - without it the quick start below will not run. You can also call
 `bash PrinTE.sh` from inside the clone instead; it is the same program.
 

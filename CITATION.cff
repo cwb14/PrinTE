@@ -1,7 +1,7 @@
-# Before tagging a release: add the paper's DOI, volume, and page numbers under
-# preferred-citation, and confirm the author list matches the manuscript.
+# Once the paper is out: add its DOI, volume, and page numbers under preferred-citation.
+# Zenodo builds the archive record from the fields above preferred-citation and ignores it.
 cff-version: 1.2.0
-message: If you use PrinTE in your research, please cite the paper below.
+message: If you use PrinTE in your research, please cite the PrinTE paper and the software version you used.
 title: "PrinTE: a forward simulator of transposable-element genome evolution"
 abstract: >-
   PrinTE evolves a genome one generation at a time, repeatedly mutating the DNA,
@@ -11,11 +11,29 @@ abstract: >-
 type: software
 authors:
   - family-names: Benson
-    given-names: Chris
+    given-names: Christopher W.
+    affiliation: Department of Molecular Genetics, Ohio State University
     orcid: "https://orcid.org/0000-0002-3752-6378"
+  - family-names: Chen
+    given-names: Ting-Hsuan
+    affiliation: The New Zealand Institute for Bioeconomy Science Limited
+    orcid: "https://orcid.org/0000-0002-7311-8064"
+  - family-names: Thomson
+    given-names: Susan J.
+    affiliation: The New Zealand Institute for Bioeconomy Science Limited
+    orcid: "https://orcid.org/0000-0001-7127-9414"
+  - family-names: Deng
+    given-names: Cecilia H.
+    affiliation: The New Zealand Institute for Bioeconomy Science Limited
+    orcid: "https://orcid.org/0000-0002-2954-762X"
+  - family-names: Ou
+    given-names: Shujun
+    affiliation: Department of Molecular Genetics, Ohio State University
+    orcid: "https://orcid.org/0000-0001-5938-7180"
 repository-code: https://github.com/cwb14/PrinTE
 license: GPL-3.0-or-later
-version: 1.0.0
+version: 1.0.3
+date-released: 2026-09-29
 keywords:
   - transposable elements
   - genome evolution
@@ -23,10 +41,22 @@ keywords:
   - LTR retrotransposon
 preferred-citation:
   type: article
-  title: "PrinTE: a forward simulator of transposable-element genome evolution"
+  title: "PrinTE: A Forward Simulation Framework for Studying the Role of Transposable Elements in Genome Expansion and Contraction"
   authors:
     - family-names: Benson
-      given-names: Chris
+      given-names: Christopher W.
       orcid: "https://orcid.org/0000-0002-3752-6378"
+    - family-names: Chen
+      given-names: Ting-Hsuan
+      orcid: "https://orcid.org/0000-0002-7311-8064"
+    - family-names: Thomson
+      given-names: Susan J.
+      orcid: "https://orcid.org/0000-0001-7127-9414"
+    - family-names: Deng
+      given-names: Cecilia H.
+      orcid: "https://orcid.org/0000-0002-2954-762X"
+    - family-names: Ou
+      given-names: Shujun
+      orcid: "https://orcid.org/0000-0001-5938-7180"
   journal: Nature Communications
   year: 2026

@@ -4,6 +4,11 @@ Notable changes to PrinTE. Format follows [Keep a Changelog](https://keepachange
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-09-29
+
+1.0.1 and 1.0.2 were tagged without changelog entries or version bumps; their changes are
+listed here.
+
 ### Changed
 
 - Post-processing is off by default. Pass `--postproc` (`-pp`) to date LTR-RTs and make the
@@ -36,6 +41,7 @@ Notable changes to PrinTE. Format follows [Keep a Changelog](https://keepachange
   `PRINTE_MUTATOR_DIR` said to put it elsewhere, so the run could not find it.
 - An `ltr_mutator` that no longer runs, such as one built on a machine with another C library,
   is rebuilt; `make` used to call it up to date and the run failed at the first generation.
+- `--version` reports the release; 1.0.1 and 1.0.2 still printed `PrinTE 1.0.0`.
 
 ### Added
 
