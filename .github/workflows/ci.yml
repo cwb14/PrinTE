@@ -106,7 +106,7 @@ jobs:
             -v "$PWD/tests/data:/fixtures:ro" printe:ci \
             -sz 80kb -cn 2 -P 5 -itp 25 -ftp 5 \
             -cl /fixtures/tiny_TE.lib -c /fixtures/tiny_cds.fa -r /fixtures/tiny_ratios.tsv \
-            -ir 1e-5 -dr 1e-5 -ge 200 -st 100 -t 2 -s 7
+            -ir 1e-5 -dr 1e-5 -ge 200 -st 100 -t 2 -s 7 --postproc
           test -s evolve/gen200_final_LTR.tsv
           test -s evolve/all_LTR_density.pdf
       - name: Run an R script inside the image
